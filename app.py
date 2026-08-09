@@ -1,0 +1,1241 @@
+"""Local web GUI for the fashion reference library.
+
+A thin Flask layer over the existing db/ingest/embeddings/analyze modules --
+no separate storage or logic, it just gives the CLI a browser front end:
+drag-and-drop (or type-in-text) to add references, and a grid + carousel to
+browse the archive with similar-item suggestions.
+
+Run with:
+    python app.py
+then open the printed URL in a browser.
+"""
+import json
+import mimetypes
+import tempfile
+import threading
+import uuid
+import webbrowser
+from datetime import datetime
+from io import BytesIO
+from pathlib import Path
+
+import fitz  # PyMuPDF
+from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+
+import analyze
+import capture
+import colour
+import db
+import embeddings
+import graph_layout
+import ingest
+from config import ARCHIVE_API_TOKEN, REFERENCES_DIR
+
+app = Flask(__name__, static_folder="static", static_url_path="")
+
+PORT = 5050
+PDF_THUMB_DPI = 72
+# More than enough thumbnails to fill one row of the project preview bar on
+# any reasonable screen width; the bar's CSS (nowrap + overflow hidden) clips
+# whatever doesn't fit, so this only needs to be a generous upper bound.
+PROJECT_BAR_PREVIEW_LIMIT = 30
+# Deleted reference files are moved here (next to references/) instead of
+# being unlinked, so deleting from the Archive stays recoverable on disk.
+DELETED_DIR_NAME = "deleted"
+
+# Widget types that can hold other widgets. Nesting is one level deep by
+# design, so this set does double duty: it's both what may be a parent and what
+# may never be a child.
+CONTAINER_WIDGET_TYPES = {"sidebar"}
+# Widgets the project page can't do without. They can be moved anywhere the
+# user likes, but DELETE on one is refused rather than silently ignored -- a
+# 400 tells the UI its Add Widget list is out of step, where a 200 would leave
+# a phantom deletion on screen until the next reload.
+PERMANENT_WIDGET_TYPES = {"settings", "exit", "canvas"}
+# What a canvas node can be. See db.CANVAS_NODES_SCHEMA for why all three
+# share one table.
+CANVAS_NODE_KINDS = {"reference", "text", "widget"}
+
+# In-memory only -- an analysis conversation is a live chat with Claude, not
+# library data, so it doesn't belong in SQLite and doesn't need to survive a
+# server restart. Keyed by analysis_id -> the running message history.
+_analysis_sessions = {}
+
+
+# --- Browser extension access ---------------------------------------------
+#
+# The extension runs on a chrome-extension:// origin, so its calls are
+# cross-origin and need CORS headers the rest of the app has never needed.
+# Kept deliberately narrow rather than reaching for flask-cors: only requests
+# that actually come from an extension, and only on /api/ paths, get any
+# Access-Control headers at all. The static file routes and the local web UI
+# behave exactly as before.
+
+EXTENSION_ORIGIN_PREFIX = "chrome-extension://"
+# Firefox uses its own scheme; listed now so the port is a manifest change
+# rather than a backend one.
+EXTENSION_ORIGIN_PREFIXES = (EXTENSION_ORIGIN_PREFIX, "moz-extension://")
+
+
+def _extension_origin():
+    """The requesting extension's origin, or None if this isn't one."""
+    origin = request.headers.get("Origin", "")
+    return origin if origin.startswith(EXTENSION_ORIGIN_PREFIXES) else None
+
+
+def _capture_auth_ok():
+    """True unless a token is configured and the request didn't present it."""
+    if not ARCHIVE_API_TOKEN:
+        return True
+    header = request.headers.get("Authorization", "")
+    return header == f"Bearer {ARCHIVE_API_TOKEN}"
+
+
+@app.after_request
+def _allow_extension_origin(response):
+    origin = _extension_origin()
+    if origin and request.path.startswith("/api/"):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Vary"] = "Origin"
+    return response
+
+
+@app.route("/api/<path:_subpath>", methods=["OPTIONS"])
+def _api_preflight(_subpath):
+    """Answer CORS preflights. The headers themselves come from the
+    after_request hook above, so this only needs to not 405."""
+    return ("", 204)
+
+
+def _resolve_ref_path(ref):
+    return REFERENCES_DIR / ref["filepath"]
+
+
+def _ref_summary(ref, match_label=None):
+    summary = {
+        "id": ref["id"],
+        "title": ref["title"],
+        "type": ref["type"],
+        "tags": ref["tags"],
+        "description": ref["description"],
+        "ext": Path(ref["filepath"]).suffix.lower(),
+        "is_own_work": ref["is_own_work"],
+    }
+    if match_label:
+        summary["match_label"] = match_label
+    return summary
+
+
+def _require_project(project_id):
+    """404 unless this project exists -- every project-space route hangs off
+    one, and none of them mean anything without it."""
+    if not db.get_project(project_id):
+        abort(404)
+
+
+def _find_reference(ref_id):
+    ref = db.get_reference(ref_id)
+    if ref:
+        return ref
+    matches = db.find_by_id_prefix(ref_id)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _file_kind(ext):
+    """Bucket an extension into the three type filters the GUI offers."""
+    if ext in ingest.IMAGE_EXTS:
+        return "image"
+    if ext == ".pdf":
+        return "pdf"
+    return "text"
+
+
+@app.get("/")
+def index():
+    # The 3D similarity graph is the homepage; the library app itself is
+    # still reachable (static serving already exposes every file under
+    # static/ at its own path, so /index.html works with no extra route).
+    return send_from_directory(app.static_folder, "graph.html")
+
+
+@app.get("/api/references")
+def api_list_references():
+    """List references, optionally ranked/filtered by a search query and/or
+    filtered by ownership and file type -- backs both the plain archive grid
+    and the search bar on the Archive page.
+
+    When a query is given, `search_by` (comma-separated: distance, tags,
+    description) picks which of those three signals count as a match; a
+    reference is included if ANY selected signal matches (OR), but results
+    stay ordered by semantic relevance throughout, since that ranking is
+    computed for the whole library regardless of which signals are active.
+    """
+    query = (request.args.get("q") or "").strip()
+    own_work = request.args.get("own_work", "any")  # any | only | exclude
+    # Comma-separated, e.g. "image,pdf" -- checking multiple type boxes is an OR filter.
+    file_types = {t for t in request.args.get("type", "").split(",") if t}
+    search_by = {s for s in request.args.get("search_by", "distance").split(",") if s}
+
+    if query:
+        model = embeddings.get_model()
+        query_embedding = model.encode(query).tolist()
+        total = embeddings.get_collection().count()
+        results = embeddings.query_index(query_embedding, n_results=max(total, 1)) if total else []
+
+        q_lower = query.lower()
+        refs = []
+        for m in results:
+            ref = db.get_reference(m["id"])
+            if not ref:
+                continue
+            z_score = m["relative_score"]
+            matched = (
+                ("distance" in search_by and embeddings.match_label(z_score) != "loose / weak match")
+                or ("tags" in search_by and q_lower in ", ".join(ref["tags"]).lower())
+                or ("description" in search_by and q_lower in (ref["description"] or "").lower())
+            )
+            if matched:
+                refs.append(_ref_summary(ref, match_label=embeddings.match_label(z_score)))
+    else:
+        refs = [_ref_summary(r) for r in db.list_references()]
+
+    if own_work == "only":
+        refs = [r for r in refs if r["is_own_work"]]
+    elif own_work == "exclude":
+        refs = [r for r in refs if not r["is_own_work"]]
+
+    if file_types:
+        refs = [r for r in refs if _file_kind(r["ext"]) in file_types]
+
+    return jsonify(refs)
+
+
+@app.get("/api/references/<ref_id>")
+def api_get_reference(ref_id):
+    ref = _find_reference(ref_id)
+    if not ref:
+        abort(404)
+
+    similar = []
+    collection = embeddings.get_collection()
+    embedded = collection.get(ids=[ref["id"]], include=["embeddings"])
+    if embedded["ids"]:
+        for m in embeddings.query_index(embedded["embeddings"][0], n_results=6, exclude_ids=[ref["id"]]):
+            similar.append({"id": m["id"], **m["metadata"]})
+
+    data = dict(ref)
+    data["ext"] = Path(ref["filepath"]).suffix.lower()
+    data["similar"] = similar
+    return jsonify(data)
+
+
+@app.delete("/api/references/<ref_id>")
+def api_delete_reference(ref_id):
+    """Delete a reference outright: its stored file, its embedding, and its
+    row (plus any project memberships and similarity scores that referred to
+    it). This is the Archive page's Delete action -- unlike the project
+    page's Delete, which only removes a reference from that project.
+
+    The file goes to a `.deleted` folder beside the library rather than being
+    unlinked, so a mis-click stays recoverable from disk even though the
+    metadata is gone.
+    """
+    ref = _find_reference(ref_id)
+    if not ref:
+        abort(404)
+
+    path = _resolve_ref_path(ref)
+    if path.exists():
+        trash_dir = REFERENCES_DIR.parent / DELETED_DIR_NAME
+        trash_dir.mkdir(parents=True, exist_ok=True)
+        destination = trash_dir / path.name
+        if destination.exists():
+            destination = trash_dir / f"{path.stem}-{uuid.uuid4().hex[:8]}{path.suffix}"
+        path.rename(destination)
+
+    embeddings.remove_from_index(ref["id"])
+    db.delete_reference(ref["id"])
+    return jsonify({"ok": True, "id": ref["id"]})
+
+
+def _project_summary(project, preview_limit=PROJECT_BAR_PREVIEW_LIMIT):
+    preview = db.list_project_references(project["id"], limit=preview_limit)
+    return {
+        "id": project["id"],
+        "title": project["title"],
+        "description": project["description"],
+        "reference_count": db.count_project_references(project["id"]),
+        "preview": [_ref_summary(r) for r in preview],
+    }
+
+
+@app.get("/api/projects")
+def api_list_projects():
+    return jsonify([_project_summary(p) for p in db.list_projects()])
+
+
+@app.post("/api/projects")
+def api_create_project():
+    body = request.get_json(force=True, silent=True) or {}
+    title = (body.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "a title is required"}), 400
+    description = (body.get("description") or "").strip() or None
+
+    project_id = str(uuid.uuid4())
+    db.create_project(project_id, title, description)
+    # A project space is part of what a project is, not something the user opts
+    # into later, so a new project arrives with its six folders and its
+    # starting widgets already in place.
+    db.seed_project_defaults(project_id)
+    return jsonify(db.get_project(project_id))
+
+
+@app.get("/api/projects/<project_id>")
+def api_get_project(project_id):
+    project = db.get_project(project_id)
+    if not project:
+        abort(404)
+    refs = [_ref_summary(r) for r in db.list_project_references(project_id)]
+    data = dict(project)
+    data["references"] = refs
+    return jsonify(data)
+
+
+@app.put("/api/projects/<project_id>")
+def api_update_project(project_id):
+    if not db.get_project(project_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    title = (body.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "a title is required"}), 400
+    description = (body.get("description") or "").strip() or None
+    db.update_project(project_id, title, description)
+    return jsonify(db.get_project(project_id))
+
+
+@app.delete("/api/projects/<project_id>")
+def api_delete_project(project_id):
+    """Delete a project (and its saved analyses). The references it grouped
+    stay in the archive -- only the grouping goes."""
+    if not db.get_project(project_id):
+        abort(404)
+    db.delete_project(project_id)
+    return jsonify({"ok": True, "id": project_id})
+
+
+@app.post("/api/projects/<project_id>/references")
+def api_add_project_reference(project_id):
+    if not db.get_project(project_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    reference_id = body.get("reference_id")
+    ref = _find_reference(reference_id) if reference_id else None
+    if not ref:
+        return jsonify({"error": "reference not found"}), 404
+    db.add_reference_to_project(project_id, ref["id"])
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/projects/<project_id>/references/<reference_id>")
+def api_remove_project_reference(project_id, reference_id):
+    if not db.get_project(project_id):
+        abort(404)
+    db.remove_reference_from_project(project_id, reference_id)
+    return jsonify({"ok": True})
+
+
+# --- Project space: folders -------------------------------------------------
+#
+# A folder is a view over its project's references, never an owner of them.
+# Filing and unfiling only ever writes folder_references, so nothing here can
+# remove a reference from the project or from the archive.
+
+
+@app.get("/api/projects/<project_id>/folders")
+def api_list_folders(project_id):
+    _require_project(project_id)
+    return jsonify(db.list_folders(project_id))
+
+
+@app.post("/api/projects/<project_id>/folders")
+def api_create_folder(project_id):
+    _require_project(project_id)
+    body = request.get_json(force=True, silent=True) or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "a name is required"}), 400
+    # Duplicate names are allowed: the Archive rolls folders up by name across
+    # projects, so two projects both having a "Texture" is the normal case, and
+    # within one project the user may have their own reason.
+    folder_id = str(uuid.uuid4())
+    db.create_folder(folder_id, project_id, name)
+    return jsonify(db.get_folder(folder_id))
+
+
+@app.put("/api/folders/<folder_id>")
+def api_update_folder(folder_id):
+    """Rename or reorder a folder.
+
+    is_default is deliberately not writable: it records that the folder came
+    from the default set, and renaming or moving it doesn't change where it
+    came from.
+    """
+    if not db.get_folder(folder_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+
+    if "name" in body:
+        name = (body.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "a name is required"}), 400
+        db.rename_folder(folder_id, name)
+
+    if "position" in body:
+        try:
+            position = int(body["position"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "position must be a whole number"}), 400
+        db.move_folder(folder_id, position)
+
+    return jsonify(db.get_folder(folder_id))
+
+
+@app.delete("/api/folders/<folder_id>")
+def api_delete_folder(folder_id):
+    """Delete a folder, default ones included -- is_default is a record of
+    origin, not a protection flag. What was filed in it stays in the project."""
+    if not db.get_folder(folder_id):
+        abort(404)
+    db.delete_folder(folder_id)
+    return jsonify({"ok": True, "id": folder_id})
+
+
+@app.get("/api/folders/<folder_id>/references")
+def api_list_folder_references(folder_id):
+    if not db.get_folder(folder_id):
+        abort(404)
+    return jsonify([_ref_summary(r) for r in db.list_folder_references(folder_id)])
+
+
+@app.post("/api/folders/<folder_id>/references")
+def api_add_folder_references(folder_id):
+    """File references into a folder, one or many.
+
+    Anything not already in the folder's project is added to it as well: a
+    folder shows a slice of its project, so a reference filed in the folder but
+    absent from the project would appear in the sidebar and nowhere on the
+    project page it belongs to.
+    """
+    folder = db.get_folder(folder_id)
+    if not folder:
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    requested = body.get("reference_ids") or []
+    if not requested:
+        return jsonify({"error": "no references given"}), 400
+
+    # Resolved through _find_reference so short ids work here as everywhere else.
+    resolved = []
+    for reference_id in requested:
+        ref = _find_reference(reference_id)
+        if ref:
+            resolved.append(ref["id"])
+    if not resolved:
+        return jsonify({"error": "none of those references exist"}), 404
+
+    for reference_id in resolved:
+        db.add_reference_to_project(folder["project_id"], reference_id)
+    db.add_references_to_folder(folder_id, resolved)
+    return jsonify({"ok": True, "added": len(resolved), "reference_ids": resolved})
+
+
+@app.delete("/api/folders/<folder_id>/references/<reference_id>")
+def api_remove_folder_reference(folder_id, reference_id):
+    """Unfile one reference. It keeps its place in the project, in the archive,
+    and in every other folder it was filed in."""
+    if not db.get_folder(folder_id):
+        abort(404)
+    db.remove_reference_from_folder(folder_id, reference_id)
+    return jsonify({"ok": True})
+
+
+# --- Project space: widgets -------------------------------------------------
+
+
+def _widget_states(project_id):
+    """{widget id: (type, parent_id)} for one project -- what the nesting rules
+    are checked against."""
+    return {w["id"]: (w["type"], w["parent_id"]) for w in db.list_widgets(project_id)}
+
+
+def _nesting_error(widget_type, parent_id, states):
+    """Why this widget can't sit inside that parent, or None if it can.
+
+    `states` describes the widgets as they will be once the request is applied,
+    not as they are on disk, so a bulk layout save is judged against its own
+    outcome rather than the rows it is about to overwrite.
+    """
+    if not parent_id:
+        return None  # on the grid, which is always allowed
+    parent = states.get(parent_id)
+    if not parent:
+        return "that parent widget isn't in this project"
+    parent_type, parent_parent_id = parent
+    if parent_parent_id:
+        return "widgets nest one level deep: that parent is itself inside a container"
+    if parent_type not in CONTAINER_WIDGET_TYPES:
+        return f"a '{parent_type}' widget cannot contain other widgets"
+    if widget_type in CONTAINER_WIDGET_TYPES:
+        return f"a '{widget_type}' is a container and cannot go inside another container"
+    return None
+
+
+def _layout_nesting_error(project_id, entries):
+    """Check a whole proposed layout, since a bulk save can re-parent several
+    widgets at once and each has to be legal in the layout's final state."""
+    existing = {w["id"]: w for w in db.list_widgets(project_id)}
+    states = {wid: (w["type"], w["parent_id"]) for wid, w in existing.items()}
+    for entry in entries:
+        widget_id = entry.get("id")
+        if widget_id in existing:
+            # Type isn't the layout editor's to change, so it comes from the row.
+            states[widget_id] = (existing[widget_id]["type"], entry.get("parent_id") or None)
+    # Every widget, not just the ones in the payload: re-parenting a container
+    # pushes whatever was already inside it a level too deep.
+    for widget_type, parent_id in states.values():
+        error = _nesting_error(widget_type, parent_id, states)
+        if error:
+            return error
+    return None
+
+
+@app.get("/api/projects/<project_id>/widgets")
+def api_list_widgets(project_id):
+    _require_project(project_id)
+    return jsonify(db.list_widgets(project_id))
+
+
+@app.post("/api/projects/<project_id>/widgets")
+def api_create_widget(project_id):
+    _require_project(project_id)
+    body = request.get_json(force=True, silent=True) or {}
+    widget_type = (body.get("type") or "").strip()
+    if not widget_type:
+        return jsonify({"error": "a widget type is required"}), 400
+
+    parent_id = body.get("parent_id") or None
+    error = _nesting_error(widget_type, parent_id, _widget_states(project_id))
+    if error:
+        return jsonify({"error": error}), 400
+
+    widget_id = str(uuid.uuid4())
+    db.create_widget(
+        widget_id,
+        project_id,
+        widget_type,
+        parent_id=parent_id,
+        x=body.get("x", 0),
+        y=body.get("y", 0),
+        w=body.get("w", 1),
+        h=body.get("h", 1),
+        config=body.get("config"),
+        locked=bool(body.get("locked")),
+    )
+    return jsonify(db.get_widget(widget_id))
+
+
+@app.put("/api/projects/<project_id>/widgets")
+def api_save_widget_layout(project_id):
+    """The homepage grid's explicit Save: one bulk commit of the whole layout.
+
+    Layout only, and all-or-nothing on the nesting rules -- a partly applied
+    layout is a scrambled homepage, which is worse than a rejected save.
+    """
+    _require_project(project_id)
+    body = request.get_json(force=True, silent=True) or {}
+    entries = body.get("widgets")
+    if not isinstance(entries, list):
+        return jsonify({"error": "widgets must be a list"}), 400
+
+    error = _layout_nesting_error(project_id, entries)
+    if error:
+        return jsonify({"error": error}), 400
+
+    db.save_widget_layout(project_id, entries)
+    return jsonify(db.list_widgets(project_id))
+
+
+@app.delete("/api/widgets/<widget_id>")
+def api_delete_widget(widget_id):
+    """Delete a widget, and whatever was inside it if it was a container."""
+    widget = db.get_widget(widget_id)
+    if not widget:
+        abort(404)
+    if widget["type"] in PERMANENT_WIDGET_TYPES:
+        return jsonify({
+            "error": f"the {widget['type']} widget can be moved but not removed"
+        }), 400
+    db.delete_widget(widget_id)
+    return jsonify({"ok": True, "id": widget_id})
+
+
+# --- Project space: settings ------------------------------------------------
+
+
+@app.get("/api/projects/<project_id>/settings")
+def api_get_project_settings(project_id):
+    _require_project(project_id)
+    return jsonify({"settings": db.get_project_settings(project_id)})
+
+
+@app.put("/api/projects/<project_id>/settings")
+def api_save_project_settings(project_id):
+    _require_project(project_id)
+    body = request.get_json(force=True, silent=True) or {}
+    settings = body.get("settings")
+    if not isinstance(settings, dict):
+        return jsonify({"error": "settings must be an object"}), 400
+    db.save_project_settings(project_id, settings)
+    return jsonify({"settings": db.get_project_settings(project_id)})
+
+
+# --- Project space: canvas --------------------------------------------------
+#
+# Positions here are canvas world coordinates. The per-node routes are what the
+# canvas actually edits through -- it saves continuously, so a drag PATCHes one
+# node rather than resending everything.
+
+
+def _canvas_payload(project_id):
+    return {
+        "nodes": db.list_canvas_nodes(project_id),
+        "edges": db.list_canvas_edges(project_id),
+    }
+
+
+@app.get("/api/projects/<project_id>/canvas")
+def api_get_canvas(project_id):
+    _require_project(project_id)
+    return jsonify(_canvas_payload(project_id))
+
+
+@app.put("/api/projects/<project_id>/canvas")
+def api_replace_canvas(project_id):
+    """Replace the whole canvas at once.
+
+    Edges are validated against the nodes in the same payload rather than
+    against what's already stored, because by the time this is applied the old
+    nodes are gone -- an edge that referred to one would be a line to nowhere.
+    """
+    _require_project(project_id)
+    body = request.get_json(force=True, silent=True) or {}
+    nodes, edges = body.get("nodes"), body.get("edges") or []
+    if not isinstance(nodes, list) or not isinstance(edges, list):
+        return jsonify({"error": "nodes and edges must be lists"}), 400
+
+    # Ids may be supplied (a round-trip of an existing canvas) or left out (an
+    # import of new content); either way every row needs one.
+    nodes = [{**n, "id": n.get("id") or str(uuid.uuid4())} for n in nodes]
+    for node in nodes:
+        if node.get("kind") not in CANVAS_NODE_KINDS:
+            return jsonify({"error": f"unknown node kind: {node.get('kind')!r}"}), 400
+
+    node_ids = {n["id"] for n in nodes}
+    edges = [{**e, "id": e.get("id") or str(uuid.uuid4())} for e in edges]
+    for edge in edges:
+        ends = (edge.get("source_node_id"), edge.get("target_node_id"))
+        if any(end not in node_ids for end in ends):
+            return jsonify({"error": "every edge must join two nodes in this canvas"}), 400
+
+    db.replace_canvas(project_id, nodes, edges)
+    return jsonify(_canvas_payload(project_id))
+
+
+@app.post("/api/projects/<project_id>/canvas/nodes")
+def api_create_canvas_node(project_id):
+    _require_project(project_id)
+    body = request.get_json(force=True, silent=True) or {}
+    kind = body.get("kind")
+    if kind not in CANVAS_NODE_KINDS:
+        return jsonify({"error": f"kind must be one of {', '.join(sorted(CANVAS_NODE_KINDS))}"}), 400
+
+    reference_id = body.get("reference_id")
+    if kind == "reference":
+        ref = _find_reference(reference_id) if reference_id else None
+        if not ref:
+            return jsonify({"error": "reference not found"}), 404
+        reference_id = ref["id"]
+
+    node_id = str(uuid.uuid4())
+    db.create_canvas_node(
+        node_id,
+        project_id,
+        kind,
+        reference_id=reference_id,
+        x=body.get("x", 0.0),
+        y=body.get("y", 0.0),
+        w=body.get("w"),
+        h=body.get("h"),
+        locked=bool(body.get("locked")),
+        content=body.get("content"),
+        config=body.get("config"),
+        z_index=body.get("z_index", 0),
+    )
+    return jsonify(db.get_canvas_node(node_id))
+
+
+@app.patch("/api/canvas/nodes/<node_id>")
+def api_update_canvas_node(node_id):
+    """Update only the fields that were sent -- most calls are a drag, and
+    carry nothing but x and y."""
+    if not db.get_canvas_node(node_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    fields = {k: v for k, v in body.items() if k in db.CANVAS_NODE_PATCH_COLUMNS}
+    if "kind" in fields and fields["kind"] not in CANVAS_NODE_KINDS:
+        return jsonify({"error": f"unknown node kind: {fields['kind']!r}"}), 400
+    db.update_canvas_node(node_id, **fields)
+    return jsonify(db.get_canvas_node(node_id))
+
+
+@app.delete("/api/canvas/nodes/<node_id>")
+def api_delete_canvas_node(node_id):
+    if not db.get_canvas_node(node_id):
+        abort(404)
+    db.delete_canvas_node(node_id)
+    return jsonify({"ok": True, "id": node_id})
+
+
+@app.post("/api/projects/<project_id>/canvas/edges")
+def api_create_canvas_edge(project_id):
+    _require_project(project_id)
+    body = request.get_json(force=True, silent=True) or {}
+    source_node_id = body.get("source_node_id")
+    target_node_id = body.get("target_node_id")
+
+    node_ids = {n["id"] for n in db.list_canvas_nodes(project_id)}
+    if source_node_id not in node_ids or target_node_id not in node_ids:
+        return jsonify({"error": "both ends must be nodes on this project's canvas"}), 400
+
+    edge_id = str(uuid.uuid4())
+    db.create_canvas_edge(
+        edge_id, project_id, source_node_id, target_node_id, style=body.get("style")
+    )
+    return jsonify(db.get_canvas_edge(edge_id))
+
+
+@app.delete("/api/canvas/edges/<edge_id>")
+def api_delete_canvas_edge(edge_id):
+    if not db.get_canvas_edge(edge_id):
+        abort(404)
+    db.delete_canvas_edge(edge_id)
+    return jsonify({"ok": True, "id": edge_id})
+
+
+@app.post("/api/analyze")
+def api_analyze():
+    """Start an analysis conversation over a chosen set of references (the
+    same underlying feature as `cli.py analyze`, just driven from the GUI's
+    selection toolbar instead of ids typed on a command line).
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    reference_ids = body.get("reference_ids") or []
+    mode = body.get("mode") if body.get("mode") in ("full", "summary") else "full"
+    if not reference_ids:
+        return jsonify({"error": "no references selected"}), 400
+    try:
+        writeup, messages, reference_map = analyze.start_conversation(reference_ids, mode=mode)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    analysis_id = str(uuid.uuid4())
+    _analysis_sessions[analysis_id] = messages
+    return jsonify({"analysis_id": analysis_id, "writeup": writeup, "references": reference_map})
+
+
+@app.post("/api/analyze/<analysis_id>/reply")
+def api_analyze_reply(analysis_id):
+    messages = _analysis_sessions.get(analysis_id)
+    if messages is None:
+        return jsonify({"error": "this analysis session is gone (the server may have restarted)"}), 404
+    body = request.get_json(force=True, silent=True) or {}
+    message = (body.get("message") or "").strip()
+    if not message:
+        return jsonify({"error": "empty message"}), 400
+    try:
+        reply = analyze.continue_conversation(messages, message)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"reply": reply})
+
+
+def _analysis_summary(a):
+    refs = db.get_references_by_ids(a["reference_ids"])
+    return {
+        "id": a["id"],
+        "date_created": a["date_created"],
+        "reference_count": len(a["reference_ids"]),
+        "preview": [_ref_summary(r) for r in refs[:6]],
+    }
+
+
+@app.put("/api/analyses/<analysis_id>")
+def api_save_analysis(analysis_id):
+    """Persist the current state of an analysis conversation, keyed by the
+    same analysis_id the live session already has -- saving again later in
+    the same conversation just refreshes the snapshot instead of
+    duplicating it.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    project_id = body.get("project_id")
+    reference_ids = body.get("reference_ids") or []
+    transcript = body.get("transcript") or []
+    if not project_id or not db.get_project(project_id):
+        return jsonify({"error": "project not found"}), 404
+    if not reference_ids or not transcript:
+        return jsonify({"error": "nothing to save yet"}), 400
+    db.save_analysis(analysis_id, project_id, reference_ids, transcript)
+    return jsonify({"ok": True})
+
+
+@app.get("/api/projects/<project_id>/analyses")
+def api_list_project_analyses(project_id):
+    if not db.get_project(project_id):
+        abort(404)
+    return jsonify([_analysis_summary(a) for a in db.list_analyses_for_project(project_id)])
+
+
+@app.get("/api/analyses/<analysis_id>")
+def api_get_analysis(analysis_id):
+    a = db.get_analysis(analysis_id)
+    if not a:
+        abort(404)
+    refs = db.get_references_by_ids(a["reference_ids"])
+    data = dict(a)
+    data["references"] = [_ref_summary(r) for r in refs]
+    return jsonify(data)
+
+
+@app.get("/api/similarity/estimate")
+def api_similarity_estimate():
+    """Status/estimate for the Settings page: how many references and pairs
+    are involved, what's already saved, and the cost of running it. Pairwise
+    similarity is computed from embeddings every reference already has --
+    pure local vector math, so this is always free.
+    """
+    reference_count = len(db.list_references())
+    pair_count = reference_count * (reference_count - 1) // 2
+    saved_count, last_computed_at = db.get_similarity_scores_meta()
+    return jsonify(
+        {
+            "reference_count": reference_count,
+            "pair_count": pair_count,
+            "estimated_cost_usd": 0.0,
+            "saved_count": saved_count,
+            "last_computed_at": last_computed_at,
+        }
+    )
+
+
+@app.post("/api/similarity/calculate")
+def api_similarity_calculate():
+    pairs = embeddings.compute_all_pairwise_similarities()
+    db.save_similarity_scores(pairs)
+    return jsonify({"pair_count": len(pairs), "reference_count": len(db.list_references())})
+
+
+@app.get("/api/similarity")
+def api_similarity_list():
+    """Every stored pairwise score, raw -- mainly for the /graph.html page,
+    which computes its own layout server-side via graph_layout.py instead.
+    """
+    return jsonify(db.list_similarity_scores())
+
+
+@app.get("/api/similarity/graph")
+def api_similarity_graph():
+    if not db.list_similarity_scores():
+        return jsonify({"error": "No similarity scores saved yet -- run Calculate Similarity Scores in Settings first."}), 400
+    return jsonify(graph_layout.build_graph())
+
+
+@app.get("/media/<ref_id>")
+def media(ref_id):
+    ref = _find_reference(ref_id)
+    if not ref:
+        abort(404)
+    path = _resolve_ref_path(ref)
+    if not path.exists():
+        abort(404)
+    mime, _ = mimetypes.guess_type(str(path))
+    return send_file(path, mimetype=mime or "application/octet-stream")
+
+
+@app.get("/media/<ref_id>/thumb")
+def media_thumb(ref_id):
+    ref = _find_reference(ref_id)
+    if not ref:
+        abort(404)
+    path = _resolve_ref_path(ref)
+    if not path.exists():
+        abort(404)
+    ext = path.suffix.lower()
+
+    if ext in ingest.IMAGE_EXTS:
+        mime, _ = mimetypes.guess_type(str(path))
+        return send_file(path, mimetype=mime or "image/jpeg")
+
+    if ext == ".pdf":
+        try:
+            doc = fitz.open(path)
+            pix = doc[0].get_pixmap(dpi=PDF_THUMB_DPI)
+            doc.close()
+            return send_file(BytesIO(pix.tobytes("png")), mimetype="image/png")
+        except Exception:
+            abort(404)
+
+    abort(404)  # plain text references have no image thumbnail
+
+
+@app.post("/api/add-file")
+def api_add_file():
+    if "file" not in request.files:
+        return jsonify({"error": "no file uploaded"}), 400
+    upload = request.files["file"]
+    title = request.form.get("title") or Path(upload.filename).stem
+    source = request.form.get("source") or None
+    notes = request.form.get("notes") or None
+    is_own_work = request.form.get("own_work") == "true"
+
+    suffix = Path(upload.filename).suffix
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        upload.save(tmp.name)
+        tmp_path = Path(tmp.name)
+
+    try:
+        result = ingest.add_reference(tmp_path, title=title, source=source, notes=notes, is_own_work=is_own_work)
+        return jsonify(result)
+    except ingest.DuplicateReferenceError as e:
+        return jsonify({"error": str(e), "duplicate": True}), 409
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@app.post("/api/add-text")
+def api_add_text():
+    body = request.get_json(force=True, silent=True) or {}
+    text = (body.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "no text provided"}), 400
+    title = body.get("title") or f"Note {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    source = body.get("source") or None
+    notes = body.get("notes") or None
+    is_own_work = bool(body.get("own_work"))
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as tmp:
+        tmp.write(text)
+        tmp_path = Path(tmp.name)
+
+    try:
+        result = ingest.add_reference(tmp_path, title=title, source=source, notes=notes, is_own_work=is_own_work)
+        return jsonify(result)
+    except ingest.DuplicateReferenceError as e:
+        return jsonify({"error": str(e), "duplicate": True}), 409
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+# --- Colour similarity ------------------------------------------------------
+#
+# Colour is a separate search dimension from the existing CLIP embeddings,
+# which rank by shape and semantics rather than colour (measured -- see the
+# header of colour.py). These endpoints never mix the two: ranking here is
+# colour only, so the sliders fully explain the result order.
+
+
+@app.get("/api/colour/coverage")
+def api_colour_coverage():
+    """How much of the archive can currently be searched by colour."""
+    return jsonify(colour.coverage())
+
+
+@app.post("/api/colour/backfill")
+def api_colour_backfill():
+    """Analyse images that don't have a current colour profile.
+
+    Synchronous and bounded by `limit` rather than queued: analysis runs at
+    roughly 40ms an image with no network calls, so a few hundred finish well
+    within a request. It's also idempotent, so the UI can simply call it
+    again to continue rather than tracking a job.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    limit = body.get("limit")
+    analysed, failed = colour.backfill(limit=limit if isinstance(limit, int) else None)
+    return jsonify({"analysed": analysed, "failed": failed, **colour.coverage()})
+
+
+@app.get("/api/colour/map")
+def api_colour_map():
+    """Every analysed reference positioned in the LCh cylinder the Colour mode
+    of the 3D graph draws.
+
+    Serves positions and the archive detail needed to draw a node, and nothing
+    about ranking: picking references off this map and searching from them goes
+    through /api/colour/search like every other colour search, so the map and
+    the Project Space sidebar can't drift into disagreeing about which
+    references are close in colour.
+    """
+    exclude_black_white = request.args.get("exclude_black_white") in ("1", "true", "yes")
+    layout = colour.colour_map(exclude_black_white=exclude_black_white)
+
+    refs = {r["id"]: r for r in db.get_references_by_ids([n["id"] for n in layout["nodes"]])}
+    nodes = []
+    for node in layout["nodes"]:
+        ref = refs.get(node["id"])
+        if not ref:
+            continue  # deleted between analysis and now
+        nodes.append({**_ref_summary(ref), **node})
+
+    return jsonify({
+        "nodes": nodes,
+        "radius": layout["radius"],
+        "height": layout["height"],
+        "hue_ticks": layout["hue_ticks"],
+        "coverage": colour.coverage(),
+    })
+
+
+@app.post("/api/colour/search")
+def api_colour_search():
+    """Find references whose colour character resembles the selected ones.
+
+    Several selected references produce one combined profile describing the
+    group, not one search per reference -- "what looks like this collection"
+    rather than "what looks like any one of these".
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    reference_ids = body.get("reference_ids") or []
+    if not reference_ids:
+        return jsonify({"error": "select at least one reference"}), 400
+
+    project_id = body.get("project_id")
+    exclude = set(body.get("exclude_ids") or [])
+    if project_id:
+        # A colour search inside a project is for discovering things that
+        # aren't in it yet, so its own references are excluded by default.
+        exclude |= {r["id"] for r in db.list_project_references(project_id)}
+
+    weights = body.get("weights") or {}
+    weights = {k: v for k, v in weights.items() if k in colour.DEFAULT_WEIGHTS}
+    exclude_black_white = bool(body.get("exclude_black_white"))
+
+    limit = body.get("limit")
+    outcome = colour.search(
+        reference_ids,
+        weights=weights,
+        exclude_ids=exclude,
+        limit=limit if isinstance(limit, int) else 40,
+        exclude_black_white=exclude_black_white,
+    )
+
+    if not outcome["profile"]:
+        return jsonify({
+            "profile": None,
+            "used_ids": [],
+            "results": [],
+            "coverage": colour.coverage(),
+            "reason": "no_colour_data",
+        })
+
+    # Attach the archive detail each result needs to render, reusing the same
+    # summary shape the rest of the app renders references from.
+    refs = {r["id"]: r for r in db.get_references_by_ids([r["reference_id"] for r in outcome["results"]])}
+    stored = db.get_colour_analyses(list(refs), version=colour.ANALYSIS_VERSION)
+
+    results = []
+    for row in outcome["results"]:
+        ref = refs.get(row["reference_id"])
+        if not ref:
+            continue  # deleted between analysis and now
+        profile = colour.profile_from_json((stored.get(ref["id"]) or {}).get("profile"))
+        # The displayed palette must go through the same filter as the one
+        # actually ranked, or the swatch strip would show colours that had no
+        # bearing on the score -- defeating the point of showing it at all.
+        if profile and exclude_black_white:
+            profile = colour.remove_black_and_white(profile)
+        results.append({
+            **_ref_summary(ref),
+            "score": round(row["score"], 4),
+            "palette": (profile or {}).get("palette", []),
+        })
+
+    return jsonify({
+        "profile": outcome["profile"],
+        "used_ids": outcome["used_ids"],
+        "results": results,
+        "coverage": colour.coverage(),
+    })
+
+
+# --- Capture API (browser extension) ---------------------------------------
+#
+# Thin HTTP wrappers over capture.py. These accept a capture, write it down,
+# and return -- the actual ingestion happens on capture.py's worker, because
+# tagging and embedding take seconds and a browser popup is destroyed the
+# moment it loses focus. The extension polls GET /api/captures/<id> (or just
+# trusts the queue) rather than holding a request open.
+
+
+def _parse_envelope(raw):
+    """Envelopes arrive as a JSON string in multipart, or as a dict in JSON."""
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        raise capture.CaptureError("capture envelope is not valid JSON")
+    if not isinstance(parsed, dict):
+        raise capture.CaptureError("capture envelope must be an object")
+    return parsed
+
+
+def _accept_one(envelope, upload=None):
+    """Accept a single capture, returning (payload, status_code)."""
+    text = None
+    if upload is None:
+        content = envelope.get("content") or {}
+        text = content.get("selected_text") or content.get("text")
+        if envelope.get("type") == "page" and not text:
+            # A page capture with no excerpt still deserves to be a reference:
+            # store what the page said about itself so it's searchable.
+            source = envelope.get("source") or {}
+            meta = envelope.get("metadata") or {}
+            parts = [
+                source.get("page_title"),
+                meta.get("description"),
+                source.get("url"),
+            ]
+            text = "\n\n".join(p for p in parts if p)
+
+    row = capture.accept(envelope, upload=upload, text=text)
+    return capture.summary(row), 202
+
+
+@app.get("/api/health")
+def api_health():
+    """Cheap liveness probe -- the extension calls this to decide between
+    "ready" and "Archive unavailable"."""
+    return jsonify({
+        "ok": True,
+        "app": "fashion-reference-library",
+        "reference_count": len(db.list_references()),
+        "auth_required": bool(ARCHIVE_API_TOKEN),
+    })
+
+
+@app.post("/api/captures/check")
+def api_capture_check():
+    """Has this been captured already? Answered from URLs alone, so the
+    extension can warn before downloading anything."""
+    if not _capture_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        envelope = _parse_envelope(body.get("capture", body))
+    except capture.CaptureError as e:
+        return jsonify({"error": str(e)}), 400
+    match = capture.check_duplicate(envelope)
+    return jsonify({"duplicate": bool(match), "match": match})
+
+
+@app.post("/api/captures")
+def api_create_capture():
+    """Accept one capture. Multipart (file + `capture` JSON field) for images,
+    plain JSON for text and page captures."""
+    if not _capture_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+
+    try:
+        if "file" in request.files:
+            envelope = _parse_envelope(request.form.get("capture"))
+            payload, code = _accept_one(envelope, upload=request.files["file"])
+        else:
+            body = request.get_json(force=True, silent=True) or {}
+            envelope = _parse_envelope(body.get("capture", body))
+            payload, code = _accept_one(envelope)
+    except capture.CaptureError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify(payload), code
+
+
+@app.post("/api/captures/batch")
+def api_create_captures_batch():
+    """Accept several captures at once (multi-select on one page).
+
+    Per-item results rather than all-or-nothing: one bad item shouldn't lose
+    the rest of a selection, and the extension shows a per-row status anyway.
+    Image bytes come in as `file0`, `file1`, ... matching `captures[i].
+    """
+    if not _capture_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+
+    if request.files:
+        try:
+            envelopes = json.loads(request.form.get("captures") or "[]")
+        except (TypeError, ValueError):
+            return jsonify({"error": "captures field is not valid JSON"}), 400
+        uploads = [request.files.get(f"file{i}") for i in range(len(envelopes))]
+    else:
+        body = request.get_json(force=True, silent=True) or {}
+        envelopes = body.get("captures") or []
+        uploads = [None] * len(envelopes)
+
+    if not isinstance(envelopes, list) or not envelopes:
+        return jsonify({"error": "no captures provided"}), 400
+
+    results = []
+    for envelope, upload in zip(envelopes, uploads):
+        try:
+            payload, _ = _accept_one(_parse_envelope(envelope), upload=upload)
+            results.append({"ok": True, **payload})
+        except Exception as e:
+            results.append({"ok": False, "error": str(e)})
+
+    accepted = sum(1 for r in results if r["ok"])
+    return jsonify({"accepted": accepted, "total": len(results), "results": results}), 202
+
+
+@app.get("/api/captures/<capture_id>")
+def api_get_capture(capture_id):
+    """Status of one capture -- queued, processing, done, duplicate, failed."""
+    if not _capture_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+    row = db.get_capture(capture_id)
+    if not row:
+        abort(404)
+    return jsonify(capture.summary(row))
+
+
+if __name__ == "__main__":
+    db.init_db()
+    # Pick up anything a previous run left mid-flight before serving.
+    resumed, lost = capture.resume_pending()
+    if resumed or lost:
+        print(f"captures resumed: {resumed}, unrecoverable: {lost}")
+    capture.ensure_worker()
+    url = f"http://127.0.0.1:{PORT}"
+    print(f"Fashion reference library running at {url}")
+    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    app.run(port=PORT, debug=False)

@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Fashion Reference Archive",
+  "version": "0.1.0",
+  "description": "Capture images and text from the web straight into your reference archive, with their source.",
+
+  "permissions": ["activeTab", "scripting", "storage", "contextMenus"],
+
+  "host_permissions": [
+    "http://127.0.0.1:5050/*",
+    "http://localhost:5050/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/content/collect.js",
+        "src/extraction/*.js",
+        "src/extraction/extractors/*.js"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ],
+
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
+  },
+
+  "action": {
+    "default_title": "Save to Reference Archive",
+    "default_popup": "src/popup/popup.html"
+  },
+
+  "options_page": "src/options/options.html"
+}

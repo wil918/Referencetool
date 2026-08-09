@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D Similarity Graph</title>
+<script src="/theme.js"></script>
+<style>
+  :root {
+    --bg: #eff2f9;
+    --bg-rgb: 239, 242, 249;
+    --ink: #46545f;
+    --muted: #8b97a2;
+    --accent: #c23b2e;
+    --light: #fafbff;
+    --dark: rgba(22, 27, 29, 0.23);
+    --raise-sm: -5px -5px 10px var(--light), 5px 5px 10px var(--dark);
+    --press-sm: inset 5px 5px 10px var(--dark), inset -5px -5px 10px var(--light);
+    --serif: "Times New Roman", Times, serif;
+    --sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color-scheme: light;
+  }
+
+  /* Same dark palette as style.css's :root[data-theme="dark"] -- kept in
+     step by hand since this page is standalone and doesn't share that
+     stylesheet. theme.js (loaded above) sets the attribute before first
+     paint, from the preference toggled in Settings. */
+  :root[data-theme="dark"] {
+    --bg: #262b31;
+    --bg-rgb: 38, 43, 49;
+    --ink: #dfe4e9;
+    --muted: #9aa4ae;
+    --light: rgba(255, 255, 255, 0.035);
+    --dark: rgba(0, 0, 0, 0.6);
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    font-family: var(--sans);
+    color: var(--ink);
+    overflow: hidden;
+  }
+  #scene { position: fixed; inset: 0; }
+  #scene canvas { display: block; }
+
+  .overlay { position: fixed; z-index: 10; pointer-events: none; }
+  .overlay a, .overlay button { pointer-events: auto; }
+
+  #top-bar {
+    top: 0; left: 0; right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.1rem 1.5rem;
+    background: linear-gradient(to bottom, rgba(var(--bg-rgb),0.95), rgba(var(--bg-rgb),0));
+  }
+  #top-bar h1 { font-family: var(--serif); font-size: 1.25rem; margin: 0; font-weight: 500; }
+  #status-line { font-family: var(--serif); font-size: 0.8rem; color: var(--muted); margin-top: 0.15rem; }
+
+  #back-link {
+    font-family: var(--sans);
+    font-size: 0.85rem;
+    color: var(--ink);
+    text-decoration: none;
+    border: none;
+    background: var(--bg);
+    padding: 0.6rem 1.25rem;
+    border-radius: 999px;
+    white-space: nowrap;
+    box-shadow: var(--raise-sm);
+    transition: box-shadow 0.22s ease, transform 0.22s ease;
+  }
+
+  #back-link:active { box-shadow: var(--press-sm); transform: scale(0.985); }
+
+  #hint { bottom: 1.25rem; left: 1.5rem; font-family: var(--serif); font-size: 0.8rem; color: var(--muted); }
+
+  /* --- Map mode switch + Colour panel ---
+     Same neumorphic tokens as the rest of the page, so Colour mode reads as
+     another view of this graph rather than a different application. */
+  #top-right { display: flex; align-items: center; gap: 0.75rem; }
+
+  #mode-switch {
+    display: flex;
+    gap: 0.2rem;
+    padding: 0.25rem;
+    background: var(--bg);
+    border-radius: 999px;
+    box-shadow: var(--press-sm);
+  }
+  #mode-switch button {
+    font-family: var(--sans);
+    font-size: 0.82rem;
+    color: var(--muted);
+    border: none;
+    background: transparent;
+    padding: 0.45rem 1rem;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: color 0.2s ease, box-shadow 0.2s ease;
+  }
+  #mode-switch button.active { color: var(--ink); background: var(--bg); box-shadow: var(--raise-sm); }
+
+  #colour-panel {
+    top: 5.5rem;
+    right: 1.5rem;
+    bottom: 1.25rem;
+    width: 310px;
+    max-width: calc(100vw - 3rem);
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 1.1rem;
+    background: var(--bg);
+    border-radius: 22px;
+    box-shadow: var(--raise-sm);
+    pointer-events: auto;
+    overflow-y: auto;
+  }
+  #colour-panel[hidden] { display: none; }
+  #cm-head { display: flex; align-items: baseline; justify-content: space-between; }
+  #cm-head h2 { font-family: var(--serif); font-size: 1.05rem; font-weight: 500; margin: 0; }
+  #cm-clear, #cm-find {
+    font-family: var(--sans);
+    font-size: 0.78rem;
+    color: var(--ink);
+    border: none;
+    background: var(--bg);
+    padding: 0.4rem 0.9rem;
+    border-radius: 999px;
+    cursor: pointer;
+    box-shadow: var(--raise-sm);
+  }
+  #cm-find { width: 100%; padding: 0.6rem; margin-top: 0.3rem; }
+  #cm-find:disabled { color: var(--muted); box-shadow: var(--press-sm); cursor: default; }
+  #cm-clear:active, #cm-find:not(:disabled):active { box-shadow: var(--press-sm); }
+
+  #cm-bw-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: var(--sans);
+    font-size: 0.8rem;
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .cm-muted { font-family: var(--serif); font-size: 0.78rem; color: var(--muted); margin: 0; }
+  .cm-label {
+    font-family: var(--sans);
+    font-size: 0.66rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-top: 0.5rem;
+  }
+
+  #cm-selected { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+  .cm-chip {
+    width: 46px; height: 46px;
+    padding: 0; border: none; border-radius: 10px;
+    overflow: hidden; cursor: pointer; background: none;
+    box-shadow: var(--raise-sm);
+  }
+  .cm-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  /* Blocks proportional to each colour's share, matching the palette strips
+     in the Project Space sidebar. */
+  .cm-palette { display: flex; height: 22px; border-radius: 6px; overflow: hidden; }
+  .cm-palette.large { height: 34px; }
+  .cm-palette span { display: block; }
+
+  #cm-results { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.6rem; }
+  .cm-result {
+    display: grid;
+    grid-template-columns: 46px 1fr auto;
+    gap: 0.55rem;
+    align-items: center;
+  }
+  .cm-result-thumb {
+    width: 46px; height: 46px; padding: 0; border: none; border-radius: 10px;
+    overflow: hidden; cursor: pointer; background: none; box-shadow: var(--raise-sm);
+  }
+  .cm-result-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .cm-result-title {
+    font-family: var(--serif);
+    font-size: 0.85rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .cm-score { font-family: var(--serif); font-size: 0.72rem; color: var(--muted); margin-bottom: 0.2rem; }
+  .cm-open {
+    font-family: var(--sans); font-size: 0.72rem; color: var(--muted);
+    text-decoration: none; padding: 0.3rem 0.5rem;
+  }
+  .cm-open:hover { color: var(--ink); }
+
+  /* The similarity view's floating tag captions belong to that layout only. */
+  body.colour-mode #hint { max-width: 46%; }
+
+  #node-label {
+    bottom: 1.25rem; right: 1.5rem;
+    max-width: 260px;
+    background: var(--bg);
+    border-radius: 18px;
+    padding: 0.9rem 1.1rem;
+    box-shadow: var(--raise-sm);
+    display: none;
+  }
+  #node-label.visible { display: block; }
+  #node-label .n-title { font-family: var(--serif); font-size: 0.95rem; margin-bottom: 0.2rem; }
+  #node-label .n-meta { font-family: var(--serif); font-size: 0.78rem; color: var(--muted); }
+
+  #load-state, #error-state {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 0.75rem;
+    text-align: center;
+    padding: 2rem;
+    background: var(--bg);
+    z-index: 20;
+  }
+  #error-state { display: none; }
+  #error-state a { color: var(--ink); }
+  .muted { color: var(--muted); font-size: 0.9rem; }
+
+  @font-face {
+    font-family: "Ballet";
+    src: url("/fonts/Ballet-Regular-VariableFont_opsz.ttf");
+  }
+
+  #intro-title {
+    position: fixed;
+    /* The script font's swash overshoots its own glyph origin by roughly 5%
+       of the font size on the left (measured via canvas TextMetrics), so a
+       plain vw-based inset isn't enough once the viewport gets narrow enough
+       that font-size pins at its clamp() floor while the vw offset keeps
+       shrinking -- the two decouple and the margin can vanish. Sizing the
+       inset in em ties it to the font's actual rendered size instead, so it
+       still clears the swash at any width; the vw term is what gives the
+       "hangs off the corner" position at typical/wide viewports where it's
+       larger than the em minimum. */
+    left: max(2vw, 0.1em);
+    bottom: 14vh;
+    font-family: "Ballet", cursive;
+    font-size: clamp(7rem, 22vw, 20rem);
+    line-height: 1;
+    color: var(--accent);
+    z-index: 15;
+    pointer-events: none;
+    opacity: 1;
+    transition: opacity 1s ease;
+  }
+  #intro-title.hidden { opacity: 0; }
+</style>
+</head>
+<body>
+  <div id="scene"></div>
+  <div id="intro-title"> Archive </div>
+
+  <div id="load-state">
+    <p>Loading similarity graph&hellip;</p>
+  </div>
+
+  <div id="error-state">
+    <p id="error-text" class="muted"></p>
+    <a href="/index.html">&larr; Back to the library</a>
+  </div>
+
+  <div class="overlay" id="top-bar">
+    <div>
+      <h1>3D Similarity Graph</h1>
+      <div id="status-line"></div>
+    </div>
+    <div id="top-right">
+      <div id="mode-switch" role="group" aria-label="Map mode">
+        <button type="button" data-mode="visual" class="active">Visual</button>
+        <button type="button" data-mode="colour">Colour</button>
+      </div>
+      <a id="back-link" href="/index.html">&larr; Back to library</a>
+    </div>
+  </div>
+
+  <!-- Colour mode's panel. Hidden in the similarity view; its search posts to
+       the same /api/colour/search the Project Space sidebar uses. -->
+  <aside class="overlay" id="colour-panel" hidden>
+    <div id="cm-head">
+      <h2>Colour</h2>
+      <button type="button" id="cm-clear">Clear</button>
+    </div>
+
+    <label id="cm-bw-label">
+      <input type="checkbox" id="cm-bw">
+      Remove black &amp; white
+    </label>
+
+    <p id="cm-status" class="cm-muted"></p>
+
+    <p id="cm-empty" class="cm-muted">
+      Click a reference to select it &middot; shift-click to build a group.
+    </p>
+
+    <div id="cm-body" hidden>
+      <div class="cm-label">Selected</div>
+      <div id="cm-selected"></div>
+
+      <div class="cm-label">Combined palette</div>
+      <div id="cm-combined"></div>
+
+      <button type="button" id="cm-find" disabled>Find similar colours</button>
+      <div id="cm-results"></div>
+    </div>
+  </aside>
+
+  <div class="overlay" id="hint">Drag to rotate &middot; scroll to zoom &middot; right-drag to pan &middot; move closer for thumbnails</div>
+
+  <div class="overlay" id="node-label">
+    <div class="n-title" id="node-label-title"></div>
+    <div class="n-meta" id="node-label-meta"></div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/vendor/three/three.module.js",
+      "three/addons/": "/vendor/three/addons/"
+    }
+  }
+  </script>
+  <script type="module" src="/graph.js"></script>
+</body>
+</html>

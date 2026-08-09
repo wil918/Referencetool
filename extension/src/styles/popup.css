@@ -1,0 +1,409 @@
+/* Minimal, image-forward, low friction.
+ *
+ * Shares the archive's own typography -- Times New Roman for titles and
+ * secondary text, Helvetica Neue for controls -- so the extension reads as
+ * part of the same tool rather than a separate utility. */
+
+:root {
+  --bg: #eff2f9;
+  --sunken: #e4ebf1;
+  --ink: #46545f;
+  --ink-strong: #35414b;
+  --muted: #8b97a2;
+  --accent: #c23b2e;
+  --ok: #3f6e4e;
+  --line: #d7dee8;
+  --serif: "Times New Roman", Times, serif;
+  --sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  width: 360px;
+  max-height: 580px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 14px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+}
+
+h1 {
+  font-family: var(--serif);
+  font-size: 15px;
+  font-weight: 500;
+  margin: 0;
+  line-height: 1.3;
+  /* Page titles run long; two lines then ellipsis keeps the popup compact. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.muted { font-family: var(--serif); color: var(--muted); font-size: 12px; }
+
+#page-header { margin-bottom: 12px; }
+
+/* --- banners --- */
+
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: var(--sunken);
+  margin-bottom: 12px;
+}
+
+.banner strong { font-family: var(--sans); font-size: 12px; font-weight: 600; }
+.banner.warn { background: #f6e7e4; }
+.banner[hidden] { display: none; }
+
+/* --- mode switch --- */
+
+.modes { display: flex; gap: 4px; margin-bottom: 12px; }
+
+.mode-btn {
+  flex: 1;
+  font-family: var(--sans);
+  font-size: 12px;
+  padding: 7px 0;
+  border: none;
+  border-radius: 8px;
+  background: var(--sunken);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.mode-btn.is-active { background: #fff; color: var(--ink-strong); font-weight: 600; }
+.mode-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.mode-panel[hidden] { display: none; }
+
+/* --- image grid --- */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  max-height: 210px;
+  overflow-y: auto;
+  align-content: start;
+}
+
+.thumb {
+  position: relative;
+  /* Square via padding rather than `aspect-ratio`: an aspect-ratio height is
+     resolved after grid tracks are sized, so the rows came out ~14px shorter
+     than the tiles and overlapped. Percentage padding resolves against the
+     grid area's width and does contribute to track sizing, so the track and
+     the tile always agree. */
+  height: 0;
+  padding-bottom: 100%;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--sunken);
+  cursor: pointer;
+  /* The selected ring is an inset shadow rather than a border so selecting a
+     tile doesn't change its content box -- a real border shrinks the padding
+     box by 2px and clips the dimension label along the bottom edge. */
+  border: none;
+  box-shadow: inset 0 0 0 2px transparent;
+}
+
+/* Absolutely positioned so the image's own intrinsic size never contributes
+   to grid track sizing. Left in flow, a 120px-tall thumbnail sizes the row
+   before `aspect-ratio` resolves the tile to its final height, and the rows
+   end up overlapping by the difference. */
+.thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.thumb.is-selected { box-shadow: inset 0 0 0 2px var(--accent); }
+
+/* The selection light, matching the archive's own selection idiom. */
+.thumb .light {
+  position: absolute;
+  top: 4px; right: 4px;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.75);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.thumb.is-selected .light {
+  background: var(--accent);
+  box-shadow: 0 0 5px var(--accent), 0 0 10px rgba(194, 59, 46, 0.5);
+}
+
+.thumb .dims {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  font-size: 9px;
+  padding: 2px 4px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.grid-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.grid-actions[hidden] { display: none; }
+
+/* --- PDF list: a document is "the one thing", not a grid to pick from --
+   a short list of rows, single-select, closer to a set of radio options
+   than the image grid's multi-select tiles. */
+
+.pdf-list { display: flex; flex-direction: column; gap: 4px; max-height: 210px; overflow-y: auto; }
+
+.pdf-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: #fff;
+  border: none;
+  box-shadow: inset 0 0 0 2px transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.pdf-row.is-selected { box-shadow: inset 0 0 0 2px var(--accent); }
+
+.pdf-row .icon {
+  flex: 0 0 auto;
+  width: 26px; height: 26px;
+  border-radius: 5px;
+  background: var(--sunken);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+.pdf-row.is-selected .icon { background: var(--accent); color: #fff; }
+
+.pdf-row .name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-row .light {
+  flex: 0 0 auto;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: var(--sunken);
+  box-shadow: inset 1px 1px 2px rgba(22, 27, 29, 0.15);
+}
+
+.pdf-row.is-selected .light {
+  background: var(--accent);
+  box-shadow: 0 0 5px var(--accent), 0 0 10px rgba(194, 59, 46, 0.5);
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--ink-strong);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.empty { padding: 18px 0; text-align: center; }
+.empty[hidden] { display: none; }
+
+/* --- text + page preview --- */
+
+blockquote {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--accent);
+  background: #fff;
+  border-radius: 0 8px 8px 0;
+  font-family: var(--serif);
+  font-size: 13px;
+  line-height: 1.45;
+  max-height: 160px;
+  overflow-y: auto;
+  /* The quote is the artefact -- show it exactly as captured. */
+  white-space: pre-wrap;
+}
+
+blockquote[hidden], #text-heading[hidden] { display: none; }
+#text-heading { margin-top: 6px; }
+
+.page-preview {
+  padding: 10px 12px;
+  background: #fff;
+  border-radius: 8px;
+  font-family: var(--serif);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* --- fields --- */
+
+.field { margin-top: 12px; }
+
+.field label {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+input[type="text"], select {
+  width: 100%;
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+}
+
+input[type="text"]:focus, select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.recent { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.recent[hidden] { display: none; }
+
+.recent-chip {
+  font-family: var(--sans);
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.recent-chip.is-active { border-color: var(--accent); color: var(--accent); }
+
+/* --- metadata (collapsed by default) --- */
+
+details {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+dl { margin: 8px 0 0; font-size: 12px; }
+
+dl div {
+  display: grid;
+  grid-template-columns: 78px 1fr;
+  gap: 8px;
+  padding: 3px 0;
+  align-items: baseline;
+}
+
+dt { color: var(--muted); font-family: var(--serif); }
+dd { margin: 0; word-break: break-word; }
+
+/* Where a value came from, so a guess is never mistaken for a fact. */
+.origin {
+  display: inline-block;
+  font-family: var(--sans);
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  margin-left: 5px;
+  vertical-align: 1px;
+  background: var(--sunken);
+  color: var(--muted);
+}
+
+.origin.high { background: #e2ece5; color: var(--ok); }
+.origin.low { background: #f3e6e4; color: var(--accent); }
+
+/* --- footer --- */
+
+footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.btn {
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.btn.primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+  font-weight: 500;
+}
+
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+#status { flex: 1; }
+
+/* --- per-item results --- */
+
+.results { margin-top: 12px; }
+.results[hidden] { display: none; }
+
+.result-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.result-row .icon { width: 12px; text-align: center; }
+.result-row.ok .icon { color: var(--ok); }
+.result-row.fail .icon { color: var(--accent); }
+.result-row.dup .icon { color: #a8562f; }
+.result-row .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

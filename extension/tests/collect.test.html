@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Collector message-handling tests</title>
+<style>
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; margin: 2rem; color: #46545f; background: #eff2f9; }
+  h1 { font-family: "Times New Roman", Times, serif; font-weight: 500; }
+  #summary { font-size: 1.1rem; margin: 1rem 0 1.5rem; }
+  .pass { color: #3f6e4e; }
+  .fail { color: #c23b2e; }
+  li { margin: 0.2rem 0; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<h1>Collector message-handling tests</h1>
+<p class="muted">
+  Exercises collect.js's chrome.runtime message handlers directly, against the
+  real DOM of this page, with a stub chrome.runtime so the module can be
+  imported outside the extension runtime.
+</p>
+<div id="summary">running…</div>
+<ul id="results"></ul>
+
+<script type="module">
+const results = [];
+let group = "";
+function describe(name) { group = name; results.push({ group: name }); }
+function it(name, fn) {
+  return (async () => {
+    try { await fn(); results.push({ name, ok: true }); }
+    catch (e) { results.push({ name, ok: false, error: e.message }); }
+  })();
+}
+function eq(actual, expected, msg) {
+  const a = JSON.stringify(actual), b = JSON.stringify(expected);
+  if (a !== b) throw new Error(`${msg || ""} expected ${b}, got ${a}`);
+}
+function ok(v, msg) { if (!v) throw new Error(msg || "expected truthy"); }
+
+let urlCounter = 0;
+
+/** A figure+figcaption+img, off-screen so it's real DOM but not visually
+ * intrusive, with naturalWidth/Height forced so scoring is deterministic
+ * without waiting on an actual image to load.
+ *
+ * Uses a fake https URL rather than a data: URI: scoreImage() treats a short
+ * data: URL as an inline icon (favicons and the like really do look exactly
+ * like that), and a solid-colour test swatch is short enough to trip that
+ * rule -- which isn't a bug, just not how a real photo is ever served, so a
+ * realistic URL is the more honest fixture here.
+ */
+function makeFigure(alt, colour, w, h) {
+  const fig = document.createElement("figure");
+  fig.style.position = "absolute";
+  fig.style.left = "-9999px";
+  const img = document.createElement("img");
+  img.src = `https://cdn.test/${encodeURIComponent(alt)}-${urlCounter++}.jpg`;
+  img.alt = alt;
+  Object.defineProperty(img, "naturalWidth", { value: w, configurable: true });
+  Object.defineProperty(img, "naturalHeight", { value: h, configurable: true });
+  fig.appendChild(img);
+  const cap = document.createElement("figcaption");
+  cap.textContent = `${alt} caption`;
+  fig.appendChild(cap);
+  return fig;
+}
+
+// A minimal chrome shim -- just enough for collect.js's top-level
+// `chrome.runtime.onMessage.addListener(...)` to succeed and hand back the
+// registered handler, so it can be invoked directly like a real message.
+window.chrome = {
+  runtime: {
+    onMessage: {
+      addListener(fn) { window.__collectListener = fn; },
+    },
+  },
+};
+
+function callListener(message) {
+  return new Promise((resolve) => {
+    window.__collectListener(message, {}, resolve);
+  });
+}
+
+await import("../src/content/collect.js");
+
+describe("envelope-image uses the describe-page snapshot, not a fresh scan");
+
+await it("locks onto the same picture even if the DOM reorders underneath it", async () => {
+  // This is the Cosmos scenario: a virtualized/infinite-scroll board mutates
+  // its own DOM (recycling nodes, loading more tiles in) between the moment
+  // the popup shows a grid and the moment the user clicks Save on one tile.
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+
+  const figA = makeFigure("Image A", "#c0392b", 900, 700); // biggest -> ranks first
+  const figB = makeFigure("Image B", "#2980b9", 500, 400);
+  container.append(figA, figB);
+
+  try {
+    const described = await callListener({ type: "describe-page" });
+    ok(described.ok, "describe-page should succeed");
+    eq(described.page.images.map((i) => i.image_alt), ["Image A", "Image B"],
+       "sanity check: A should rank ahead of B by size");
+
+    const urlOfA = described.page.images[0].image_url;
+
+    // Simulate the board recycling: "Image A"'s tile is gone, replaced by an
+    // unrelated, even bigger "Image C" in the same DOM position. A fresh scan
+    // right now would rank C first, at index 0 -- the same index the user
+    // picked when they saw "Image A" there.
+    figA.remove();
+    const figC = makeFigure("Image C", "#27ae60", 1200, 900);
+    container.prepend(figC);
+
+    const built = await callListener({ type: "envelope-image", index: 0, opts: {} });
+    ok(built.ok, "envelope-image should succeed: " + (built.error || ""));
+    eq(built.envelope.content.image_url, urlOfA,
+       "index 0 must still resolve to Image A, the tile actually selected -- " +
+       "not Image C, which only exists because the board mutated afterward");
+  } finally {
+    container.remove();
+  }
+});
+
+await it("a second describe-page call re-baselines the snapshot", async () => {
+  // Re-opening the popup should see the board's current state, not be stuck
+  // on the very first scan forever.
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const figX = makeFigure("Image X", "#8e44ad", 900, 700);
+  container.appendChild(figX);
+
+  try {
+    await callListener({ type: "describe-page" }); // from the previous test's leftover DOM state
+    const rescanned = await callListener({ type: "describe-page" });
+    ok(rescanned.ok);
+    eq(rescanned.page.images.map((i) => i.image_alt), ["Image X"],
+       "the new scan should reflect the current DOM, not a stale one");
+
+    const built = await callListener({ type: "envelope-image", index: 0, opts: {} });
+    eq(built.envelope.content.image_url, rescanned.page.images[0].image_url);
+  } finally {
+    container.remove();
+  }
+});
+
+await it("an out-of-range index against the current snapshot fails clearly", async () => {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  container.appendChild(makeFigure("Only Image", "#16a085", 800, 600));
+
+  try {
+    await callListener({ type: "describe-page" });
+    const built = await callListener({ type: "envelope-image", index: 5, opts: {} });
+    eq(built.ok, false);
+    ok(built.error.includes("no longer on the page"));
+  } finally {
+    container.remove();
+  }
+});
+
+describe("envelope-pdf: same describe-page snapshot, and download.js reuse");
+
+await it("finds a linked pdf and builds a document capture for it", async () => {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const link = document.createElement("a");
+  link.href = "https://cdn.test/papers/enclosure-study.pdf";
+  link.textContent = "Download PDF";
+  container.appendChild(link);
+
+  try {
+    const described = await callListener({ type: "describe-page" });
+    ok(described.ok);
+    eq(described.page.pdfs.length, 1);
+    eq(described.page.pdfs[0].title, "Download PDF");
+
+    const built = await callListener({ type: "envelope-pdf", index: 0, opts: {} });
+    ok(built.ok, "envelope-pdf should succeed: " + (built.error || ""));
+    eq(built.envelope.type, "pdf");
+    // Deliberately the same field an image capture uses -- see buildPdfCapture.
+    eq(built.envelope.content.image_url, "https://cdn.test/papers/enclosure-study.pdf");
+  } finally {
+    container.remove();
+  }
+});
+
+await it("locks onto the same document even if the link is replaced afterward", async () => {
+  // The exact same snapshot-consistency risk as images applies here: a page
+  // could swap which link is "the" PDF between describe-page and save
+  // (a reader re-rendering its own controls, say) just as a virtualized
+  // image grid can.
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const linkA = document.createElement("a");
+  linkA.href = "https://cdn.test/papers/original.pdf";
+  container.appendChild(linkA);
+
+  try {
+    const described = await callListener({ type: "describe-page" });
+    eq(described.page.pdfs.length, 1);
+
+    linkA.href = "https://cdn.test/papers/replaced-afterward.pdf";
+
+    const built = await callListener({ type: "envelope-pdf", index: 0, opts: {} });
+    eq(built.envelope.content.image_url, "https://cdn.test/papers/original.pdf",
+       "must still resolve to the document shown when describe-page ran");
+  } finally {
+    container.remove();
+  }
+});
+
+await it("reports clearly when no pdf is on the page", async () => {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  try {
+    await callListener({ type: "describe-page" });
+    const built = await callListener({ type: "envelope-pdf", index: 0, opts: {} });
+    eq(built.ok, false);
+    ok(built.error.includes("no longer on the page"));
+  } finally {
+    container.remove();
+  }
+});
+
+describe("download-same-origin: the path that keeps session and referrer");
+
+await it("refuses a cross-origin URL, and says so distinguishably", async () => {
+  // This isn't a failure -- it's the signal that tells the caller to fall
+  // back to the background worker (which ignores CORS but sends no
+  // referrer). The `crossOrigin` flag is what separates "wrong context for
+  // this URL" from "this URL is genuinely broken".
+  const res = await callListener({
+    type: "download-same-origin",
+    url: "https://some-other-host.test/paper.pdf",
+  });
+  eq(res.ok, false);
+  eq(res.crossOrigin, true);
+});
+
+await it("attempts a same-origin URL rather than refusing it", async () => {
+  // Served by the same test server this page came from, so it really is
+  // same-origin. It isn't a PDF, so the content-type guard rejects it --
+  // which is itself the point: a login wall or interstitial returns 200
+  // with HTML, and saving that as though it were the document would be
+  // worse than failing.
+  const res = await callListener({
+    type: "download-same-origin",
+    url: new URL("./collect.test.html", location.href).href,
+  });
+  eq(res.ok, false);
+  eq(res.crossOrigin, undefined, "should have been attempted, not refused as cross-origin");
+  ok(res.error.includes("expected a file"), "got: " + res.error);
+});
+
+await it("rejects a URL that cannot be parsed", async () => {
+  const res = await callListener({ type: "download-same-origin", url: "http://[bad" });
+  eq(res.ok, false);
+  ok(res.error.includes("could not be parsed"));
+});
+
+// --- render ------------------------------------------------------------
+await new Promise((r) => setTimeout(r, 0)); // let all the `it()` promises settle
+
+const ul = document.getElementById("results");
+let pass = 0, fail = 0;
+for (const r of results) {
+  const li = document.createElement("li");
+  if (r.group) {
+    li.style.fontWeight = "600";
+    li.style.marginTop = "0.75rem";
+    li.textContent = r.group;
+  } else if (r.ok) {
+    pass++;
+    li.className = "pass";
+    li.textContent = "PASS  " + r.name;
+  } else {
+    fail++;
+    li.className = "fail";
+    li.textContent = "FAIL  " + r.name + " — " + r.error;
+  }
+  ul.appendChild(li);
+}
+const summary = document.getElementById("summary");
+summary.className = fail ? "fail" : "pass";
+summary.textContent = `${pass} passed, ${fail} failed`;
+window.__testResults = { pass, fail, failures: results.filter((r) => r.ok === false) };
+</script>
+</body>
+</html>

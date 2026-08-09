@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Reference Archive settings</title>
+<link rel="stylesheet" href="../styles/popup.css">
+<style>
+  body { width: 460px; max-height: none; padding: 24px; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .status-line { margin-top: 14px; }
+</style>
+</head>
+<body>
+  <h1>Reference Archive</h1>
+  <div class="muted">Where captures are sent.</div>
+
+  <div class="field">
+    <label for="endpoint">Archive address</label>
+    <input type="text" id="endpoint" placeholder="http://127.0.0.1:5050" autocomplete="off">
+  </div>
+
+  <div class="field">
+    <label for="token">API token (optional)</label>
+    <input type="text" id="token" placeholder="Only if ARCHIVE_API_TOKEN is set" autocomplete="off">
+    <div class="muted" style="margin-top:6px">
+      Leave blank for a local archive. The token is stored in your browser profile
+      and only ever sent to the address above.
+    </div>
+  </div>
+
+  <footer>
+    <button class="btn primary" id="save-btn">Save</button>
+    <button class="btn" id="test-btn">Test connection</button>
+  </footer>
+
+  <div class="muted status-line" id="status"></div>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>

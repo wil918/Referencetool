@@ -1,0 +1,1662 @@
+/* Soft-UI (neumorphic) system.
+ *
+ * Depth comes entirely from two shadows -- a light one up and left, a dark
+ * one down and right -- cast by surfaces that are the *same* colour as the
+ * page. That's why there are no panel fills or borders here: an element that
+ * differs from its background breaks the illusion that it was pressed out of
+ * it. Raised is the resting state, inset is the pressed one, and the two are
+ * the same shadow with the direction reversed, which is what makes the click
+ * animation a single interpolation.
+ */
+
+@font-face {
+  font-family: "Ballet";
+  src: url("/fonts/Ballet-Regular-VariableFont_opsz.ttf");
+  font-display: swap;
+}
+
+:root {
+  --bg: #eff2f9;
+  --sunken: #e4ebf1;
+  --edge: #b5bfc6;
+  --slate: #6e7f8d;
+
+  --ink: #46545f;
+  --muted: #8b97a2;
+  /* A touch darker than --ink, for text that needs to read as emphasised
+     (an active tab, a checked selection) without introducing a new hue. */
+  --ink-strong: #35414b;
+
+  /* Shadow 1 / Shadow 2 from the reference sheet. */
+  --light: #fafbff;
+  --dark: rgba(22, 27, 29, 0.23);
+
+  /* The same red the graph threads are drawn in -- used only for lights,
+     focus and destructive labels, never as a fill. Identical in both themes
+     so it stays the same red the graph pages draw regardless of theme. */
+  --accent: #c23b2e;
+  --accent-soft: rgba(194, 59, 46, 0.5);
+
+  --warn: #a8562f;
+  --ok: #5d7d68;
+
+  /* A solid fill for the header strip -- kept separate from --light (which
+     is a shadow tint, not always an appropriate solid colour) so each theme
+     can pick its own "lighter than the page" shade. */
+  --header-bg: #fafbff;
+
+  --raise-sm: -5px -5px 10px var(--light), 5px 5px 10px var(--dark);
+  --raise-md: -10px -10px 20px var(--light), 10px 10px 20px var(--dark);
+  --raise-lg: -20px -20px 40px var(--light), 20px 20px 40px var(--dark);
+  --press-sm: inset 5px 5px 10px var(--dark), inset -5px -5px 10px var(--light);
+  --press-md: inset 10px 10px 20px var(--dark), inset -10px -10px 20px var(--light);
+
+  --serif: "Times New Roman", Times, serif;
+  --sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --display: "Ballet", cursive;
+  --mono: "SF Mono", "Menlo", "Consolas", monospace;
+
+  --press: box-shadow 0.22s ease, transform 0.22s ease, color 0.2s ease;
+
+  color-scheme: light;
+}
+
+/* Dark mode: same soft-UI system, same shapes and shadows, just re-based on
+   a dark surface -- the highlight shadow becomes a faint rim of light rather
+   than nearly-white, and the dark shadow deepens toward black, which is what
+   keeps the raised/pressed illusion working once the surface itself is dark.
+   Toggled in Settings; see ui-effects.js and the toggle in the Settings tab. */
+:root[data-theme="dark"] {
+  --bg: #262b31;
+  --sunken: #1e2227;
+  --edge: #454c54;
+  --slate: #7c92a3;
+
+  --ink: #dfe4e9;
+  --muted: #9aa4ae;
+  --ink-strong: #f7f9fb;
+
+  /* Blur radii were tuned against the light theme's bg, where the highlight
+     is a solid near-bg colour and barely visible -- on a dark bg the same
+     opacity read as a full glow, so this stays much fainter than --dark to
+     keep the shadow (not the highlight) the dominant, legible edge. */
+  --light: rgba(255, 255, 255, 0.035);
+  --dark: rgba(0, 0, 0, 0.6);
+
+  --warn: #d98f5e;
+  --ok: #7fae8c;
+
+  --header-bg: #2d333a;
+
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--ink);
+}
+
+/* Per-project appearance (project.html only). --project-ink/-bg/--content-scale
+   are set as inline custom properties on <html> by project/appearance.js --
+   on every other page they are simply never defined, so the fallback after
+   the comma is what actually renders and nothing here can leak into
+   index.html or the graph pages.
+
+   --content-scale is not applied globally here the way --project-ink/-bg
+   are: it only ever affects what's *inside* a widget (project/typography.js's
+   applyTypography, read by .widget-body and the individual widgets below),
+   never the page chrome around it, and a widget's own config.contentScale
+   overrides this root default by setting the same property again, scoped to
+   its own host.el -- see project/appearance.js and project/format-toolbar.js. */
+body { background: var(--project-bg, var(--bg)); color: var(--project-ink, var(--ink)); }
+
+/* Titles and subtitles carry the serif; everything functional stays in
+   Helvetica Neue, and the one display-scale title gets Ballet. */
+h1, h2, h3, h4 { font-family: var(--serif); font-weight: 500; }
+.muted { font-family: var(--serif); color: var(--muted); font-size: 0.9rem; }
+
+/* Set apart from the page below it -- a lighter strip (the same near-white
+   used for the raised-shadow highlight, so it reads as "more white" without
+   introducing a new tone) with a hairline where it meets the content. Only
+   this SPA header gets it; the graph pages are their own standalone
+   documents with their own top bar and don't share this stylesheet. */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 1.5rem 2.5rem;
+  background: var(--header-bg);
+  border-bottom: 1px solid rgba(70, 84, 95, 0.14);
+}
+
+header h1 {
+  font-family: var(--display);
+  font-size: 3rem;
+  line-height: 1;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  margin: 0;
+  color: var(--project-ink, var(--ink));
+}
+
+nav { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+
+/* --- Buttons: raised at rest, pressed in on click --- */
+
+.btn,
+.tab-btn,
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  padding: 0.6rem 1.25rem;
+  border: none;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--ink);
+  box-shadow: var(--raise-sm);
+  text-decoration: none;
+  cursor: pointer;
+  transition: var(--press);
+}
+
+.btn:hover,
+.tab-btn:hover,
+.nav-link:hover { color: var(--ink-strong); }
+
+.btn:active:not(:disabled),
+.nav-link:active {
+  box-shadow: var(--press-sm);
+  transform: scale(0.985);
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  color: var(--muted);
+  box-shadow: var(--press-sm);
+}
+
+/* display above beats the hidden attribute's UA rule, so say it again. */
+.btn[hidden], .tab-btn[hidden], .nav-link[hidden] { display: none; }
+
+/* --- Press-pulse: the click animation for every "light" button (the tab
+   bar, checkbox-style selection buttons, the 2D graph's view toggles).
+   Triggered by ui-effects.js adding .pulsing on click, rather than by
+   :active, so it plays the full outward -> in -> outward motion once per
+   click regardless of how briefly the mouse is down -- and fires the same
+   way for a keyboard activation. The light itself is driven separately by
+   :checked/.active, so it can already show the new state while this plays. */
+@keyframes press-pulse {
+  0% { box-shadow: var(--raise-sm); transform: scale(1); }
+  45% { box-shadow: var(--press-sm); transform: scale(0.965); }
+  100% { box-shadow: var(--raise-sm); transform: scale(1); }
+}
+
+.tab-btn.pulsing,
+.checkbox-label.pulsing {
+  animation: press-pulse 0.32s ease;
+}
+
+.tab-btn:active { box-shadow: var(--raise-sm); transform: none; }
+
+.btn.primary {
+  background: var(--slate);
+  color: #f4f7fb;
+  box-shadow: -5px -5px 10px var(--light), 5px 5px 10px var(--dark);
+}
+
+.btn.primary:active:not(:disabled) {
+  box-shadow: inset 4px 4px 8px rgba(22, 27, 29, 0.35), inset -4px -4px 8px rgba(255, 255, 255, 0.18);
+}
+
+.btn.primary:disabled { background: var(--sunken); color: var(--muted); }
+
+.btn.danger { color: var(--accent); }
+
+/* The active tab stays outward like any other button -- only its light and
+   label colour say it's selected; the press is just the click's animation. */
+.tab-btn.active {
+  color: var(--ink-strong);
+}
+
+.tab-btn.active::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-soft);
+}
+
+/* A real navigation link to the graph pages, styled like a tab-btn but
+   deliberately not one -- it leaves the single-page app entirely, so it
+   must stay out of the .tab-btn click handler that expects a data-tab. */
+.nav-link { color: var(--muted); }
+
+main { max-width: 1100px; margin: 0 auto; padding: 1.5rem 2.5rem 4rem; }
+
+/* The project shell has no header and no nav chrome -- the widget grid is
+   the whole page, so it gets the full viewport width and only a small
+   breathing margin, not the SPA's centred reading column. */
+body.project-shell main { max-width: none; margin: 0; padding: 0.75rem; }
+
+.tab { display: none; }
+.tab.active { display: block; }
+
+/* --- Selection boxes: a button with a light. Lit means selected. --- */
+
+.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-family: var(--sans);
+  font-size: 0.82rem;
+  color: var(--ink);
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: var(--press);
+}
+
+/* The native box is kept for state and events but never drawn -- the light
+   below is the whole indicator. */
+.checkbox-label input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+}
+
+.checkbox-label::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--sunken);
+  box-shadow: inset 1px 1px 2px var(--dark), inset -1px -1px 2px var(--light);
+  transition: background 0.25s ease, box-shadow 0.25s ease;
+}
+
+/* Checked stays outward too -- see the press-pulse block above. */
+.checkbox-label:has(input:checked) {
+  color: var(--ink-strong);
+}
+
+.checkbox-label:has(input:checked)::before {
+  background: var(--accent);
+  box-shadow: 0 0 5px var(--accent), 0 0 11px var(--accent-soft);
+}
+
+/* --- Inputs: recessed rather than raised --- */
+
+input[type="text"],
+textarea,
+select {
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  padding: 0.65rem 0.95rem;
+  border: none;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--ink);
+  box-shadow: var(--press-sm);
+  transition: box-shadow 0.2s ease;
+}
+
+textarea { border-radius: 18px; resize: vertical; }
+
+input[type="text"]:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  box-shadow: var(--press-sm), 0 0 0 1px var(--accent-soft);
+}
+
+select { cursor: pointer; padding-right: 0.6rem; }
+select:disabled { color: var(--muted); cursor: not-allowed; }
+
+/* A native colour well, recessed like every other input rather than raised --
+   the swatch itself is the only spot of real colour the neumorphic system
+   allows, so it earns being visually "picked up" rather than pressed out. */
+input[type="color"] {
+  width: 44px;
+  height: 34px;
+  padding: 3px;
+  border: none;
+  border-radius: 10px;
+  background: var(--bg);
+  box-shadow: var(--press-sm);
+  cursor: pointer;
+}
+
+input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
+input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
+
+::placeholder { color: var(--muted); }
+
+/* --- Add tab --- */
+
+.dropzone {
+  border-radius: 26px;
+  padding: 3.5rem 2rem;
+  text-align: center;
+  background: var(--bg);
+  box-shadow: var(--raise-md);
+  transition: box-shadow 0.25s ease;
+}
+
+.dropzone.drag-over { box-shadow: var(--press-md); }
+
+.drop-headline { font-family: var(--serif); font-size: 1.25rem; margin: 0 0 0.35rem; }
+
+.picker-buttons { display: flex; gap: 0.75rem; justify-content: center; margin-top: 1rem; }
+
+.upload-meta {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  margin-top: 1.5rem;
+  padding: 1.25rem 1.5rem;
+  border-radius: 22px;
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+}
+
+.upload-meta label:not(.checkbox-label) {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.upload-log {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.log-row {
+  font-size: 0.8rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: 999px;
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+}
+
+.log-row.ok { color: var(--ok); }
+.log-row.warn { color: var(--warn); }
+.log-row.error { color: var(--accent); }
+
+.text-add {
+  margin-top: 2.5rem;
+  padding: 2rem;
+  border-radius: 26px;
+  background: var(--bg);
+  box-shadow: var(--raise-md);
+}
+
+.text-add h2 { margin: 0 0 1.25rem; font-size: 1.3rem; }
+
+.text-add input:not([type="checkbox"]), .text-add textarea {
+  width: 100%;
+  margin-bottom: 0.85rem;
+}
+
+.text-add .checkbox-label { margin-bottom: 1.25rem; }
+
+/* --- Archive --- */
+
+.archive-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+}
+
+.archive-controls input[type="text"] { flex: 1; min-width: 220px; }
+
+.archive-controls > label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.archive-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 1rem;
+}
+
+#archive-selection-status:empty, #projects-selection-status:empty { display: none; }
+#archive-selection-status, #projects-selection-status { margin: -0.5rem 0 1rem; }
+
+.type-filter, .search-method-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.filter-label {
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.match-label {
+  padding: 0 0.85rem 0.6rem;
+  font-size: 0.68rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 1.5rem;
+}
+
+.grid.small {
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 0.9rem;
+}
+
+.card {
+  position: relative;
+  background: var(--bg);
+  border-radius: 22px;
+  overflow: hidden;
+  cursor: pointer;
+  box-shadow: var(--raise-sm);
+  transition: var(--press);
+}
+
+.card:hover { box-shadow: var(--raise-md); }
+.card:active { box-shadow: var(--press-sm); transform: scale(0.99); }
+
+/* Both the archive grid and the project detail grid sit flat rather than
+   raised -- no shadow, a tight seam between tiles, and a much smaller
+   radius, closer to a contact sheet than the soft-UI panels elsewhere. */
+#grid.grid, #project-grid.grid { gap: 0.4rem; }
+
+#grid .card,
+#project-grid .card {
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+#grid .card:hover,
+#project-grid .card:hover { box-shadow: none; }
+#grid .card:active,
+#project-grid .card:active { box-shadow: none; transform: scale(0.99); }
+
+.card img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  display: block;
+  background: var(--sunken);
+}
+
+.text-card {
+  aspect-ratio: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 1rem;
+  background: var(--sunken);
+  text-align: center;
+}
+
+.text-card-icon {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+  color: var(--muted);
+}
+
+.text-card p {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.card-caption {
+  font-family: var(--serif);
+  padding: 0.7rem 0.9rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.own-work-badge {
+  display: inline-block;
+  font-family: var(--sans);
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  background: var(--slate);
+  color: #f4f7fb;
+}
+
+/* Same specificity issue as .carousel-overlay: a class rule otherwise beats
+   the browser's [hidden] rule, so the badge would show even when hidden. */
+.own-work-badge[hidden] { display: none; }
+
+.card-badge {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  z-index: 2;
+  box-shadow: 0 2px 6px rgba(22, 27, 29, 0.3);
+}
+
+.carousel-info .own-work-badge { margin: 0.5rem 0; }
+
+/* Selected cards and project bars carry the same light as the checkboxes. */
+.card.selectable { cursor: pointer; }
+
+.card-select-check {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  z-index: 2;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--sunken);
+  box-shadow: 0 1px 3px rgba(22, 27, 29, 0.35), inset 1px 1px 2px var(--dark);
+  transition: background 0.25s ease, box-shadow 0.25s ease;
+}
+
+.card.selected, .project-bar.selected { box-shadow: var(--press-sm); }
+
+.card.selected .card-select-check, .project-bar.selected .card-select-check {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent), 0 0 13px var(--accent-soft);
+}
+
+/* --- Projects --- */
+
+.projects-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.projects-header h2 { margin: 0; font-size: 1.5rem; }
+.projects-header-actions { display: flex; gap: 0.6rem; }
+
+.projects-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.project-bar {
+  background: var(--bg);
+  border-radius: 26px;
+  padding: 1.4rem 1.6rem;
+  cursor: pointer;
+  box-shadow: var(--raise-sm);
+  transition: var(--press);
+}
+
+.project-bar:hover { box-shadow: var(--raise-md); }
+.project-bar:active { box-shadow: var(--press-sm); transform: scale(0.995); }
+
+/* The bar is the click target in selection mode, so it anchors the light and
+   keeps its header clear of it. */
+.project-bar.selectable { position: relative; }
+.project-bar.selectable .project-bar-header { padding-right: 1.75rem; }
+
+.project-bar-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.project-bar-header h3 { margin: 0; font-size: 1.2rem; }
+.project-bar-description { margin: 0 0 1rem; }
+
+/* References read the same way everywhere they appear on the Projects page
+   -- flat, tightly seamed, barely rounded -- matching the archive grid
+   rather than the raised soft-UI panels around them. */
+.project-bar-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.4rem;
+  overflow: hidden;
+}
+
+.bar-thumb {
+  flex: 0 0 auto;
+  width: 84px;
+  height: 84px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--sunken);
+  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bar-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+#project-back-btn { margin-bottom: 1.5rem; }
+
+.project-detail-header { margin-bottom: 1.5rem; }
+.project-detail-header p { margin: 0; }
+
+.project-detail-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.35rem;
+}
+
+.project-detail-heading-row h2 { margin: 0; font-size: 1.6rem; }
+.project-detail-actions { display: flex; gap: 0.6rem; flex-shrink: 0; }
+
+.selection-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1.4rem;
+  margin-bottom: 1.5rem;
+  border-radius: 999px;
+  background: var(--bg);
+  box-shadow: var(--press-sm);
+}
+
+/* Same [hidden]-vs-class-display specificity issue as .carousel-overlay. */
+.selection-toolbar[hidden] { display: none; }
+
+.selection-actions { display: flex; gap: 0.6rem; align-items: center; }
+
+/* --- Previous Analysis sidebar ---
+   A fixed panel pinned to the right edge, sized to about half the viewport
+   rather than a full-screen modal, so the project grid stays visible (and
+   usable) alongside it. No custom `display` here, so the native [hidden]
+   rule hides it without needing the specificity-override workaround used
+   for the flex-based overlays below. */
+
+.analysis-sidebar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 46%;
+  min-width: 340px;
+  max-width: 640px;
+  background: var(--bg);
+  box-shadow: var(--raise-lg);
+  z-index: 50;
+  padding: 2rem;
+  overflow-y: auto;
+}
+
+.analysis-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.analysis-sidebar-header h3 { margin: 0; font-size: 1.35rem; }
+
+.analysis-list { display: flex; flex-direction: column; gap: 1rem; }
+
+.analysis-list-item {
+  padding: 1rem 1.25rem;
+  border-radius: 20px;
+  cursor: pointer;
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+  transition: var(--press);
+}
+
+.analysis-list-item:active { box-shadow: var(--press-sm); transform: scale(0.99); }
+
+.analysis-list-date { font-family: var(--serif); font-size: 0.95rem; }
+
+.analysis-list-refs { display: flex; gap: 0.4rem; margin-top: 0.75rem; }
+
+.analysis-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--sunken);
+  flex: 0 0 auto;
+}
+
+.analysis-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+#analysis-detail-back { margin-bottom: 1.25rem; }
+#analysis-detail-date { margin-bottom: 1.25rem; }
+
+#analysis-detail-refs {
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  margin-bottom: 1.5rem;
+}
+
+/* --- Colour Similarity sidebar ---
+   Same panel treatment as .analysis-sidebar, but pinned to the left edge so
+   both can be open at once without overlapping. */
+
+.colour-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 40%;
+  min-width: 320px;
+  max-width: 520px;
+  background: var(--bg);
+  box-shadow: var(--raise-lg);
+  z-index: 50;
+  padding: 2rem;
+  overflow-y: auto;
+}
+
+.colour-section { margin-bottom: 1.5rem; }
+
+.colour-section-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+
+.colour-selected {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+
+.colour-selected .bar-thumb { width: 56px; height: 56px; }
+
+/* The palette strip is what makes a result explainable -- each block's width
+   is that colour's share of the image, so the reason for a match is visible
+   rather than just a number. */
+.palette-strip {
+  display: flex;
+  height: 12px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--sunken);
+}
+
+.palette-strip.large { height: 26px; border-radius: 5px; }
+.palette-strip span { display: block; height: 100%; }
+
+.colour-controls { display: flex; flex-direction: column; gap: 0.85rem; }
+
+.colour-bw-toggle { margin-top: 1.1rem; }
+
+.colour-control {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: var(--sans);
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+
+.colour-control input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.colour-results { display: flex; flex-direction: column; gap: 0.5rem; }
+
+.colour-result {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  border-radius: 14px;
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+}
+
+.colour-result .bar-thumb { width: 56px; height: 56px; box-shadow: none; }
+
+.colour-result-body { min-width: 0; }
+
+.colour-result-title {
+  font-family: var(--serif);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 0.35rem;
+}
+
+/* A dot rather than a percentage: the score is a ranking signal, not a
+   measurement anyone should read literally. */
+.colour-score {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: 0.4rem;
+  vertical-align: 1px;
+}
+
+.colour-add-btn { white-space: nowrap; font-size: 0.78rem; padding: 0.45rem 0.9rem; }
+.colour-add-btn.is-added { color: var(--ok); }
+
+/* --- Settings --- */
+
+#tab-settings > h2 { margin: 0 0 1.5rem; font-size: 1.5rem; }
+
+.settings-section {
+  padding: 2rem;
+  border-radius: 26px;
+  background: var(--bg);
+  box-shadow: var(--raise-md);
+  max-width: 560px;
+}
+
+.settings-section + .settings-section { margin-top: 1.5rem; }
+
+.settings-section h3 { margin: 0 0 0.85rem; font-size: 1.25rem; }
+.settings-section p { margin: 0 0 1.25rem; }
+
+#similarity-status { color: var(--ink); }
+
+/* --- Modals --- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(180, 191, 204, 0.55);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 1.5rem;
+}
+
+:root[data-theme="dark"] .modal-overlay { background: rgba(10, 12, 14, 0.6); }
+
+/* Same [hidden]-vs-class-display specificity issue as .carousel-overlay. */
+.modal-overlay[hidden] { display: none; }
+
+.modal-box {
+  background: var(--bg);
+  border-radius: 30px;
+  padding: 2rem;
+  width: 100%;
+  max-width: 440px;
+  box-shadow: var(--raise-lg);
+}
+
+.modal-box h3 { margin: 0 0 1.25rem; font-size: 1.35rem; }
+.modal-box p { font-family: var(--serif); }
+
+.modal-box input, .modal-box textarea {
+  width: 100%;
+  margin-bottom: 0.85rem;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 1.25rem;
+}
+
+.mode-choice-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.analyze-box {
+  max-width: 660px;
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+}
+
+.analyze-transcript {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  padding: 0.25rem;
+}
+
+.analyze-turn {
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  padding: 1rem 1.15rem;
+  border-radius: 20px;
+}
+
+.analyze-writeup, .analyze-reply {
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+}
+
+.analyze-question {
+  background: var(--sunken);
+  box-shadow: var(--press-sm);
+  align-self: flex-end;
+  max-width: 85%;
+}
+
+.analyze-status {
+  font-family: var(--serif);
+  color: var(--muted);
+  font-style: italic;
+  padding: 0 0.1rem;
+}
+
+.analyze-input-row {
+  display: flex;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
+.analyze-input-row input { flex: 1; }
+
+.ref-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-soft);
+  text-underline-offset: 2px;
+}
+
+.ref-link:hover { text-decoration-color: currentColor; }
+
+.ref-preview-popup {
+  position: fixed;
+  z-index: 300;
+  width: 150px;
+  background: var(--bg);
+  border-radius: 18px;
+  box-shadow: var(--raise-md);
+  padding: 0.6rem;
+  pointer-events: none;
+}
+
+.ref-preview-media {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--sunken);
+}
+
+.ref-preview-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.ref-preview-title {
+  font-family: var(--serif);
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Carousel ---
+   Deliberately left as it was: a dark full-bleed viewer is the one place the
+   soft-UI surfaces don't belong, so it only picks up the new typography. */
+
+.carousel-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 18, 15, 0.92);
+  display: flex;
+  flex-direction: column;
+  z-index: 100;
+  padding: 1.5rem;
+}
+
+/* A class selector otherwise beats the browser's [hidden] rule on
+   specificity, so the overlay would stay visible even after JS sets
+   `.hidden = true`. This rule pins display:none once hidden is set. */
+.carousel-overlay[hidden] { display: none; }
+
+.carousel-close {
+  position: absolute;
+  top: 1.25rem;
+  right: 1.5rem;
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #f2efe9;
+  font-size: 2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.carousel-arrow {
+  position: absolute;
+  top: 42%;
+  transform: translateY(-50%);
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.25);
+  color: #f2efe9;
+  font-size: 2rem;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.carousel-arrow.left { left: 1.5rem; }
+.carousel-arrow.right { right: 1.5rem; }
+.carousel-arrow:hover { background: rgba(255,255,255,0.18); }
+
+.carousel-body {
+  flex: 1;
+  display: flex;
+  gap: 2rem;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 0 4rem;
+}
+
+.carousel-media {
+  flex: 2;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+
+.carousel-media img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
+.carousel-media iframe { width: 100%; height: 100%; border: none; border-radius: 6px; background: #fff; }
+
+.text-content {
+  background: #fff;
+  color: #1c1b19;
+  padding: 1.5rem;
+  border-radius: 6px;
+  max-height: 100%;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-family: var(--sans);
+  font-size: 0.9rem;
+  width: 100%;
+}
+
+.carousel-info {
+  flex: 1;
+  max-width: 320px;
+  color: #f2efe9;
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+.carousel-info h2 { margin: 0 0 0.35rem; font-size: 1.35rem; }
+.carousel-info .muted { color: #c9c3ba; }
+.carousel-info p { font-size: 0.88rem; line-height: 1.5; }
+
+.project-add {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255,255,255,0.15);
+}
+
+.project-add label {
+  display: block;
+  font-size: 0.8rem;
+  color: #c9c3ba;
+  margin-bottom: 0.4rem;
+}
+
+.project-add select {
+  width: 100%;
+  font-size: 0.88rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.3);
+  background: rgba(255,255,255,0.08);
+  color: #f2efe9;
+  box-shadow: none;
+}
+
+.project-add .muted { margin: 0.5rem 0 0; }
+
+.tag-list { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.75rem 0; }
+
+.tag-pill {
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.3);
+  color: #f2efe9;
+}
+
+.similar-panel {
+  border-top: 1px solid rgba(255,255,255,0.15);
+  padding-top: 1rem;
+  margin-top: 1rem;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.similar-panel h3 {
+  color: #f2efe9;
+  font-size: 1rem;
+  margin: 0 0 0.6rem;
+}
+
+.similar-panel .card {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.similar-panel .card:hover { box-shadow: none; background: rgba(255,255,255,0.1); }
+.similar-panel .card img { background: rgba(255,255,255,0.05); }
+.similar-panel .card-caption { color: #f2efe9; }
+
+/* --- Project space: the homepage widget grid ---
+ *
+ * Absolutely positioned boxes rather than CSS grid placement, because the
+ * engine has to lift one widget out from under the pointer while it moves,
+ * and the drop placeholder needs the same pixel maths as the widgets.
+ * Position is a transform and size is width/height, kept apart so a move
+ * animates on the compositor while a widget's box only changes size when it
+ * is genuinely resized. Placement is free -- nothing else on the grid ever
+ * moves in response to a drag, so this is only ever animating the one widget
+ * being held.
+ *
+ * The three states the grid speaks in: at rest a widget is raised out of the
+ * page, while it is being moved it lifts further off it, and the placeholder
+ * is the recess it will settle back into -- or, if the drop is refused, a
+ * ringed recess it will never settle into at all. */
+
+.widget-grid { position: relative; width: 100%; }
+
+.widget {
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* Same surface colour as the page itself, or the raised/pressed shadows
+     stop reading as "pressed out of the page" the moment a project sets a
+     custom background -- see --project-bg in the body rule above. */
+  background: var(--project-bg, var(--bg));
+  /* min() rather than a fixed 26px: percentages on border-radius resolve
+     per-axis (against width for the horizontal component, height for the
+     vertical one), so this caps the radius at half of whichever dimension
+     is smaller. A 1x1 widget reads as a pill/circle instead of having its
+     corners eat the whole box; anything bigger than ~52px keeps the
+     original 26px curve untouched. */
+  border-radius: min(26px, 50%);
+  /* Explicit size container for the chrome below (.widget-resize etc), which
+     scales itself off the widget's own box via cqmin -- not the viewport. */
+  container-type: size;
+  /* .widget-body's own overflow:hidden only clips to a plain rectangle the
+     same size as this box, which does nothing where the corners are rounded
+     off -- content wide enough to overflow (a permanent widget's .btn label
+     at 1 column, say) was poking straight past the curve instead of being
+     cut by it, reading as a clipped/jagged corner. Clipping here instead
+     means everything -- body content and the chrome below alike -- is cut
+     to the actual rounded shape. */
+  overflow: hidden;
+  /* Flat at rest: a widget is an invisible region and its content provides
+     the structure. Shadow is opt-in (.has-shadow, from config.shadow) or
+     forced on for every widget while the grid is being edited, so boxes are
+     visible to arrange -- see .widget-grid.is-editing below. Never
+     compensate for the missing shadow with a border or fill; that breaks
+     the neumorphic illusion the same way a shadow-less card would. */
+  box-shadow: none;
+  transition: transform 0.18s ease, box-shadow 0.22s ease;
+}
+
+.widget.has-shadow { box-shadow: var(--raise-sm); }
+
+/* Inner chrome follows the widget's shadow state -- a .btn (settings' gear,
+   exit's link) carries --raise-sm from the app-wide button style by default,
+   which reads as a floating card sitting inside an otherwise invisible
+   widget. Flatten it here and only restore the raise when the widget itself
+   is shadowed, either by its own toggle or by edit mode below. Scoped to
+   .widget so this never touches a .btn anywhere else in the app. */
+.widget .btn { box-shadow: none; }
+.widget.has-shadow .btn { box-shadow: var(--raise-sm); }
+
+/* Dragging and resizing are the same gesture from the layout's point of view,
+   so they read the same. No transform transition while it is held: the widget
+   follows the pointer and must not lag behind it. */
+.widget.is-active {
+  box-shadow: var(--raise-lg);
+  transition: box-shadow 0.22s ease;
+  z-index: 2;
+}
+
+.widget-body {
+  width: 100%;
+  height: 100%;
+  /* Padding is part of "what's inside a widget" per the content-scale
+     contract -- it zooms with the text and icons as one unit, independent
+     of the widget's own w/h footprint on the grid (project/typography.js). */
+  padding: calc(1.25rem * var(--content-scale, 1)) calc(1.5rem * var(--content-scale, 1));
+  overflow: hidden;
+}
+
+/* The permanent controls are buttons, not content -- a 1x1 tile should read
+   as a button sitting on the page, not a card with something small centred
+   inside a block of empty padding. */
+.widget-body:has(.widget-settings),
+.widget-body:has(.widget-exit) {
+  padding: 0.35rem;
+}
+
+.widget-placeholder {
+  position: absolute;
+  left: 0;
+  top: 0;
+  background: var(--project-bg, var(--bg));
+  /* Matches .widget's radius cap -- the placeholder stands in for a widget's
+     own box and must clip the same way at small sizes. */
+  border-radius: min(26px, 50%);
+  box-shadow: var(--press-sm);
+  transition: transform 0.18s ease;
+  pointer-events: none;
+}
+
+/* The cells under the pointer are already occupied -- same soft accent ring
+   the text inputs use on focus, not a new fill or border, so the recess still
+   reads as the same surface, just flagged. */
+.widget-placeholder.is-invalid { box-shadow: var(--press-sm), 0 0 0 2px var(--accent-soft); }
+
+/* A small raised nub in the corner -- the same shadow every other control
+   uses, just at the size of a grip.
+   Size and inset scale with cqmin (1% of the widget's own smaller dimension,
+   via container-type: size on .widget above), clamped between a floor that
+   keeps it tappable and the original 20px/12px so nothing changes at normal
+   sizes. At 1x1 this keeps the handle inside the box instead of overflowing
+   or colliding with the remove/shadow-toggle buttons in the other corners. */
+.widget-resize {
+  display: none;
+  position: absolute;
+  right: clamp(4px, 20cqmin, 12px);
+  bottom: clamp(4px, 20cqmin, 12px);
+  width: clamp(12px, 40cqmin, 20px);
+  height: clamp(12px, 40cqmin, 20px);
+  border-radius: 50%;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-sm);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+/* Edit mode. Nothing moves until the user asks for it, and while the layout is
+   being edited the widgets' contents go inert: you are arranging boxes, not
+   using what is inside them. touch-action is off only here, so a touch drag
+   over a widget still scrolls the page the rest of the time. */
+.widget-grid.is-editing .widget { cursor: grab; touch-action: none; }
+/* :not(.is-active) so a widget being dragged keeps --raise-lg from the rule
+   below rather than this one -- gesture feedback beats the editing-mode
+   default because .is-active only occurs while editing anyway. */
+.widget-grid.is-editing .widget:not(.is-active) { box-shadow: var(--raise-sm); }
+.widget-grid.is-editing .widget:not(.is-active) .btn { box-shadow: var(--raise-sm); }
+.widget-grid.is-editing .widget.is-locked { cursor: default; }
+.widget-grid.is-editing .widget-body { pointer-events: none; }
+.widget-grid.is-editing .widget:not(.is-locked) .widget-resize { display: block; }
+.widget-grid.is-editing .widget.is-removable .widget-remove { display: flex; }
+.widget-grid.is-editing .widget-shadow-toggle { display: flex; }
+.widget-grid.is-gesturing { user-select: none; }
+.widget-grid.is-gesturing .widget { cursor: grabbing; }
+
+/* A small raised circle opposite the resize nub, shown only for widgets the
+   registry marked non-permanent. A real <button>, not an aria-hidden div like
+   the resize handle, since removal needs its own keyboard/a11y target. */
+.widget-remove {
+  display: none;
+  position: absolute;
+  top: clamp(4px, 18cqmin, 10px);
+  right: clamp(4px, 18cqmin, 10px);
+  width: clamp(14px, 44cqmin, 22px);
+  height: clamp(14px, 44cqmin, 22px);
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-sm);
+  color: var(--accent);
+  font-size: clamp(0.7rem, 20cqmin, 1.1rem);
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  touch-action: none;
+  transition: var(--press);
+}
+
+.widget-remove:hover { box-shadow: var(--raise-md); }
+.widget-remove:active { box-shadow: var(--press-sm); transform: scale(0.95); }
+
+/* The per-widget "keep this one shadowed at rest" control -- opposite corner
+   from remove, on every widget (not just removable ones), only while
+   editing. Lit the same way the tab bar's active dot is lit, so "on" reads
+   without needing a second icon. */
+.widget-shadow-toggle {
+  display: none;
+  position: absolute;
+  top: clamp(4px, 18cqmin, 10px);
+  left: clamp(4px, 18cqmin, 10px);
+  width: clamp(14px, 44cqmin, 22px);
+  height: clamp(14px, 44cqmin, 22px);
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-sm);
+  color: var(--muted);
+  font-size: clamp(0.55rem, 16cqmin, 0.85rem);
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  touch-action: none;
+  transition: var(--press);
+}
+
+.widget-shadow-toggle:hover { box-shadow: var(--raise-md); }
+.widget-shadow-toggle:active { box-shadow: var(--press-sm); transform: scale(0.95); }
+.widget.is-shadow-on .widget-shadow-toggle { color: var(--accent); }
+
+/* Floating Save/Cancel for the grid's edit mode -- pinned to a corner so it
+   never covers the widgets being arranged, but above them in z-index so it's
+   always reachable regardless of what's stacked underneath (a dragged
+   widget is z-index: 2). */
+.project-edit-bar {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 10;
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.75rem;
+  border-radius: 999px;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-md);
+}
+
+/* display above beats the hidden attribute's UA rule, so say it again --
+   same reasoning as the .btn[hidden] rule further up. */
+.project-edit-bar[hidden] { display: none; }
+
+/* --- Project space: format toolbar ---
+   Same floating-pill treatment as .project-edit-bar above, since this is the
+   same kind of thing -- chrome pinned over the grid, not a widget itself --
+   but positioned dynamically by project/format-toolbar.js against whichever
+   widget is being edited, instead of a fixed corner. */
+.format-toolbar {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 999px;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-md);
+}
+
+.format-toolbar[hidden] { display: none; }
+
+.format-toolbar select {
+  padding: 0.4rem 0.5rem;
+  font-size: 0.78rem;
+}
+
+.format-toolbar input[type="color"] {
+  width: 30px;
+  height: 28px;
+  padding: 2px;
+}
+
+.format-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  flex: none;
+  border: none;
+  border-radius: 50%;
+  background: var(--project-bg, var(--bg));
+  color: var(--ink);
+  box-shadow: var(--raise-sm);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0;
+  transition: var(--press);
+}
+
+.format-toolbar-btn:hover { color: var(--ink-strong); }
+.format-toolbar-btn:active { transform: scale(0.95); }
+
+/* Pressed-in, like any other "on" state in this system (.widget-shadow-toggle,
+   the checked tab) -- see CLAUDE.md's neumorphic rule: the same shadow with
+   the direction reversed. */
+.format-toolbar-btn.is-active {
+  box-shadow: var(--press-sm);
+  color: var(--accent);
+}
+
+.format-toolbar-divider {
+  width: 1px;
+  height: 1.3rem;
+  background: var(--edge);
+  opacity: 0.5;
+}
+
+.format-toolbar-scale {
+  width: 4.5rem;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* --- Project space: individual widgets --- */
+
+.widget-title {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  height: 100%;
+  /* --widget-text-align is set by project/format-toolbar.js (typography.align),
+     scoped to this widget's host.el -- see project/typography.js. */
+  text-align: var(--widget-text-align, left);
+}
+
+/* Every property below reads its own hard-coded look as the var() fallback,
+   so a title with no typography override renders exactly as before this
+   contract existed. --widget-font-* come from typography.js's
+   applyTypography, scoped to host.el; --content-scale is either the
+   project-wide default (project/appearance.js, on the root) or this widget's
+   own override, whichever is nearer -- ordinary CSS inheritance decides
+   which one wins. */
+.widget-title-name {
+  margin: 0;
+  font-family: var(--widget-font-family, var(--display));
+  font-size: calc(var(--widget-font-size, 2.75rem) * var(--content-scale, 1));
+  font-weight: var(--widget-font-weight, 400);
+  font-style: var(--widget-font-style, normal);
+  text-decoration: var(--widget-text-decoration, none);
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+  color: var(--widget-font-colour, var(--project-ink, var(--ink)));
+}
+
+/* Sized relative to the name via content-scale alone, not the explicit size
+   override above -- the toolbar's size field targets the headline, and the
+   description stays a fixed proportion smaller than whatever that resolves
+   to, the same way it always has (0.9rem against 2.75rem). */
+.widget-title-description {
+  margin: 0.4rem 0 0;
+  font-family: var(--widget-font-family, var(--serif));
+  font-size: calc(0.9rem * var(--content-scale, 1));
+  font-weight: var(--widget-font-weight, 400);
+  font-style: var(--widget-font-style, normal);
+  text-decoration: var(--widget-text-decoration, none);
+  color: var(--widget-font-colour, var(--muted));
+}
+
+.widget-text {
+  width: 100%;
+  height: 100%;
+  outline: none;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--widget-font-family, var(--sans));
+  font-size: calc(var(--widget-font-size, 1rem) * var(--content-scale, 1));
+  font-weight: var(--widget-font-weight, 400);
+  font-style: var(--widget-font-style, normal);
+  text-decoration: var(--widget-text-decoration, none);
+  text-align: var(--widget-text-align, left);
+  color: var(--widget-font-colour, var(--project-ink, var(--ink)));
+}
+
+/* text.js keeps this element's own DOM as plain text nodes (see its "\n"
+   handling on Enter), so :empty reliably means "nothing typed yet" -- no
+   leftover <br> from a browser default the widget doesn't use. */
+.widget-text:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+}
+
+.widget-exit,
+.widget-missing {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Flex items default to min-width: auto -- sized to their unwrapped content
+   no matter how little room .widget-exit actually has -- so at 1 column the
+   "← Exit" label was overflowing its own button and getting cut by .widget's
+   overflow: hidden from both sides at once (justify-content: center clips
+   symmetrically), landing on a meaningless slice from the middle of the
+   label instead of a readable edge. min-width: 0 lets the button actually
+   shrink to the space available; text-overflow does the rest, trimming from
+   the end so the arrow and as much of the label as fits stay legible. */
+.widget-exit .btn {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.widget-missing { margin: 0; text-align: center; }
+
+.widget-settings {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+}
+
+/* --- Project space: settings panel ---
+   The panel is appended to <body>, not host.el -- position:fixed only escapes
+   the viewport when there is no transformed ancestor, and every .widget has
+   an inline transform (see grid.js's place()), so nesting it inside the
+   widget's own tree would confine the overlay to that widget's box. */
+
+.settings-modal { max-width: 480px; }
+
+.settings-modal-section { margin: 1.5rem 0; }
+.settings-modal-section:first-of-type { margin-top: 0; }
+
+.settings-modal-section h4 {
+  margin: 0 0 0.75rem;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+.settings-edit-toggle { width: 100%; justify-content: center; }
+
+.settings-add-widget-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.settings-add-widget-list .btn:disabled { opacity: 0.6; }
+
+.settings-appearance { display: flex; flex-direction: column; gap: 0.85rem; }

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="../styles/popup.css">
+</head>
+<body>
+  <header id="page-header">
+    <h1 id="page-title">Reading page…</h1>
+    <div class="muted" id="page-domain"></div>
+  </header>
+
+  <div id="unavailable" class="banner" hidden>
+    <div>
+      <strong>Archive unavailable</strong>
+      <div class="muted" id="unavailable-detail">Is the reference library running?</div>
+    </div>
+    <button class="btn" id="retry-btn">Retry</button>
+  </div>
+
+  <nav id="modes" class="modes">
+    <button class="mode-btn is-active" data-mode="image">Image</button>
+    <button class="mode-btn" data-mode="pdf" id="mode-pdf-btn" hidden>PDF</button>
+    <button class="mode-btn" data-mode="text">Text</button>
+    <button class="mode-btn" data-mode="page">Page</button>
+  </nav>
+
+  <!-- Image mode -->
+  <section id="mode-image" class="mode-panel">
+    <div id="image-empty" class="empty muted" hidden>No usable images found on this page.</div>
+    <div id="image-grid" class="grid"></div>
+    <div class="grid-actions" id="grid-actions" hidden>
+      <span class="muted" id="selection-count">0 selected</span>
+      <button class="link-btn" id="select-all-btn">Select all</button>
+    </div>
+  </section>
+
+  <!-- PDF mode: a document is never a grid of page fragments -- a canvas-
+       rendered page has no URL at all, so this offers the one thing that
+       reliably does: wherever the page links to or embeds the actual file. -->
+  <section id="mode-pdf" class="mode-panel" hidden>
+    <div id="pdf-list" class="pdf-list"></div>
+  </section>
+
+  <!-- Text mode -->
+  <section id="mode-text" class="mode-panel" hidden>
+    <div id="text-empty" class="empty muted" hidden>
+      Highlight text on the page, then reopen this popup.
+    </div>
+    <blockquote id="text-preview" hidden></blockquote>
+    <div class="muted" id="text-heading" hidden></div>
+  </section>
+
+  <!-- Page mode -->
+  <section id="mode-page" class="mode-panel" hidden>
+    <div id="page-preview" class="page-preview"></div>
+  </section>
+
+  <div id="duplicate" class="banner warn" hidden>
+    <div>
+      <strong>Already in archive</strong>
+      <div class="muted" id="duplicate-detail"></div>
+    </div>
+  </div>
+
+  <div class="field">
+    <label for="note">Note</label>
+    <input type="text" id="note" placeholder="Why are you saving this?" autocomplete="off">
+  </div>
+
+  <div class="field">
+    <label for="project">Project</label>
+    <select id="project">
+      <option value="">General archive</option>
+    </select>
+  </div>
+
+  <div id="recent-projects" class="recent" hidden></div>
+
+  <details id="metadata-details">
+    <summary>Metadata</summary>
+    <dl id="metadata-list"></dl>
+  </details>
+
+  <footer>
+    <button class="btn primary" id="save-btn" disabled>Save</button>
+    <div class="muted" id="status"></div>
+  </footer>
+
+  <div id="results" class="results" hidden></div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

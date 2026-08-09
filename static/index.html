@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fashion Reference Library</title>
+<script src="/theme.js"></script>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>Fashion Reference Library</h1>
+    <nav>
+      <button class="tab-btn active" data-tab="add">Add</button>
+      <button class="tab-btn" data-tab="archive">Archive</button>
+      <button class="tab-btn" data-tab="projects">Projects</button>
+      <button class="tab-btn" data-tab="settings">Settings</button>
+      <a class="nav-link" href="/connections.html">Archive Connections</a>
+      <a class="nav-link" href="/">3D Graph (Home)</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="tab-add" class="tab active">
+      <div id="dropzone" class="dropzone">
+        <p class="drop-headline">Drag &amp; drop files or folders here</p>
+        <p class="muted">or</p>
+        <div class="picker-buttons">
+          <label class="btn">
+            Choose files
+            <input type="file" id="file-input" multiple hidden>
+          </label>
+          <label class="btn">
+            Choose folder
+            <input type="file" id="folder-input" webkitdirectory directory multiple hidden>
+          </label>
+        </div>
+      </div>
+      <div class="upload-meta">
+        <label>
+          Author / artist / source
+          <input type="text" id="file-source" placeholder="e.g. Rei Kawakubo, V&amp;A archive, Pinterest">
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" id="file-own-work">
+          This is my own work
+        </label>
+      </div>
+      <div id="upload-log" class="upload-log"></div>
+
+      <div class="text-add">
+        <h2>Add a text reference</h2>
+        <input type="text" id="text-title" placeholder="Title (optional)">
+        <textarea id="text-body" rows="8" placeholder="Write or paste text here..."></textarea>
+        <input type="text" id="text-source" placeholder="Author / artist / source (optional)">
+        <label class="checkbox-label">
+          <input type="checkbox" id="text-own-work">
+          This is my own work
+        </label>
+        <button id="text-save-btn" class="btn primary">Save as reference</button>
+        <p id="text-add-status" class="muted"></p>
+      </div>
+    </section>
+
+    <section id="tab-archive" class="tab">
+      <div class="archive-controls">
+        <input type="text" id="search-input" placeholder="Search by mood, silhouette, era...">
+        <div class="search-method-filter">
+          <span class="filter-label">Search by</span>
+          <label class="checkbox-label"><input type="checkbox" class="search-method-checkbox" value="distance" checked> Distance</label>
+          <label class="checkbox-label"><input type="checkbox" class="search-method-checkbox" value="tags"> Tags</label>
+          <label class="checkbox-label"><input type="checkbox" class="search-method-checkbox" value="description"> Description</label>
+        </div>
+        <label>
+          Own work
+          <select id="filter-own-work">
+            <option value="any">Any</option>
+            <option value="only">Only</option>
+            <option value="exclude">Exclude</option>
+          </select>
+        </label>
+        <div class="type-filter">
+          <span class="filter-label">Type</span>
+          <label class="checkbox-label"><input type="checkbox" class="type-checkbox" value="image"> Images</label>
+          <label class="checkbox-label"><input type="checkbox" class="type-checkbox" value="pdf"> PDFs</label>
+          <label class="checkbox-label"><input type="checkbox" class="type-checkbox" value="text"> Text notes</label>
+        </div>
+      </div>
+      <div class="archive-actions">
+        <button id="archive-select-btn" class="btn">Select</button>
+      </div>
+      <div id="archive-selection-toolbar" class="selection-toolbar" hidden>
+        <span id="archive-selection-count" class="muted">0 selected</span>
+        <div class="selection-actions">
+          <select id="archive-project-select" disabled>
+            <option value="" selected>Add to project…</option>
+            <option value="__new__">+ New project…</option>
+          </select>
+          <button id="archive-selection-delete-btn" class="btn danger" disabled>Delete from archive</button>
+        </div>
+      </div>
+      <p id="archive-selection-status" class="muted"></p>
+      <div id="grid" class="grid"></div>
+      <p id="empty-msg" class="muted" hidden></p>
+    </section>
+
+    <section id="tab-projects" class="tab">
+      <div id="projects-list-view">
+        <div class="projects-header">
+          <h2>Projects</h2>
+          <div class="projects-header-actions">
+            <button id="projects-select-btn" class="btn">Select</button>
+            <button id="new-project-btn" class="btn primary">New project</button>
+          </div>
+        </div>
+        <div id="projects-selection-toolbar" class="selection-toolbar" hidden>
+          <span id="projects-selection-count" class="muted">0 selected</span>
+          <div class="selection-actions">
+            <button id="projects-delete-btn" class="btn danger" disabled>Delete projects</button>
+          </div>
+        </div>
+        <p id="projects-selection-status" class="muted"></p>
+        <div id="projects-list" class="projects-list"></div>
+        <p id="projects-empty-msg" class="muted" hidden>No projects yet. Create one to start grouping references.</p>
+      </div>
+
+      <div id="project-detail-view" hidden>
+        <button id="project-back-btn" class="btn">&larr; All projects</button>
+        <div class="project-detail-header">
+          <div class="project-detail-heading-row">
+            <h2 id="project-detail-title"></h2>
+            <div class="project-detail-actions">
+              <button id="analysis-sidebar-btn" class="btn">Previous Analysis</button>
+              <button id="project-select-btn" class="btn">Select</button>
+              <button id="project-edit-btn" class="btn">Edit</button>
+            </div>
+          </div>
+          <p id="project-detail-description" class="muted"></p>
+        </div>
+        <div id="project-selection-toolbar" class="selection-toolbar" hidden>
+          <span id="selection-count" class="muted">0 selected</span>
+          <div class="selection-actions">
+            <button id="selection-delete-btn" class="btn" disabled>Delete</button>
+            <button id="selection-colour-btn" class="btn" disabled>Colour Similarity</button>
+            <button id="selection-analyze-btn" class="btn primary" disabled>Analyze</button>
+          </div>
+        </div>
+        <div id="project-grid" class="grid"></div>
+        <p id="project-empty-msg" class="muted" hidden>No references in this project yet. Add some from the Archive page.</p>
+
+        <aside id="analysis-sidebar" class="analysis-sidebar" hidden>
+          <div class="analysis-sidebar-header">
+            <h3>Previous Analysis</h3>
+            <button id="analysis-sidebar-close" class="btn">Close</button>
+          </div>
+
+          <div id="analysis-sidebar-list-view">
+            <div id="analysis-sidebar-list" class="analysis-list"></div>
+            <p id="analysis-sidebar-empty" class="muted" hidden>
+              No saved analyses yet. Run Analyze and save the conversation to see it here.
+            </p>
+          </div>
+
+          <div id="analysis-sidebar-detail" hidden>
+            <button id="analysis-detail-back" class="btn">&larr; All analyses</button>
+            <p id="analysis-detail-date" class="muted"></p>
+            <div id="analysis-detail-refs" class="grid small"></div>
+            <div id="analysis-detail-transcript" class="analyze-transcript"></div>
+          </div>
+        </aside>
+
+        <!-- Colour Similarity. Pinned to the left, so it can sit open beside
+             the analysis sidebar on the right without the two fighting for
+             the same space. -->
+        <aside id="colour-sidebar" class="colour-sidebar" hidden>
+          <div class="analysis-sidebar-header">
+            <h3>Colour Similarity</h3>
+            <button id="colour-sidebar-close" class="btn">Close</button>
+          </div>
+
+          <p id="colour-empty" class="muted" hidden>
+            Select one or more references to search by colour.
+          </p>
+
+          <div id="colour-body" hidden>
+            <div class="colour-section">
+              <div class="colour-section-label">Selected</div>
+              <div id="colour-selected" class="colour-selected"></div>
+              <div class="colour-section-label">Combined palette</div>
+              <div id="colour-combined-palette" class="palette-strip large"></div>
+            </div>
+
+            <div class="colour-section">
+              <div class="colour-controls">
+                <label class="colour-control">
+                  <span>Hue</span>
+                  <input type="range" min="0" max="100" value="50" data-weight="hue">
+                </label>
+                <label class="colour-control">
+                  <span>Lightness</span>
+                  <input type="range" min="0" max="100" value="50" data-weight="lightness">
+                </label>
+                <label class="colour-control">
+                  <span>Saturation</span>
+                  <input type="range" min="0" max="100" value="50" data-weight="saturation">
+                </label>
+                <label class="colour-control">
+                  <span>Proportions</span>
+                  <input type="range" min="0" max="100" value="50" data-weight="proportions">
+                </label>
+              </div>
+              <label class="checkbox-label colour-bw-toggle">
+                <input type="checkbox" id="colour-exclude-bw">
+                Remove black &amp; white
+              </label>
+            </div>
+
+            <p id="colour-status" class="muted"></p>
+            <div id="colour-results" class="colour-results"></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="tab-settings" class="tab">
+      <h2>Settings</h2>
+      <div class="settings-section">
+        <h3>Appearance</h3>
+        <p class="muted">Applies across the whole app, including the 3D graph and Archive Connections.</p>
+        <label class="checkbox-label">
+          <input type="checkbox" id="dark-mode-toggle">
+          Dark mode
+        </label>
+      </div>
+
+      <div class="settings-section">
+        <h3>Similarity scores</h3>
+        <p class="muted">
+          Computes a pairwise similarity score between every reference in your library, using the
+          CLIP embeddings already generated for each one -- no additional Claude API calls. Saved
+          for later use (e.g. a 3D similarity graph); nothing in the app reads these yet.
+        </p>
+        <p id="similarity-status" class="muted"></p>
+        <button id="similarity-calculate-btn" class="btn primary">Calculate Similarity Scores</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="similarity-estimate-overlay" class="modal-overlay" hidden>
+    <div class="modal-box">
+      <h3>Calculate similarity scores</h3>
+      <p id="similarity-estimate-text" class="muted"></p>
+      <p id="similarity-estimate-status" class="muted"></p>
+      <div class="modal-actions">
+        <button id="similarity-estimate-cancel" class="btn">Cancel</button>
+        <button id="similarity-estimate-confirm" class="btn primary">Run Calculation</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="delete-refs-overlay" class="modal-overlay" hidden>
+    <div class="modal-box">
+      <h3>Delete from archive</h3>
+      <p id="delete-refs-text"></p>
+      <p class="muted">
+        Their files are moved to a "deleted" folder next to your references, but their tags,
+        description, project memberships and similarity scores are removed from the library.
+      </p>
+      <p id="delete-refs-status" class="muted"></p>
+      <div class="modal-actions">
+        <button id="delete-refs-cancel" class="btn">Cancel</button>
+        <button id="delete-refs-confirm" class="btn danger">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="delete-projects-overlay" class="modal-overlay" hidden>
+    <div class="modal-box">
+      <h3>Delete projects</h3>
+      <p id="delete-projects-text"></p>
+      <p class="muted">
+        The references they group stay in the archive -- only the projects and their saved
+        analyses are removed.
+      </p>
+      <p id="delete-projects-status" class="muted"></p>
+      <div class="modal-actions">
+        <button id="delete-projects-cancel" class="btn">Cancel</button>
+        <button id="delete-projects-confirm" class="btn danger">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="new-project-overlay" class="modal-overlay" hidden>
+    <div class="modal-box">
+      <h3 id="project-modal-heading">New project</h3>
+      <input type="text" id="new-project-title" placeholder="Project title">
+      <textarea id="new-project-description" rows="3" placeholder="Description (optional)"></textarea>
+      <p id="new-project-status" class="muted"></p>
+      <div class="modal-actions">
+        <button id="new-project-cancel" class="btn">Cancel</button>
+        <button id="new-project-create" class="btn primary">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="analyze-mode-overlay" class="modal-overlay" hidden>
+    <div class="modal-box">
+      <h3>Run analysis</h3>
+      <p class="muted">How detailed should the write-up be?</p>
+      <div class="mode-choice-actions">
+        <button id="analyze-mode-summary" class="btn">Summarised</button>
+        <button id="analyze-mode-full" class="btn primary">Full analysis</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="analyze-overlay" class="modal-overlay" hidden>
+    <div class="modal-box analyze-box">
+      <h3>Analysis</h3>
+      <div id="analyze-transcript" class="analyze-transcript"></div>
+      <div class="analyze-input-row">
+        <input type="text" id="analyze-followup-input" placeholder="Ask a follow-up...">
+        <button id="analyze-followup-send" class="btn primary">Send</button>
+      </div>
+      <div class="modal-actions">
+        <button id="analyze-save-btn" class="btn" disabled>Save conversation</button>
+        <button id="analyze-close-btn" class="btn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="ref-preview-popup" class="ref-preview-popup" hidden>
+    <div id="ref-preview-media" class="ref-preview-media"></div>
+    <div id="ref-preview-title" class="ref-preview-title"></div>
+  </div>
+
+  <div id="carousel-overlay" class="carousel-overlay" hidden>
+    <button id="carousel-close" class="carousel-close" title="Close (Esc)">&times;</button>
+    <button id="carousel-prev" class="carousel-arrow left" title="Previous (&larr;)">&#8249;</button>
+    <button id="carousel-next" class="carousel-arrow right" title="Next (&rarr;)">&#8250;</button>
+
+    <div class="carousel-body">
+      <div id="carousel-media" class="carousel-media"></div>
+      <div id="carousel-info" class="carousel-info">
+        <h2 id="info-title"></h2>
+        <p id="info-type" class="muted"></p>
+        <span id="info-own-work" class="own-work-badge" hidden>Own work</span>
+        <div id="info-tags" class="tag-list"></div>
+        <p id="info-description"></p>
+        <p id="info-source" class="muted"></p>
+        <p id="info-notes" class="muted"></p>
+
+        <div class="project-add">
+          <label for="carousel-project-select">Add to project</label>
+          <select id="carousel-project-select">
+            <option value="" selected>Choose a project…</option>
+            <option value="__new__">+ New project…</option>
+          </select>
+          <p id="carousel-project-status" class="muted"></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="similar-panel">
+      <h3>Similar items</h3>
+      <div id="similar-grid" class="grid small"></div>
+    </div>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+  <script src="/ui-effects.js"></script>
+</body>
+</html>

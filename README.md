@@ -92,19 +92,58 @@ python cli.py analyze <id1> <id2> --save writeup.md
 For each reference given, this searches your library for related items already
 in it, then has Claude write up the connections it sees across the whole set
 (visual, historical, conceptual) and suggest new research directions. IDs can
-be short prefixes, same as `show`. `--save` also writes the result to a file.
+be short prefixes, same as `show`.
+
+After the write-up, you're dropped into a follow-up prompt (`>`) where you can
+keep asking questions and steer the exploration — "which of these fits a
+headpiece collection best?", "what era does that reference?" — with the full
+conversation history and original references kept in context. Press enter on
+an empty line to quit. `--save` writes the whole conversation (write-up plus
+every follow-up) to a file.
+
+## Web GUI
+
+A local browser front end for everything above — drag-and-drop uploads, a
+type-in text box, and a visual archive browser — running on top of the same
+`db` / `ingest` / `embeddings` modules as the CLI.
+
+```bash
+python app.py
+```
+This opens `http://127.0.0.1:5050` in your browser automatically.
+
+**Add tab:**
+- Drag and drop files *or whole folders* onto the drop zone (folders are
+  read recursively), or use the "Choose files" / "Choose folder" buttons.
+  Each supported file is tagged, embedded, and added the same way `add`/
+  `add-folder` would — duplicates are skipped and reported, not re-added.
+- Type or paste text into the text box and click "Save as reference" to
+  save it as its own `.txt` reference, tagged and embedded like any other
+  text file.
+
+**Archive tab:**
+- Every reference in your library as a grid of thumbnails (images and PDF
+  first pages render directly; plain text/markdown references show a
+  placeholder card with a description snippet).
+- Click any item to open it full-size in a carousel, with `‹`/`›` arrows
+  (or the left/right arrow keys) to step through the whole archive, a panel
+  of its title/type/tags/description/notes next to it, and a row of
+  similar items (by embedding search) below — click one to jump straight to
+  it.
 
 ## Project layout
 
 ```
 fashion-reference-tool/
 ├── cli.py            entry point — run all commands through this
+├── app.py             local web GUI (Flask) over the same modules below
 ├── ingest.py          adds a reference: copy, tag, embed, store
 ├── tagging.py          Claude calls for auto-tagging / description
 ├── embeddings.py        CLIP embeddings + Chroma vector store
 ├── analyze.py           Claude call for cross-reference write-ups
 ├── db.py              SQLite metadata storage
 ├── config.py            paths & settings
+├── static/             GUI front end (HTML/CSS/JS, served by app.py)
 ├── references/
 │   ├── images/          your original image files
 │   └── texts/            your original text/PDF files

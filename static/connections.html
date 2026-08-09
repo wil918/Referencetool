@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Archive Connections</title>
+<script src="/theme.js"></script>
+<style>
+  :root {
+    --bg: #eff2f9;
+    --bg-rgb: 239, 242, 249;
+    --sunken: #e4ebf1;
+    --ink: #46545f;
+    --ink-strong: #35414b;
+    --muted: #8b97a2;
+    --accent: #c23b2e;
+    --accent-soft: rgba(194, 59, 46, 0.5);
+    --light: #fafbff;
+    --dark: rgba(22, 27, 29, 0.23);
+    --raise-sm: -5px -5px 10px var(--light), 5px 5px 10px var(--dark);
+    --press-sm: inset 5px 5px 10px var(--dark), inset -5px -5px 10px var(--light);
+    --serif: "Times New Roman", Times, serif;
+    --sans: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color-scheme: light;
+  }
+
+  /* Same dark palette as style.css's :root[data-theme="dark"] -- kept in
+     step by hand since this page is standalone and doesn't share that
+     stylesheet. theme.js (loaded above) sets the attribute before first
+     paint, from the preference toggled in Settings. */
+  :root[data-theme="dark"] {
+    --bg: #262b31;
+    --bg-rgb: 38, 43, 49;
+    --sunken: #1e2227;
+    --ink: #dfe4e9;
+    --ink-strong: #f7f9fb;
+    --muted: #9aa4ae;
+    --light: rgba(255, 255, 255, 0.035);
+    --dark: rgba(0, 0, 0, 0.6);
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    font-family: var(--sans);
+    color: var(--ink);
+    overflow: hidden;
+  }
+  #scene { position: fixed; inset: 0; }
+  #scene canvas { display: block; cursor: grab; }
+  #scene canvas.dragging { cursor: grabbing; }
+
+  /* The last frame of the 3D view, held on screen until WebGL has drawn the
+     identical one underneath -- without it the page swap would flash the
+     empty background between two otherwise matching images. */
+  #bridge {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 30;
+    pointer-events: none;
+    opacity: 1;
+    transition: opacity 0.35s ease;
+  }
+
+  .overlay { position: fixed; z-index: 10; pointer-events: none; }
+  .overlay a, .overlay button { pointer-events: auto; }
+
+  #top-bar {
+    top: 0; left: 0; right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.1rem 1.5rem;
+    background: linear-gradient(to bottom, rgba(var(--bg-rgb),0.95), rgba(var(--bg-rgb),0));
+  }
+  #top-bar h1 { font-family: var(--serif); font-size: 1.25rem; margin: 0; font-weight: 500; }
+  #status-line { font-family: var(--serif); font-size: 0.8rem; color: var(--muted); margin-top: 0.15rem; }
+
+  #page-links {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+
+  #page-links a {
+    font-family: var(--sans);
+    font-size: 0.85rem;
+    color: var(--ink);
+    text-decoration: none;
+    border: none;
+    background: var(--bg);
+    padding: 0.6rem 1.25rem;
+    border-radius: 999px;
+    white-space: nowrap;
+    box-shadow: var(--raise-sm);
+    transition: box-shadow 0.22s ease, transform 0.22s ease;
+  }
+
+  #page-links a:active { box-shadow: var(--press-sm); transform: scale(0.985); }
+
+  /* Click animation for the view toggles below: outward -> pressed -> outward,
+     once per click, independent of how long the mouse is held. Triggered by
+     ui-effects.js adding .pulsing; the light itself is driven by :checked. */
+  @keyframes press-pulse {
+    0% { box-shadow: var(--raise-sm); transform: scale(1); }
+    45% { box-shadow: var(--press-sm); transform: scale(0.965); }
+    100% { box-shadow: var(--raise-sm); transform: scale(1); }
+  }
+
+  /* Selection here works like everywhere else: a button that lights up. */
+  #view-toggles {
+    top: 1.1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    pointer-events: auto;
+  }
+
+  #view-toggles label {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-family: var(--sans);
+    font-size: 0.82rem;
+    padding: 0.55rem 1.1rem;
+    border-radius: 999px;
+    background: var(--bg);
+    box-shadow: var(--raise-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: box-shadow 0.22s ease, transform 0.22s ease, color 0.2s ease;
+  }
+
+  /* Same click-driven pulse as the tab bar and checkbox buttons -- see the
+     press-pulse keyframes in style.css, triggered by ui-effects.js. */
+  #view-toggles label.pulsing { animation: press-pulse 0.32s ease; }
+
+  #view-toggles input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    margin: 0;
+  }
+
+  #view-toggles label::before {
+    content: "";
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--sunken);
+    box-shadow: inset 1px 1px 2px var(--dark), inset -1px -1px 2px var(--light);
+    transition: background 0.25s ease, box-shadow 0.25s ease;
+  }
+
+  #view-toggles label:has(input:checked) {
+    color: var(--ink-strong);
+  }
+
+  #view-toggles label:has(input:checked)::before {
+    background: var(--accent);
+    box-shadow: 0 0 5px var(--accent), 0 0 11px var(--accent-soft);
+  }
+
+  #hint { bottom: 1.25rem; left: 1.5rem; font-family: var(--serif); font-size: 0.8rem; color: var(--muted); }
+
+  #node-label {
+    bottom: 1.25rem; right: 1.5rem;
+    max-width: 260px;
+    background: var(--bg);
+    border-radius: 18px;
+    padding: 0.9rem 1.1rem;
+    box-shadow: var(--raise-sm);
+    display: none;
+  }
+  #node-label.visible { display: block; }
+  #node-label .n-title { font-family: var(--serif); font-size: 0.95rem; margin-bottom: 0.2rem; }
+  #node-label .n-meta { font-family: var(--serif); font-size: 0.78rem; color: var(--muted); }
+
+  #load-state, #error-state {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 0.75rem;
+    text-align: center;
+    padding: 2rem;
+    background: var(--bg);
+    z-index: 20;
+  }
+  #error-state a { color: var(--ink); }
+  .muted { color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+  <div id="scene"></div>
+  <img id="bridge" alt="">
+  <script>
+    // Runs before the module below so the still is on screen for the very
+    // first paint. Key must match HANDOFF_IMAGE_KEY in graph-common.js.
+    (function () {
+      var bridge = document.getElementById("bridge");
+      var src = null;
+      try { src = sessionStorage.getItem("archive-connections-bridge"); } catch (e) {}
+      if (src) bridge.src = src;
+      else bridge.remove();
+    })();
+  </script>
+
+  <div id="load-state">
+    <p>Loading connections&hellip;</p>
+  </div>
+
+  <div id="error-state">
+    <p id="error-text" class="muted"></p>
+    <a href="/index.html">&larr; Back to the library</a>
+  </div>
+
+  <div class="overlay" id="top-bar">
+    <div>
+      <h1>Archive Connections</h1>
+      <div id="status-line"></div>
+    </div>
+    <nav id="page-links">
+      <a href="/index.html#add">Add</a>
+      <a href="/index.html#archive">Archive</a>
+      <a href="/index.html#projects">Projects</a>
+      <a href="/index.html#settings">Settings</a>
+      <a href="/">3D Graph</a>
+    </nav>
+  </div>
+
+  <div class="overlay" id="view-toggles">
+    <label><input type="checkbox" id="toggle-images" checked> Images</label>
+    <label><input type="checkbox" id="toggle-text" checked> Text</label>
+  </div>
+
+  <div class="overlay" id="hint">Drag to pan &middot; scroll to zoom</div>
+
+  <div class="overlay" id="node-label">
+    <div class="n-title" id="node-label-title"></div>
+    <div class="n-meta" id="node-label-meta"></div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/vendor/three/three.module.js",
+      "three/addons/": "/vendor/three/addons/"
+    }
+  }
+  </script>
+  <script type="module" src="/connections.js"></script>
+  <script src="/ui-effects.js"></script>
+</body>
+</html>

@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Extraction tests</title>
+<style>
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; margin: 2rem; color: #46545f; background: #eff2f9; }
+  h1 { font-family: "Times New Roman", Times, serif; font-weight: 500; }
+  #summary { font-size: 1.1rem; margin: 1rem 0 1.5rem; }
+  .pass { color: #3f6e4e; }
+  .fail { color: #c23b2e; }
+  li { margin: 0.2rem 0; font-size: 0.85rem; }
+  code { background: #e4ebf1; padding: 0 0.25rem; border-radius: 3px; }
+  .group { font-weight: 600; margin-top: 1rem; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<h1>Extraction tests</h1>
+<div id="summary">running…</div>
+<ul id="results"></ul>
+
+<script type="module">
+import { Provenance, normaliseValue } from "../src/extraction/provenance.js";
+import {
+  extractPageMetadata, readJsonLd, mapSchemaOrg, personName, metaContent,
+} from "../src/extraction/metadata.js";
+import {
+  findImages, scoreImage, parseSrcset, widestFromSrcset, bestSource,
+  highestResolution, looksLikeJunk, describeImg,
+} from "../src/extraction/images.js";
+import { extractSelection, nearestHeading, surroundingContext } from "../src/extraction/selection.js";
+import { findPdfCandidates } from "../src/extraction/pdf.js";
+import { deepQuerySelectorAll } from "../src/extraction/dom.js";
+import { extractorFor } from "../src/extraction/extractors/index.js";
+import * as pinterest from "../src/extraction/extractors/pinterest.js";
+import * as jstor from "../src/extraction/extractors/jstor.js";
+import { buildImageCapture, buildPdfCapture, buildTextCapture } from "../src/extraction/capture.js";
+
+const results = [];
+let group = "";
+function describe(name) { group = name; results.push({ group: name }); }
+function it(name, fn) {
+  try { fn(); results.push({ name, ok: true }); }
+  catch (e) { results.push({ name, ok: false, error: e.message }); }
+}
+function eq(actual, expected, msg) {
+  const a = JSON.stringify(actual), b = JSON.stringify(expected);
+  if (a !== b) throw new Error(`${msg || ""} expected ${b}, got ${a}`);
+}
+function ok(v, msg) { if (!v) throw new Error(msg || "expected truthy"); }
+
+/** Parse an HTML string into a detached document for testing. */
+function docOf(html) {
+  return new DOMParser().parseFromString(html, "text/html");
+}
+
+// --- provenance ------------------------------------------------------------
+describe("provenance");
+
+it("keeps the highest-priority source for a field", () => {
+  const p = new Provenance();
+  p.add("title", "from meta", "meta");
+  p.add("title", "from json-ld", "json-ld");
+  eq(p.best("title").value, "from json-ld");
+  eq(p.best("title").source, "json-ld");
+});
+
+it("drops blank and junk values", () => {
+  const p = new Provenance();
+  p.add("title", "", "json-ld");
+  p.add("title", "   ", "json-ld");
+  p.add("title", "null", "json-ld");
+  p.add("title", "real", "meta");
+  eq(p.resolved().title, "real");
+});
+
+it("collapses whitespace in extracted values", () => {
+  eq(normaliseValue("  a\n\n  b   c "), "a b c");
+});
+
+it("joins array values", () => {
+  eq(normaliseValue(["a", "", "b"]), "a, b");
+});
+
+it("records confidence per source", () => {
+  const p = new Provenance();
+  p.add("creator", "X", "json-ld");
+  p.add("caption", "Y", "nearby-text");
+  eq(p.best("creator").confidence, "high");
+  eq(p.best("caption").confidence, "low");
+});
+
+it("trail has one record per field", () => {
+  const p = new Provenance();
+  p.add("title", "a", "meta");
+  p.add("title", "b", "json-ld");
+  p.add("creator", "c", "json-ld");
+  eq(p.trail().length, 2);
+});
+
+it("rejects an unknown source rather than silently mislabelling it", () => {
+  const p = new Provenance();
+  let threw = false;
+  try { p.add("title", "x", "made-up"); } catch { threw = true; }
+  ok(threw, "should throw on unknown source");
+});
+
+// --- metadata --------------------------------------------------------------
+describe("metadata");
+
+it("reads JSON-LD", () => {
+  const d = docOf(`<script type="application/ld+json">
+    {"@type":"VisualArtwork","name":"Pleats Please","creator":{"@type":"Person","name":"Issey Miyake"},"dateCreated":"1994","artMedium":"Polyester"}
+  <\/script>`);
+  const { metadata } = extractPageMetadata(d);
+  eq(metadata.title, "Pleats Please");
+  eq(metadata.creator, "Issey Miyake");
+  eq(metadata.date, "1994");
+  eq(metadata.medium, "Polyester");
+});
+
+it("survives malformed JSON-LD", () => {
+  const d = docOf(`<script type="application/ld+json">{ not json <\/script><title>Fallback</title>`);
+  const { metadata } = extractPageMetadata(d);
+  eq(metadata.title, "Fallback");
+});
+
+it("flattens @graph", () => {
+  const d = docOf(`<script type="application/ld+json">
+    {"@graph":[{"@type":"WebPage","name":"Page"},{"@type":"VisualArtwork","name":"The Work"}]}
+  <\/script>`);
+  const nodes = readJsonLd(d);
+  ok(nodes.length >= 2);
+  // VisualArtwork should outrank WebPage.
+  eq(nodes[0].name, "The Work");
+});
+
+it("prefers JSON-LD over OpenGraph over meta", () => {
+  const d = docOf(`
+    <meta name="description" content="plain meta">
+    <meta property="og:description" content="og desc">
+    <script type="application/ld+json">{"@type":"Article","description":"ld desc"}<\/script>`);
+  eq(extractPageMetadata(d).metadata.description, "ld desc");
+});
+
+it("falls back through the chain when stronger sources are absent", () => {
+  const d = docOf(`<meta name="description" content="plain meta">`);
+  eq(extractPageMetadata(d).metadata.description, "plain meta");
+});
+
+it("reads Dublin Core", () => {
+  const d = docOf(`<meta name="DC.creator" content="A Museum"><meta name="DC.date" content="1932">`);
+  const { metadata } = extractPageMetadata(d);
+  eq(metadata.creator, "A Museum");
+  eq(metadata.date, "1932");
+});
+
+it("reads academic citation_* tags", () => {
+  const d = docOf(`
+    <meta name="citation_title" content="On Enclosure">
+    <meta name="citation_journal_title" content="Fashion Theory">
+    <meta name="citation_doi" content="10.1000/xyz">
+    <meta name="citation_volume" content="12">
+    <meta name="citation_author" content="Smith, J.">
+    <meta name="citation_author" content="Doe, A.">`);
+  const { metadata } = extractPageMetadata(d);
+  eq(metadata.title, "On Enclosure");
+  eq(metadata.publication, "Fashion Theory");
+  eq(metadata.doi, "10.1000/xyz");
+  eq(metadata.volume, "12");
+  eq(metadata.author, "Smith, J., Doe, A.");
+});
+
+it("handles person as string, object or array", () => {
+  eq(personName("A"), "A");
+  eq(personName({ name: "B" }), "B");
+  eq(personName([{ name: "C" }, "D"]), "C, D");
+  eq(personName(null), "");
+});
+
+it("prefers canonical url over location", () => {
+  const d = docOf(`<link rel="canonical" href="https://example.com/canon">`);
+  eq(extractPageMetadata(d).source.canonical_url, "https://example.com/canon");
+});
+
+it("marks structured titles as high confidence", () => {
+  const d = docOf(`<script type="application/ld+json">{"@type":"VisualArtwork","name":"Real Title"}<\/script>`);
+  const rec = extractPageMetadata(d).provenance.find((r) => r.field === "title");
+  eq(rec.source, "json-ld");
+  eq(rec.confidence, "high");
+});
+
+it("never emits an inferred record", () => {
+  const d = docOf(`<title>T</title><meta name="description" content="d">`);
+  const inferred = extractPageMetadata(d).provenance.filter((r) => r.source === "inferred");
+  eq(inferred.length, 0);
+});
+
+// schema.org's `description` is meant to be a short summary; the
+// SocialMediaPosting/Article family of types (Pinterest pins included) put
+// their actual text in `articleBody` instead, which mapSchemaOrg previously
+// never looked at -- so a node with only articleBody reported no description
+// at all, and extraction fell through to a weaker, often stale, page-wide
+// source (see the end-to-end Pinterest case below).
+it("mapSchemaOrg falls back to articleBody when there's no description", () => {
+  eq(mapSchemaOrg({ "@type": "SocialMediaPosting", articleBody: "the real text" }).description,
+     "the real text");
+});
+
+it("mapSchemaOrg still prefers an explicit description over articleBody", () => {
+  eq(mapSchemaOrg({ description: "short summary", articleBody: "long text" }).description,
+     "short summary");
+});
+
+it("extracts a Pinterest-shaped SocialMediaPosting correctly end to end", () => {
+  // The exact node shape found on a live pinterest.com pin page.
+  const d = docOf(`
+    <meta property="og:title" content="Pinterest">
+    <meta property="og:description" content="Discover recipes, home ideas, style inspiration and other ideas to try.">
+    <script type="application/ld+json">
+      {"@context":"http://schema.org/","@type":"SocialMediaPosting",
+       "headline":"Red Heels Editorial",
+       "articleBody":"Jul 14, 2026 — High-fashion, Heels luxury",
+       "author":{"@type":"Person","name":"Natalie Shalom"}}
+    <\/script>`);
+  const { metadata } = extractPageMetadata(d);
+  // JSON-LD outranks OpenGraph, so the real per-pin values win over the
+  // generic site-shell ones even though both are present on the page.
+  eq(metadata.title, "Red Heels Editorial");
+  eq(metadata.description, "Jul 14, 2026 — High-fashion, Heels luxury");
+  eq(metadata.author, "Natalie Shalom");
+});
+
+// --- srcset / lazy loading -------------------------------------------------
+describe("image sources");
+
+it("parses srcset widths", () => {
+  eq(parseSrcset("a.jpg 200w, b.jpg 800w").map(p => p.width), [200, 800]);
+});
+
+it("picks the widest srcset entry", () => {
+  eq(widestFromSrcset("small.jpg 200w, big.jpg 1600w, mid.jpg 800w"), "big.jpg");
+});
+
+it("handles density descriptors", () => {
+  eq(widestFromSrcset("a.jpg 1x, b.jpg 2x"), "b.jpg");
+});
+
+it("ignores empty srcset", () => {
+  eq(parseSrcset(""), []);
+  eq(parseSrcset(null), []);
+});
+
+it("prefers a lazy-loaded data-src over a placeholder src", () => {
+  const d = docOf(`<img src="data:image/gif;base64,R0lGOD" data-src="https://cdn.test/real.jpg">`);
+  eq(bestSource(d.querySelector("img")), "https://cdn.test/real.jpg");
+});
+
+it("finds the high-res source in a <picture>", () => {
+  const d = docOf(`<picture>
+      <source srcset="https://cdn.test/huge.jpg 2400w">
+      <img src="https://cdn.test/small.jpg" srcset="https://cdn.test/small.jpg 400w">
+    </picture>`);
+  eq(highestResolution(d.querySelector("img")), "https://cdn.test/huge.jpg");
+});
+
+// --- image ranking ---------------------------------------------------------
+describe("image ranking");
+
+function candidate(over = {}) {
+  return {
+    image_url: "https://cdn.test/photo.jpg",
+    image_alt: "a garment", caption: "", credit: "",
+    intrinsic_width: 1200, intrinsic_height: 900,
+    rendered_width: 600, rendered_height: 450,
+    hidden: false, in_content: true, in_chrome: false,
+    kind: "img", original_image_url: null,
+    ...over,
+  };
+}
+
+it("scores a large in-content image highly", () => {
+  ok(scoreImage(candidate()) > 50);
+});
+
+it("rejects tiny images", () => {
+  eq(scoreImage(candidate({ intrinsic_width: 32, intrinsic_height: 32, rendered_width: 32, rendered_height: 32 })), 0);
+});
+
+it("rejects extreme aspect ratios (banners, dividers)", () => {
+  eq(scoreImage(candidate({ intrinsic_width: 1600, intrinsic_height: 90, rendered_width: 1600, rendered_height: 90 })), 0);
+});
+
+it("keeps hidden images but ranks them below visible ones", () => {
+  // Inactive carousel/lightbox slides are display:none but are often exactly
+  // what someone wants to save, so hidden is a penalty, not a rejection.
+  const hidden = scoreImage(candidate({ hidden: true }));
+  ok(hidden > 0, "a hidden content image should still be offered");
+  ok(hidden < scoreImage(candidate({ hidden: false })), "but rank below visible");
+});
+
+it("still rejects hidden junk on size and name", () => {
+  eq(scoreImage(candidate({ hidden: true, image_url: "https://t.co/tracking-pixel.gif" })), 0);
+  eq(scoreImage(candidate({
+    hidden: true, intrinsic_width: 1, intrinsic_height: 1,
+    rendered_width: 1, rendered_height: 1,
+  })), 0);
+});
+
+it("rejects blob: URLs -- never downloadable outside the page that created them", () => {
+  // A PDF.js-style viewer (JSTOR's reader among them) commonly renders pages
+  // to <canvas> and exposes them this way; the background service worker
+  // that has to download a save can never reach it, on any site, regardless
+  // of host_permissions, since it isn't a network resource at all.
+  eq(scoreImage(candidate({ image_url: "blob:https://example.com/3fa8c1b2-uuid" })), 0);
+});
+
+it("rejects things named like interface furniture", () => {
+  eq(scoreImage(candidate({ image_url: "https://cdn.test/site-logo.svg" })), 0);
+  eq(scoreImage(candidate({ image_url: "https://cdn.test/user-avatar.png" })), 0);
+  eq(scoreImage(candidate({ image_url: "https://t.co/tracking-pixel.gif" })), 0);
+});
+
+it("ranks content images above chrome images", () => {
+  ok(scoreImage(candidate({ in_content: true })) > scoreImage(candidate({ in_content: false, in_chrome: true })));
+});
+
+it("rewards a caption and alt text", () => {
+  ok(scoreImage(candidate({ caption: "Look 12, AW26" })) > scoreImage(candidate({ caption: "" })));
+  ok(scoreImage(candidate({ image_alt: "a detailed description" })) > scoreImage(candidate({ image_alt: "" })));
+});
+
+it("admits the social card image even with no geometry", () => {
+  ok(scoreImage(candidate({ kind: "social-card", intrinsic_width: 0, intrinsic_height: 0, rendered_width: 0, rendered_height: 0 })) > 0);
+});
+
+it("keeps unmeasured lazy images but ranks them low", () => {
+  const s = scoreImage(candidate({ intrinsic_width: 0, intrinsic_height: 0, rendered_width: 0, rendered_height: 0 }));
+  ok(s > 0 && s < 40, `expected a low positive score, got ${s}`);
+});
+
+it("finds and orders images on a realistic page", () => {
+  const d = docOf(`
+    <header><img src="https://cdn.test/logo.png" width="100" height="40"></header>
+    <article>
+      <figure>
+        <img src="https://cdn.test/main.jpg" alt="the garment">
+        <figcaption>Look 12, AW26</figcaption>
+      </figure>
+    </article>
+    <meta property="og:image" content="https://cdn.test/card.jpg">`);
+  const imgs = findImages(d, window);
+  const urls = imgs.map(i => i.image_url);
+  ok(!urls.some(u => u.includes("logo")), "logo should be filtered out");
+  ok(urls.some(u => u.includes("main.jpg")), "content image should be found");
+  ok(urls.some(u => u.includes("card.jpg")), "og:image should be found");
+});
+
+it("deduplicates the same image found twice", () => {
+  const d = docOf(`
+    <img src="https://cdn.test/same.jpg?w=200">
+    <img src="https://cdn.test/same.jpg?w=800">`);
+  eq(findImages(d, window).length, 1);
+});
+
+it("reads a figcaption as the image caption", () => {
+  const d = docOf(`<figure><img src="https://cdn.test/x.jpg"><figcaption>A caption</figcaption></figure>`);
+  eq(describeImg(d.querySelector("img"), window).caption, "A caption");
+});
+
+// --- pdf detection -----------------------------------------------------
+//
+// A canvas-rendered viewer page has no URL for what it's showing at all, so
+// this looks for the one thing that reliably does have one: wherever the
+// page links to or embeds the actual file. Deliberately generic -- not
+// verified against JSTOR specifically (no way to reach it without
+// credentials), so this covers the common patterns rather than one site's
+// markup.
+describe("pdf detection");
+
+it("finds a direct download link", () => {
+  const d = docOf(`<a href="/content/download/12345/file.pdf">Download PDF</a>`);
+  const found = findPdfCandidates(d, window);
+  eq(found.length, 1);
+  ok(found[0].pdf_url.endsWith("/content/download/12345/file.pdf"));
+  eq(found[0].title, "Download PDF");
+});
+
+it("finds a link with a query string after .pdf", () => {
+  const d = docOf(`<a href="/get.pdf?token=abc123">Get it</a>`);
+  eq(findPdfCandidates(d, window).length, 1);
+});
+
+it("finds an embedded viewer via its ?file= parameter", () => {
+  const d = docOf(`<iframe src="/pdfjs/web/viewer.html?file=%2Fcontent%2Fpaper.pdf"></iframe>`);
+  const found = findPdfCandidates(d, window);
+  eq(found.length, 1);
+  ok(found[0].pdf_url.endsWith("/content/paper.pdf"));
+  eq(found[0].source, "iframe");
+});
+
+it("finds an <embed type=application/pdf>", () => {
+  const d = docOf(`<embed type="application/pdf" src="/files/reading.pdf">`);
+  const found = findPdfCandidates(d, window);
+  eq(found.length, 1);
+  eq(found[0].source, "embed");
+});
+
+it("finds an <object data=...pdf>", () => {
+  const d = docOf(`<object data="/files/reading.pdf"></object>`);
+  eq(findPdfCandidates(d, window).length, 1);
+});
+
+it("ignores an iframe that isn't a pdf viewer or a pdf", () => {
+  const d = docOf(`<iframe src="https://ads.example.com/banner.html"></iframe>`);
+  eq(findPdfCandidates(d, window).length, 0);
+});
+
+it("ignores ordinary links that don't point at a pdf", () => {
+  const d = docOf(`<a href="/about">About</a><a href="/report.pdf.html">Not actually a pdf</a>`);
+  eq(findPdfCandidates(d, window).length, 0);
+});
+
+it("never offers a blob: URL, even if something links to one", () => {
+  const d = docOf(`<embed type="application/pdf" src="blob:https://example.com/uuid-here">`);
+  eq(findPdfCandidates(d, window).length, 0);
+});
+
+it("deduplicates the same pdf found via more than one path", () => {
+  const d = docOf(`
+    <embed type="application/pdf" src="/files/paper.pdf">
+    <a href="/files/paper.pdf">Download</a>`);
+  eq(findPdfCandidates(d, window).length, 1);
+});
+
+it("falls back to a filename when nothing better describes the link", () => {
+  const d = docOf(`<a href="/files/1234-report.pdf"></a>`);
+  eq(findPdfCandidates(d, window)[0].title, "1234-report.pdf");
+});
+
+it("prefers citation_pdf_url -- the publisher's own declaration", () => {
+  // The Highwire Press convention, and what Google Scholar indexes on, so
+  // academic publishers keep it accurate. Ranks ahead of anything inferred.
+  const d = docOf(`
+    <meta name="citation_pdf_url" content="https://pub.test/content/99/1/1.full.pdf">
+    <a href="/some/other/file.pdf">Supplementary material</a>`);
+  const found = findPdfCandidates(d, window);
+  eq(found[0].pdf_url, "https://pub.test/content/99/1/1.full.pdf");
+  eq(found[0].source, "citation-meta");
+});
+
+// --- shadow DOM ---------------------------------------------------------
+//
+// querySelectorAll does not pierce shadow roots -- that's what shadow DOM is
+// for. Sites built from web components (JSTOR's "pharos" components, for
+// one) keep most real markup inside them, so a light-DOM-only scan finds
+// nothing at all.
+describe("shadow DOM traversal");
+
+function withShadow(build) {
+  const host = document.createElement("div");
+  host.style.position = "absolute";
+  host.style.left = "-9999px";
+  document.body.appendChild(host);
+  build(host.attachShadow({ mode: "open" }), host);
+  return host;
+}
+
+it("deepQuerySelectorAll finds elements inside an open shadow root", () => {
+  const host = withShadow((root) => {
+    root.innerHTML = `<a href="/inside-shadow.pdf">Download</a>`;
+  });
+  try {
+    eq(host.querySelectorAll("a").length, 0, "light-DOM scan should find nothing");
+    eq(deepQuerySelectorAll(host, "a").length, 1, "deep scan should find it");
+  } finally {
+    host.remove();
+  }
+});
+
+it("deepQuerySelectorAll descends through nested shadow roots", () => {
+  const host = withShadow((root) => {
+    const inner = document.createElement("div");
+    root.appendChild(inner);
+    inner.attachShadow({ mode: "open" }).innerHTML = `<a href="/deep.pdf">Deep</a>`;
+  });
+  try {
+    eq(deepQuerySelectorAll(host, "a").length, 1);
+  } finally {
+    host.remove();
+  }
+});
+
+it("finds a PDF link that only exists inside a shadow root", () => {
+  const host = withShadow((root) => {
+    root.innerHTML = `<a href="https://pub.test/paper.pdf">Download PDF</a>`;
+  });
+  try {
+    const found = findPdfCandidates(host, window);
+    eq(found.length, 1);
+    eq(found[0].pdf_url, "https://pub.test/paper.pdf");
+  } finally {
+    host.remove();
+  }
+});
+
+// --- jstor --------------------------------------------------------------
+//
+// Its download control is a scripted web component with no href at all --
+// only `data-doi` -- so the URL is reconstructed from the identifier rather
+// than scraped. The endpoint shape is JSTOR's long-standing public
+// convention but is NOT verified here against a live article (that needs
+// institutional credentials), which is exactly why citation_pdf_url is
+// checked first and this is the fallback.
+describe("jstor");
+
+it("routes jstor.org to its adapter", () => {
+  eq(extractorFor("www.jstor.org").id, "jstor");
+  eq(extractorFor("jstor.org").id, "jstor");
+  eq(extractorFor("notjstor.org").id, "generic");
+});
+
+it("reads the stable id from the download button's data-doi", () => {
+  // The exact element from a real JSTOR article page.
+  const d = docOf(`
+    <mfe-download-pharos-button data-doi="1399493" data-qa="download-pdf"
+      a11y-label="Download">Download</mfe-download-pharos-button>`);
+  eq(jstor.stableId(d, { location: { pathname: "/stable/1399493" } }), "1399493");
+});
+
+it("finds the download button even inside a shadow root", () => {
+  const host = withShadow((root) => {
+    root.innerHTML = `<mfe-download-pharos-button data-doi="55512" data-qa="download-pdf">Download</mfe-download-pharos-button>`;
+  });
+  try {
+    eq(jstor.stableId(host, { location: { pathname: "/stable/55512" } }), "55512");
+  } finally {
+    host.remove();
+  }
+});
+
+it("falls back to the /stable/ path when no button is present", () => {
+  const d = docOf(`<p>No download control here.</p>`);
+  eq(jstor.stableId(d, { location: { pathname: "/stable/1399493" } }), "1399493");
+});
+
+it("normalises a /stable/pdf/<id>.pdf path back to the bare id", () => {
+  const d = docOf(`<p></p>`);
+  eq(jstor.stableId(d, { location: { pathname: "/stable/pdf/1399493.pdf" } }), "1399493");
+});
+
+it("handles a DOI-style stable path", () => {
+  const d = docOf(`<p></p>`);
+  eq(jstor.stableId(d, { location: { pathname: "/stable/10.2307/1399493" } }), "10.2307/1399493");
+});
+
+it("builds a PDF URL from the id", () => {
+  const d = docOf(`<mfe-download-pharos-button data-doi="1399493"></mfe-download-pharos-button>`);
+  const win = { location: { pathname: "/stable/1399493", origin: "https://www.jstor.org" } };
+  eq(jstor.derivedPdf(d, win).pdf_url,
+     "https://www.jstor.org/stable/pdf/1399493.pdf?acceptTC=true");
+});
+
+it("returns nothing when there's no identifier to work from", () => {
+  const d = docOf(`<p></p>`);
+  eq(jstor.derivedPdf(d, { location: { pathname: "/search/results" } }), null);
+});
+
+it("does not duplicate a citation_pdf_url the publisher already declared", () => {
+  const d = docOf(`
+    <meta name="citation_pdf_url" content="https://www.jstor.org/stable/pdf/1399493.pdf">
+    <mfe-download-pharos-button data-doi="1399493"></mfe-download-pharos-button>`);
+  const win = { location: { pathname: "/stable/1399493", origin: "https://www.jstor.org", href: "https://www.jstor.org/stable/1399493", hostname: "www.jstor.org" } };
+  const pdfs = jstor.extract(d, win).pdfs;
+  eq(pdfs.length, 1, "the declared URL and the derived one are the same document");
+  eq(pdfs[0].source, "citation-meta", "the publisher's own declaration should win");
+});
+
+// --- selection -------------------------------------------------------------
+describe("selection");
+
+it("finds the nearest preceding heading", () => {
+  const d = docOf(`<h2>Enclosure</h2><p id="t">Some text</p>`);
+  eq(nearestHeading(d.getElementById("t")), "Enclosure");
+});
+
+it("returns no context when the selection is the whole paragraph", () => {
+  const d = docOf(`<p id="t">Exactly this.</p>`);
+  eq(surroundingContext(d.getElementById("t"), "Exactly this."), "");
+});
+
+it("returns the paragraph as context for a partial selection", () => {
+  const d = docOf(`<p id="t">A longer paragraph with a quoted bit inside it.</p>`);
+  eq(surroundingContext(d.getElementById("t"), "quoted bit"), "A longer paragraph with a quoted bit inside it.");
+});
+
+it("preserves interior whitespace the browser reports", () => {
+  // white-space:pre so the browser's own selection string keeps the double
+  // space and newline -- otherwise CSS collapses them before our code runs,
+  // and this would be testing the browser rather than us. What's being
+  // asserted is that extractSelection passes the text through untouched.
+  const host = document.createElement("div");
+  host.style.whiteSpace = "pre";
+  host.textContent = "The garment  functions as\nan enclosure.";
+  host.style.position = "absolute"; host.style.left = "-9999px";
+  document.body.appendChild(host);
+  const range = document.createRange();
+  range.selectNodeContents(host);
+  const sel = window.getSelection();
+  sel.removeAllRanges(); sel.addRange(range);
+
+  const browserSaw = String(sel);
+  const out = extractSelection(window);
+  sel.removeAllRanges(); host.remove();
+
+  eq(out.selected_text, browserSaw.replace(/^\s+|\s+$/g, ""),
+     "selected text must pass through unmodified");
+  ok(out.selected_text.includes("  "), "double space must survive");
+  ok(out.selected_text.includes("\n"), "newline must survive");
+});
+
+it("strips only the outer whitespace of a selection", () => {
+  const host = document.createElement("div");
+  host.style.whiteSpace = "pre";
+  host.textContent = "\n   quoted words   \n";
+  host.style.position = "absolute"; host.style.left = "-9999px";
+  document.body.appendChild(host);
+  const range = document.createRange();
+  range.selectNodeContents(host);
+  const sel = window.getSelection();
+  sel.removeAllRanges(); sel.addRange(range);
+
+  const out = extractSelection(window);
+  sel.removeAllRanges(); host.remove();
+  eq(out.selected_text, "quoted words");
+});
+
+it("returns null with no selection", () => {
+  window.getSelection().removeAllRanges();
+  eq(extractSelection(window), null);
+});
+
+// --- extractor registry ----------------------------------------------------
+describe("extractors");
+
+it("routes pinterest to its adapter", () => {
+  eq(extractorFor("www.pinterest.com").id, "pinterest");
+  eq(extractorFor("pinterest.co.uk").id, "generic");
+  eq(extractorFor("uk.pinterest.com").id, "pinterest");
+});
+
+it("routes everything else to generic", () => {
+  eq(extractorFor("dezeen.com").id, "generic");
+  eq(extractorFor("vam.ac.uk").id, "generic");
+  eq(extractorFor("").id, "generic");
+});
+
+it("pinterest finds the credited original source", () => {
+  const d = docOf(`<a href="https://collections.vam.ac.uk/item/O123" target="_blank">Source</a>`);
+  const found = pinterest.creditedSource(d, { location: { hostname: "pinterest.com" } });
+  eq(found.domain, "collections.vam.ac.uk");
+});
+
+it("pinterest ignores share links and self-links", () => {
+  const d = docOf(`
+    <a href="https://facebook.com/share" target="_blank">fb</a>
+    <a href="https://www.pinterest.com/pin/2" target="_blank">pin</a>`);
+  eq(pinterest.creditedSource(d, { location: { hostname: "pinterest.com" } }), null);
+});
+
+// --- capture envelope ------------------------------------------------------
+describe("capture envelope");
+
+const pageResult = {
+  source: { url: "https://x.test/a", canonical_url: "https://x.test/a", domain: "x.test", page_title: "T" },
+  metadata: { title: "Page Title", creator: "Someone" },
+  provenance: [{ field: "title", value: "Page Title", source: "json-ld", confidence: "high" }],
+  images: [], extractor: "generic",
+};
+
+it("builds an image capture with the required shape", () => {
+  const c = buildImageCapture(pageResult, candidate(), { user_note: "why", project_ids: ["p1"] });
+  eq(c.type, "image");
+  eq(c.content.image_url, "https://cdn.test/photo.jpg");
+  eq(c.user_note, "why");
+  eq(c.project_ids, ["p1"]);
+  ok(Array.isArray(c.metadata_provenance));
+});
+
+it("prefers the full-resolution original when one exists", () => {
+  const c = buildImageCapture(pageResult, candidate({ original_image_url: "https://cdn.test/huge.jpg" }));
+  eq(c.content.image_url, "https://cdn.test/huge.jpg");
+  eq(c.content.displayed_image_url, "https://cdn.test/photo.jpg");
+});
+
+it("image-level caption outranks page-level values", () => {
+  const c = buildImageCapture(pageResult, candidate({ caption: "The actual caption" }));
+  eq(c.metadata.caption, "The actual caption");
+});
+
+it("builds a text capture preserving the quote", () => {
+  const quote = "The garment  functions as an enclosure.";
+  const c = buildTextCapture(pageResult, { selected_text: quote, context: "ctx", heading: "H" });
+  eq(c.type, "text");
+  eq(c.content.selected_text, quote);
+  eq(c.metadata.heading, "H");
+});
+
+it("defaults note and projects to empty", () => {
+  const c = buildTextCapture(pageResult, { selected_text: "q", context: "", heading: "" });
+  eq(c.user_note, "");
+  eq(c.project_ids, []);
+});
+
+it("builds a pdf capture reusing content.image_url as the download URL", () => {
+  // Deliberate reuse, not a mistake -- see the comment on buildPdfCapture:
+  // the whole download/upload path already treats that field as "the URL to
+  // fetch and upload" and already recognises a .pdf extension, so this is
+  // the path of least resistance rather than plumbing a parallel field name
+  // through four files for no functional difference.
+  const c = buildPdfCapture(pageResult, { pdf_url: "https://x.test/paper.pdf", title: "A Paper" },
+                            { user_note: "for chapter 2", project_ids: ["p1"] });
+  eq(c.type, "pdf");
+  eq(c.content.image_url, "https://x.test/paper.pdf");
+  eq(c.content.image_alt, "A Paper");
+  eq(c.user_note, "for chapter 2");
+  eq(c.project_ids, ["p1"]);
+  eq(c.metadata, pageResult.metadata);
+});
+
+// --- render ----------------------------------------------------------------
+const ul = document.getElementById("results");
+let pass = 0, fail = 0;
+for (const r of results) {
+  const li = document.createElement("li");
+  if (r.group) {
+    li.className = "group";
+    li.textContent = r.group;
+  } else if (r.ok) {
+    pass++;
+    li.className = "pass";
+    li.textContent = `PASS  ${r.name}`;
+  } else {
+    fail++;
+    li.className = "fail";
+    li.textContent = `FAIL  ${r.name} — ${r.error}`;
+  }
+  ul.appendChild(li);
+}
+const summary = document.getElementById("summary");
+summary.className = fail ? "fail" : "pass";
+summary.textContent = `${pass} passed, ${fail} failed`;
+window.__testResults = { pass, fail, failures: results.filter(r => r.ok === false) };
+</script>
+</body>
+</html>
