@@ -328,8 +328,11 @@ export function createGrid(container, options = {}) {
     if (!editing || gesture || !event.isPrimary || event.button !== 0) return;
     // The remove and shadow-toggle buttons are click targets, not drag
     // handles -- capturing the pointer here would swallow their click before
-    // it fires.
-    if (event.target.closest(".widget-remove, .widget-shadow-toggle")) return;
+    // it fires. The settings widget's own open button joins them: it stays
+    // hit-testable while editing (style.css) so Add Widget is still reachable,
+    // and needs the same exclusion so that reopening it isn't swallowed by a
+    // drag gesture the way a plain click on any other widget's content would be.
+    if (event.target.closest(".widget-remove, .widget-shadow-toggle, .widget-settings-btn")) return;
 
     const el = event.target.closest(".widget");
     if (!el) return;
