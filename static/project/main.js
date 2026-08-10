@@ -7,6 +7,8 @@
 
 import { createGrid } from "./grid.js";
 import { all as allWidgetDefinitions, definitionFor, mountWidget } from "./registry.js";
+import { createWidgetDock } from "./widget-dock.js";
+import { createAppearancePanel } from "./appearance-panel.js";
 
 const statusEl = document.getElementById("project-shell-status");
 const bodyEl = document.getElementById("project-shell-body");
@@ -112,6 +114,10 @@ function buildGrid() {
           // Only the settings widget gets a handle on the page-level edit
           // state -- see registry.js's host.shell and the block below.
           shell: row.type === "settings" ? shell : null,
+          // Every widget gets this, unlike shell -- Text/Title/Notepad all
+          // need to know whether the grid is being edited (see the block
+          // below, and registry.js's host.editMode).
+          editMode,
         })
       );
     },
@@ -202,17 +208,21 @@ async function saveLayout() {
  * save_widget_layout comment is explicit: widgets are created and deleted
  * through their own routes). Only position and size are part of the layout
  * snapshot Cancel can revert.
+ *
+ * `position` is the dock's drop cell (widget-dock.js); omitted, a widget is
+ * appended below everything else, same as before the dock existed.
  */
-async function addWidget(type) {
+async function addWidget(type, position = null) {
   const definition = definitionFor(type);
   const bottom = gridRows().reduce((max, row) => Math.max(max, row.y + row.h), 0);
+  const { x, y } = position || { x: 0, y: bottom };
   const res = await fetch(`/api/projects/${projectId}/widgets`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       type,
-      x: 0,
-      y: bottom,
+      x,
+      y,
       w: definition.defaultSize.w,
       h: definition.defaultSize.h,
     }),
@@ -278,14 +288,44 @@ const shell = {
   enterEdit: () => setEditing(true),
   save: saveLayout,
   cancel: cancelEditing,
+  // defaultSize/thumbnail ride along for widget-dock.js's cards -- it needs
+  // a box size to compute a drop cell, and an optional thumbnail is the
+  // extension point for a future resource-heavy widget's card.
   addableTypes: () =>
     allWidgetDefinitions()
       .filter((definition) => !definition.permanent)
-      .map((definition) => ({ type: definition.type, label: definition.label })),
+      .map((definition) => ({
+        type: definition.type,
+        label: definition.label,
+        defaultSize: definition.defaultSize,
+        thumbnail: definition.thumbnail,
+      })),
   addWidget,
 };
 
 shell.subscribe(renderEditBar);
+
+/* A narrow, read-only view of edit-mode for every widget's host.editMode
+ * (registry.js) -- unlike shell, not restricted to the settings widget, and
+ * edge-triggered: subscribers only fire when `editing` actually flips, not
+ * on every shell notification (dragging a widget flips `dirty`, which
+ * would otherwise re-fire every subscriber on every pointer move -- fine
+ * for the editBar's idempotent hidden-toggle above, not fine for something
+ * like the appearance panel re-filling its inputs mid-edit and clobbering
+ * an unsaved pick).
+ */
+const editMode = {
+  isEditing: () => grid.isEditing(),
+  subscribe(fn) {
+    let last = grid.isEditing();
+    fn(last);
+    return shell.subscribe((state) => {
+      if (state.editing === last) return;
+      last = state.editing;
+      fn(last);
+    });
+  },
+};
 
 // A layout left mid-edit is easy to lose by accident (a stray back-button tap,
 // a closed tab) -- warn only when there is actually something to lose.
@@ -329,6 +369,20 @@ async function init() {
   widgets.forEach((row) => rows.set(row.id, row));
 
   buildGrid();
+
+  const dock = createWidgetDock({
+    gridEl,
+    addableTypes: shell.addableTypes,
+    addWidget,
+    cellFromPoint: grid.cellFromPoint,
+    wouldFit: grid.wouldFit,
+  });
+  const appearancePanel = createAppearancePanel({ projectId });
+  editMode.subscribe((editing) => {
+    dock.setVisible(editing);
+    if (editing) appearancePanel.show();
+    else appearancePanel.hide();
+  });
 }
 
 init();

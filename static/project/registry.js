@@ -13,6 +13,13 @@
  *     create(host) { ...; return { destroy() {} }; },
  *   }
  *
+ * host also carries editMode -- { isEditing(), subscribe(fn) }, read-only,
+ * given to every widget (see mountWidget below) -- and shell, the same shape
+ * of thing but with page-level actions (add/save/cancel/etc.), given only to
+ * the settings widget. editMode exists because more than one widget now
+ * needs to know whether the grid is being edited without needing the
+ * settings widget's actions to go with it.
+ *
  * The imports below are static because there is no build step: the browser
  * resolves them itself, so a new widget is one file plus one line here.
  */
@@ -21,8 +28,9 @@ import titleWidget from "./widgets/title.js";
 import exitWidget from "./widgets/exit.js";
 import settingsWidget from "./widgets/settings.js";
 import textWidget from "./widgets/text.js";
+import notepadWidget from "./widgets/notepad.js";
 
-const MODULES = [titleWidget, exitWidget, settingsWidget, textWidget];
+const MODULES = [titleWidget, exitWidget, settingsWidget, textWidget, notepadWidget];
 
 // How long a widget's config sits before it is written. Config saves are the
 // widget's own business and happen as the user edits, unlike the grid layout,
@@ -105,7 +113,7 @@ export function definitionFor(type) {
  * `persist` is how this widget's config reaches the API; the debounce lives
  * here so no widget has to think about it.
  */
-export function mountWidget(definition, el, { project, config = null, persist, shell = null }) {
+export function mountWidget(definition, el, { project, config = null, persist, shell = null, editMode = null }) {
   const resizeCallbacks = [];
   const destroyCallbacks = [];
   let saveTimer = null;
@@ -123,6 +131,14 @@ export function mountWidget(definition, el, { project, config = null, persist, s
     // for the handful of page-level actions it triggers rather than reaching
     // out to main.js's internals itself.
     shell,
+
+    // Unlike shell, every widget gets this -- Text, Title and Notepad all
+    // need to know whether the grid is in edit mode (each reacts to it
+    // differently: Text/Title are only editable while it's on, Notepad
+    // never gates on it at all), so this is a narrow, read-only view of the
+    // same state main.js already tracks for the floating edit bar, handed
+    // out unconditionally rather than restricted the way host.shell is.
+    editMode,
 
     save(next) {
       host.config = next;

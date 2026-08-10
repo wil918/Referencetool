@@ -1,4 +1,8 @@
-/* The project's name, as the homepage's masthead.
+/* The project's name, as the homepage's masthead -- and, while the grid is
+ * in edit mode, the actual control for renaming the project: typing into it
+ * writes straight through to PUT /api/projects/<id>, the same route the
+ * Archive's own rename control uses. Outside edit mode it's read-only, same
+ * as text.js, gated through host.editMode.
  *
  * config: { showDescription: bool, typography, contentScale }
  *
@@ -10,6 +14,9 @@
 
 import { applyTypography } from "../typography.js";
 import { makeFormattable } from "../format-toolbar.js";
+import { insertPlainText } from "../text-utils.js";
+
+const RENAME_SAVE_DELAY = 400;
 
 export default {
   type: "title",
@@ -24,7 +31,9 @@ export default {
     wrap.className = "widget-title";
 
     const name = document.createElement("h2");
-    name.className = "widget-title-name";
+    name.className = "widget-title-name widget-editable-text";
+    name.contentEditable = "false";
+    name.spellcheck = false;
     name.textContent = host.project.title;
     wrap.appendChild(name);
 
@@ -45,6 +54,58 @@ export default {
 
     render();
 
+    // --- rename -- writes straight through to the project itself, not
+    // host.config (host.save/host.config are for this widget's own display
+    // settings; the title text belongs to the project record).
+
+    let renameTimer = null;
+
+    async function persistTitle() {
+      const res = await fetch(`/api/projects/${host.project.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: name.textContent, description: host.project.description || "" }),
+      });
+      if (!res.ok) return; // e.g. emptied out entirely -- left as typed, retried on the next edit
+      const updated = await res.json();
+      host.project.title = updated.title;
+      document.title = updated.title;
+    }
+
+    function scheduleRename() {
+      clearTimeout(renameTimer);
+      renameTimer = setTimeout(() => {
+        renameTimer = null;
+        persistTitle();
+      }, RENAME_SAVE_DELAY);
+    }
+
+    name.addEventListener("paste", (event) => {
+      event.preventDefault();
+      insertPlainText(event.clipboardData.getData("text/plain"));
+      scheduleRename();
+    });
+
+    name.addEventListener("keydown", (event) => {
+      // A project name is one line -- Enter commits instead of inserting a
+      // newline the way text.js's does.
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      name.blur();
+    });
+
+    name.addEventListener("input", scheduleRename);
+    name.addEventListener("blur", () => {
+      clearTimeout(renameTimer);
+      renameTimer = null;
+      persistTitle();
+    });
+
+    const unsubscribeEditMode = host.editMode.subscribe((editing) => {
+      name.contentEditable = editing ? "true" : "false";
+    });
+    host.onDestroy(unsubscribeEditMode);
+
     makeFormattable(host, {
       get: () => {
         const config = host.config || {};
@@ -57,10 +118,19 @@ export default {
         host.save({ ...host.config, typography, contentScale });
         render();
       },
+      enabled: () => host.editMode.isEditing(),
     });
 
     return {
       destroy() {
+        // A rename made a moment before teardown is still an edit the user
+        // made -- flushed rather than dropped, same as registry.js's own
+        // config-save flush on destroy.
+        if (renameTimer) {
+          clearTimeout(renameTimer);
+          renameTimer = null;
+          persistTitle();
+        }
         wrap.remove();
       },
     };

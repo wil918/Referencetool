@@ -1,9 +1,9 @@
-/* The floating format toolbar -- one shared instance for the whole project
- * page, in the manner of Google Docs. A widget opts in by calling
- * makeFormattable(host, { get, set }) from its own create(); mousedown inside
- * that widget's host.el pins the toolbar above it (or below, if there's no
- * room above) and the toolbar edits only that widget from then on, until the
- * user clicks or focuses outside both the widget and the toolbar itself.
+/* The format toolbar -- one shared instance for the whole project page. A
+ * widget opts in by calling makeFormattable(host, { get, set }) from its own
+ * create(); mousedown inside that widget's host.el mounts these controls
+ * into the shared top bar's "format" section (top-bar.js) and the toolbar
+ * edits only that widget from then on, until the user clicks or focuses
+ * outside both the widget and the toolbar itself.
  *
  * `get()` returns { typography, contentScale } for the active widget and
  * `set(next)` is called with the same shape on every edit -- what a widget
@@ -16,6 +16,7 @@
  */
 
 import { FONT_OPTIONS, SIZE_OPTIONS } from "./typography.js";
+import { showSection, hideSection } from "./top-bar.js";
 
 let bar = null;
 let active = null; // { host, get, set } for whichever widget is pinned
@@ -35,8 +36,7 @@ function build() {
   if (bar) return;
 
   bar = document.createElement("div");
-  bar.className = "format-toolbar";
-  bar.hidden = true;
+  bar.className = "format-toolbar-fields";
   // onOutside (below) already whitelists anything inside `bar`, so this
   // isn't load-bearing for that check -- it just keeps a mousedown on the
   // toolbar's own controls from bubbling any further than the toolbar.
@@ -113,7 +113,6 @@ function build() {
   bar.appendChild(divider());
   bar.appendChild(scaleInput);
   bar.appendChild(clearBtn);
-  document.body.appendChild(bar);
 
   familySelect.addEventListener("change", () => emit({ family: familySelect.value || undefined }));
   sizeSelect.addEventListener("change", () =>
@@ -178,26 +177,6 @@ function refresh() {
   scaleInput.value = contentScale || 1;
 }
 
-function position() {
-  if (!active) return;
-  const rect = active.host.el.getBoundingClientRect();
-  const barRect = bar.getBoundingClientRect();
-  const gap = 8;
-
-  let top = rect.top - barRect.height - gap;
-  if (top < gap) top = rect.bottom + gap; // no room above -- flip below
-
-  let left = rect.left + rect.width / 2 - barRect.width / 2;
-  left = Math.min(Math.max(gap, left), window.innerWidth - barRect.width - gap);
-
-  bar.style.top = `${Math.max(gap, top)}px`;
-  bar.style.left = `${left}px`;
-}
-
-function onReposition() {
-  position();
-}
-
 function onOutside(event) {
   if (!active) return;
   if (bar.contains(event.target) || active.host.el.contains(event.target)) return;
@@ -207,9 +186,7 @@ function onOutside(event) {
 function close() {
   if (!active) return;
   active = null;
-  bar.hidden = true;
-  window.removeEventListener("scroll", onReposition, true);
-  window.removeEventListener("resize", onReposition);
+  hideSection("format");
   document.removeEventListener("mousedown", onOutside, true);
 }
 
@@ -217,18 +194,20 @@ function activate(host, get, set) {
   build();
   if (active && active.host !== host) close();
   active = { host, get, set };
-  bar.hidden = false;
   refresh();
-  position();
-  window.addEventListener("scroll", onReposition, true);
-  window.addEventListener("resize", onReposition);
+  showSection("format", bar);
   document.addEventListener("mousedown", onOutside, true);
 }
 
 /** Opt a widget into the shared toolbar. See the module comment for the shape
- * of `get`/`set`. */
-export function makeFormattable(host, { get, set }) {
-  const onMouseDown = () => activate(host, get, set);
+ * of `get`/`set`. `enabled`, if given, is checked on every mousedown -- Text
+ * and Title only allow formatting while host.editMode says the grid is being
+ * edited; Notepad passes nothing and stays always-on. */
+export function makeFormattable(host, { get, set, enabled }) {
+  const onMouseDown = () => {
+    if (enabled && !enabled()) return;
+    activate(host, get, set);
+  };
   host.el.addEventListener("mousedown", onMouseDown);
   host.onDestroy(() => {
     host.el.removeEventListener("mousedown", onMouseDown);

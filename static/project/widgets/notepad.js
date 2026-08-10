@@ -1,14 +1,8 @@
-/* A user text widget -- a plain-text note, formatted through the shared
- * typography contract and nothing else. contenteditable, but HTML is never
- * allowed in: paste is intercepted down to plain text and Enter inserts a
- * literal "\n" text node rather than letting the browser split the element
- * into <div>s, so host.config.content is always a plain string that round
- * trips through el.textContent exactly.
- *
- * Editable only while the grid is in edit mode (host.editMode) -- outside
- * that, the widget is read-only, the mirror image of Notepad, which is
- * always editable. See CLAUDE.md's widget contract for why this is gated
- * through host.editMode rather than each widget guessing at page state.
+/* A sticky note -- unlike text.js and title.js, this one is never gated to
+ * edit mode: it's editable and formattable right on the plain homepage,
+ * exactly like text.js used to behave before Text and Title moved to
+ * edit-mode-only. Notepad exists so there's still a widget type for jotting
+ * things down without opening layout editing at all.
  *
  * config: { content, typography, contentScale }
  */
@@ -18,26 +12,21 @@ import { makeFormattable } from "../format-toolbar.js";
 import { insertPlainText } from "../text-utils.js";
 
 export default {
-  type: "text",
-  label: "Text",
+  type: "notepad",
+  label: "Notepad",
   container: false,
   permanent: false,
-  defaultSize: { w: 4, h: 2 },
+  defaultSize: { w: 4, h: 3 },
   minSize: { w: 1, h: 1 },
 
   create(host) {
     const el = document.createElement("div");
-    el.className = "widget-text widget-editable-text";
-    el.contentEditable = "false";
+    el.className = "widget-notepad widget-editable-text";
+    el.contentEditable = "true";
     el.spellcheck = false;
-    el.dataset.placeholder = "Type something…";
+    el.dataset.placeholder = "Jot something down…";
     el.textContent = host.config?.content || "";
     host.el.appendChild(el);
-
-    const unsubscribeEditMode = host.editMode.subscribe((editing) => {
-      el.contentEditable = editing ? "true" : "false";
-    });
-    host.onDestroy(unsubscribeEditMode);
 
     function render() {
       applyTypography(host.el, host.config?.typography, host.config?.contentScale);
@@ -65,13 +54,14 @@ export default {
     el.addEventListener("input", persist);
     el.addEventListener("blur", persist);
 
+    // No `enabled` guard, unlike text.js/title.js -- the toolbar activates on
+    // click whether or not the grid is in edit mode.
     makeFormattable(host, {
       get: () => ({ typography: host.config?.typography, contentScale: host.config?.contentScale }),
       set: ({ typography, contentScale }) => {
         host.save({ ...host.config, typography, contentScale });
         render();
       },
-      enabled: () => host.editMode.isEditing(),
     });
 
     return {

@@ -328,11 +328,12 @@ export function createGrid(container, options = {}) {
     if (!editing || gesture || !event.isPrimary || event.button !== 0) return;
     // The remove and shadow-toggle buttons are click targets, not drag
     // handles -- capturing the pointer here would swallow their click before
-    // it fires. The settings widget's own open button joins them: it stays
-    // hit-testable while editing (style.css) so Add Widget is still reachable,
-    // and needs the same exclusion so that reopening it isn't swallowed by a
-    // drag gesture the way a plain click on any other widget's content would be.
-    if (event.target.closest(".widget-remove, .widget-shadow-toggle, .widget-settings-btn")) return;
+    // it fires. Text/Title/Notepad's own editable content joins them: it
+    // stays hit-testable while editing (style.css's :has(.widget-editable-text)
+    // exemption) so it can be clicked into and typed in, and needs the same
+    // exclusion so that placing a cursor or drag-selecting text isn't instead
+    // read as the start of a widget-move gesture.
+    if (event.target.closest(".widget-remove, .widget-shadow-toggle, .widget-editable-text")) return;
 
     const el = event.target.closest(".widget");
     if (!el) return;
@@ -456,6 +457,24 @@ export function createGrid(container, options = {}) {
     render();
   }
 
+  /* Where a widget dropped from the Add Widget dock at this viewport point
+   * would land, in cells -- the same pointer-to-cell math onPointerMove uses
+   * for a drag, just computed from a single point instead of a delta. */
+  function cellFromPoint(clientX, clientY, w, h) {
+    const cw = columnWidth();
+    const rect = container.getBoundingClientRect();
+    return {
+      x: clamp(Math.round((clientX - rect.left) / (cw + GAP)), 0, COLUMNS - w),
+      y: Math.max(0, Math.round((clientY - rect.top) / (ROW_HEIGHT + GAP))),
+    };
+  }
+
+  /** Whether `box` (a candidate new widget, not one already on the grid)
+   * would land on top of anything already there. */
+  function wouldFit(box) {
+    return !collides(box, items);
+  }
+
   function setEditing(next) {
     editing = Boolean(next);
     if (!editing && gesture) {
@@ -485,6 +504,8 @@ export function createGrid(container, options = {}) {
     setLayout,
     setEditing,
     isEditing: () => editing,
+    cellFromPoint,
+    wouldFit,
     refresh: () => render(),
     destroy,
   };
