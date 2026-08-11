@@ -1388,7 +1388,8 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
    inside a block of empty padding. */
 .widget-body:has(.widget-settings),
 .widget-body:has(.widget-exit),
-.widget-body:has(.widget-sidebar) {
+.widget-body:has(.widget-sidebar),
+.widget-body:has(.widget-folders) {
   padding: 0.35rem;
 }
 
@@ -1938,16 +1939,23 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
   height: 100%;
   align-items: center;
   justify-content: center;
-  gap: 0.4rem;
 }
-
-.widget-settings-btn { padding: 0.4rem 0.6rem; }
 
 /* Project Settings used to be a modal here (Edit Layout button, Add Widget
    list, Appearance form) -- see widgets/settings.js for why the gear now
    jumps straight into edit mode instead. Add Widget is the dock
    (.widget-dock-*  above); Appearance is .appearance-panel, a section of
    .project-top-bar above. */
+
+/* --- Project widget: folders (widgets/folders.js) ---
+   Same compact-button treatment as settings/exit/sidebar -- a 1x1 tile that
+   opens folders-panel.js's modal rather than holding any content itself. */
+.widget-folders {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+}
 
 /* --- Project widget: sidebar (widgets/sidebar.js) ---
    The grid tile is a compact button, styled the same way as the settings
