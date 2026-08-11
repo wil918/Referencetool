@@ -102,7 +102,9 @@ These are not preferences. Violating one means the change gets reverted.
 | `project/pages/*` | Hash-routed pages inside the shell: `grid-page.js` (the reference grid, used by both the project grid and folder pages), `canvas-page.js`, plus `analysis-panel.js`, `colour-panel.js` and `overlays.js` ported from `app.js`. |
 | `project/canvas/*` | The infinite canvas: `viewport.js` (single world transform, pan/zoom, screen↔world), `nodes.js` (reference/text/widget nodes, drag, lock, z-order), `edges.js` (one SVG inside the world layer, so edges need no separate projection), `store.js` (debounced per-node persistence), `palette.js` (how things get added). |
 
-Widgets so far: `title`, `text`, `notepad`, `settings`, `exit`, `canvas`, `sidebar`, `folders`, `grid-button`, `folder`, `colourspace`, `similarity`.
+Widgets so far: `title`, `notepad`, `settings`, `exit`, `canvas`, `sidebar`, `folders`, `grid-button`, `folder`, `colourspace`, `similarity`.
+
+**Two kinds of text, deliberately.** The canvas's own text node (`canvas_nodes.kind = "text"`, labelled **Simple text**) is plain: it inherits the project's typography and has no per-selection formatting. **Notepad** is the rich one — per-selection family, size, colour, bold, italic, underline and highlight through `rich-text.js`. This is a real distinction, not an oversight; do not add rich text to Simple text. There was once a third, a `text` widget, which was broken on the canvas and has been removed — don't reintroduce it.
 
 ### The 3D scenes
 
