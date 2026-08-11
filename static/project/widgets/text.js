@@ -1,21 +1,30 @@
-/* A user text widget -- a plain-text note, formatted through the shared
- * typography contract and nothing else. contenteditable, but HTML is never
- * allowed in: paste is intercepted down to plain text and Enter inserts a
- * literal "\n" text node rather than letting the browser split the element
- * into <div>s, so host.config.content is always a plain string that round
- * trips through el.textContent exactly.
+/* A user text widget -- formatted per-selection, Google-Docs style, through
+ * rich-text.js: highlight a range and only that range changes; the rest of
+ * the note is untouched. contentEditable, but raw HTML is never trusted in
+ * or out: paste is intercepted down to plain text, Enter inserts a literal
+ * "\n" text node rather than letting the browser split the element into
+ * <div>s, and host.config.content is always run through rich-text.js's
+ * sanitizeHtml before it's set via innerHTML or written back -- see that
+ * module for why this is also what makes old plain-text content (saved
+ * before this widget could format per-selection) load through the exact
+ * same path with no separate migration step.
  *
  * Editable only while the grid is in edit mode (host.editMode) -- outside
  * that, the widget is read-only, the mirror image of Notepad, which is
  * always editable. See CLAUDE.md's widget contract for why this is gated
  * through host.editMode rather than each widget guessing at page state.
  *
- * config: { content, typography, contentScale }
+ * config: { content, typography: { align }, contentScale }
+ *
+ * typography here only ever carries `align` now -- the other six fields
+ * (family/size/colour/bold/italic/underline) live inline in `content`
+ * itself, per selection, rather than as one setting for the whole widget.
  */
 
 import { applyTypography } from "../typography.js";
 import { makeFormattable } from "../format-toolbar.js";
 import { insertPlainText } from "../text-utils.js";
+import { sanitizeHtml, getSelectionStyle, applySelectionStyle, clearSelectionStyle } from "../rich-text.js";
 
 export default {
   type: "text",
@@ -31,7 +40,7 @@ export default {
     el.contentEditable = "false";
     el.spellcheck = false;
     el.dataset.placeholder = "Type something…";
-    el.textContent = host.config?.content || "";
+    el.innerHTML = sanitizeHtml(host.config?.content || "");
     host.el.appendChild(el);
 
     const unsubscribeEditMode = host.editMode.subscribe((editing) => {
@@ -40,13 +49,13 @@ export default {
     host.onDestroy(unsubscribeEditMode);
 
     function render() {
-      applyTypography(host.el, host.config?.typography, host.config?.contentScale);
+      applyTypography(host.el, { align: host.config?.typography?.align }, host.config?.contentScale);
     }
 
     render();
 
     function persist() {
-      host.save({ ...host.config, content: el.textContent });
+      host.save({ ...host.config, content: sanitizeHtml(el.innerHTML) });
     }
 
     el.addEventListener("paste", (event) => {
@@ -66,10 +75,25 @@ export default {
     el.addEventListener("blur", persist);
 
     makeFormattable(host, {
+      // Whole-widget: align + contentScale only, exactly as every widget
+      // that isn't rich-text-capable already works.
       get: () => ({ typography: host.config?.typography, contentScale: host.config?.contentScale }),
       set: ({ typography, contentScale }) => {
         host.save({ ...host.config, typography, contentScale });
         render();
+      },
+      // Per-selection: the six character-level fields, against this
+      // widget's own element.
+      richText: {
+        getSelectionStyle: () => getSelectionStyle(el),
+        applySelectionStyle: (patch) => {
+          applySelectionStyle(el, patch);
+          persist();
+        },
+        clearSelectionStyle: () => {
+          clearSelectionStyle(el);
+          persist();
+        },
       },
       enabled: () => host.editMode.isEditing(),
     });

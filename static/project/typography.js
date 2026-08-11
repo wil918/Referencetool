@@ -26,19 +26,20 @@ export const FONT_OPTIONS = [
   { value: "mono", label: "Mono", family: "var(--mono)" },
 ];
 
-// A small, sane list rather than a size field free for any number -- named
-// steps read better in a toolbar than a text box, and these double as
-// several widgets' own hard-coded defaults (2.75rem is title.js's), so
-// picking the step that matches a widget's current look is a no-op.
-export const SIZE_OPTIONS = [
-  { value: 0.75, label: "Small" },
-  { value: 0.9, label: "Normal" },
-  { value: 1.1, label: "Medium" },
-  { value: 1.5, label: "Large" },
-  { value: 2, label: "X-Large" },
-  { value: 2.75, label: "XX-Large" },
-  { value: 3.5, label: "Huge" },
-];
+// Sizes are stored and computed in rem throughout (matches every other part
+// of this contract -- applyTypography below, the CSS custom properties), but
+// the format toolbar's number box reads and writes points, Google Docs'
+// convention, via the standard 96dpi px<->pt math with 1rem = 16px. Not
+// arbitrary: 0.9rem (the old "Normal" preset) lands on 11pt, the same
+// default Docs itself uses, so existing content's sizes read naturally
+// rather than landing on odd numbers.
+export function remToPt(rem) {
+  return Math.round(rem * 16 * 0.75);
+}
+
+export function ptToRem(pt) {
+  return pt / 0.75 / 16;
+}
 
 function fontFamilyValue(value) {
   return FONT_OPTIONS.find((option) => option.value === value)?.family || null;

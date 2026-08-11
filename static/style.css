@@ -302,6 +302,7 @@ body.project-shell main { max-width: none; margin: 0; padding: 0.75rem; }
 
 input[type="text"],
 input[type="search"],
+input[type="number"],
 textarea,
 select {
   font-family: var(--sans);
@@ -327,6 +328,7 @@ input[type="search"] {
 
 input[type="text"]:focus,
 input[type="search"]:focus,
+input[type="number"]:focus,
 textarea:focus,
 select:focus {
   outline: none;
@@ -1634,6 +1636,16 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
 .format-toolbar-fields select {
   padding: 0.4rem 0.5rem;
   font-size: 0.78rem;
+}
+
+/* The font-size number box -- narrow, just wide enough for a couple of
+   digits plus the native spinner, matching Google Docs' own compact size
+   field rather than a full-width input. */
+.format-toolbar-size {
+  width: 3.2rem;
+  padding: 0.4rem 0.4rem;
+  font-size: 0.78rem;
+  text-align: center;
 }
 
 .format-toolbar-fields input[type="color"] {

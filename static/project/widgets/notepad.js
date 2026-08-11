@@ -4,12 +4,18 @@
  * edit-mode-only. Notepad exists so there's still a widget type for jotting
  * things down without opening layout editing at all.
  *
- * config: { content, typography, contentScale }
+ * Formatted per-selection through rich-text.js, same as text.js -- see that
+ * widget's own comment for the full rationale (sanitizeHtml, why paste/Enter
+ * still force plain text, why old plain-text content needs no separate
+ * migration path).
+ *
+ * config: { content, typography: { align }, contentScale }
  */
 
 import { applyTypography } from "../typography.js";
 import { makeFormattable } from "../format-toolbar.js";
 import { insertPlainText } from "../text-utils.js";
+import { sanitizeHtml, getSelectionStyle, applySelectionStyle, clearSelectionStyle } from "../rich-text.js";
 
 export default {
   type: "notepad",
@@ -25,17 +31,17 @@ export default {
     el.contentEditable = "true";
     el.spellcheck = false;
     el.dataset.placeholder = "Jot something down…";
-    el.textContent = host.config?.content || "";
+    el.innerHTML = sanitizeHtml(host.config?.content || "");
     host.el.appendChild(el);
 
     function render() {
-      applyTypography(host.el, host.config?.typography, host.config?.contentScale);
+      applyTypography(host.el, { align: host.config?.typography?.align }, host.config?.contentScale);
     }
 
     render();
 
     function persist() {
-      host.save({ ...host.config, content: el.textContent });
+      host.save({ ...host.config, content: sanitizeHtml(el.innerHTML) });
     }
 
     el.addEventListener("paste", (event) => {
@@ -61,6 +67,17 @@ export default {
       set: ({ typography, contentScale }) => {
         host.save({ ...host.config, typography, contentScale });
         render();
+      },
+      richText: {
+        getSelectionStyle: () => getSelectionStyle(el),
+        applySelectionStyle: (patch) => {
+          applySelectionStyle(el, patch);
+          persist();
+        },
+        clearSelectionStyle: () => {
+          clearSelectionStyle(el);
+          persist();
+        },
       },
     });
 

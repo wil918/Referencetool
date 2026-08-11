@@ -8,19 +8,34 @@
  * `get()` returns { typography, contentScale } for the active widget and
  * `set(next)` is called with the same shape on every edit -- what a widget
  * does with it (host.save, then re-apply its own styles for the live
- * preview) is the widget's business, not this module's.
+ * preview) is the widget's business, not this module's. That whole-widget
+ * channel is still exactly how Title works (align + contentScale are the
+ * only fields it has), and it's still how align + contentScale work for
+ * every widget -- alignment is paragraph-level and content-scale is this
+ * app's own zoom control, neither is a per-character property.
+ *
+ * Text and Notepad additionally pass `richText` -- { getSelectionStyle,
+ * applySelectionStyle, clearSelectionStyle }, built from rich-text.js
+ * against the widget's own element -- opting the other six fields (family,
+ * size, colour, bold, italic, underline) into per-selection formatting
+ * instead: highlight a range and only that range changes; a collapsed
+ * cursor sets the style new characters are typed in. See rich-text.js for
+ * the mechanics. Title never passes this, so its six fields keep going
+ * through get/set exactly as before -- zero change to how it behaves.
  *
  * One instance rather than one per widget: only one widget can be "being
  * edited" at a time, and session 11's canvas text node is meant to reuse
  * this exact module rather than growing a second toolbar.
  */
 
-import { FONT_OPTIONS, SIZE_OPTIONS } from "./typography.js";
+import { FONT_OPTIONS, remToPt, ptToRem } from "./typography.js";
 import { showSection, hideSection } from "./top-bar.js";
 
+const RICH_FIELDS = ["family", "size", "colour", "bold", "italic", "underline"];
+
 let bar = null;
-let active = null; // { host, get, set } for whichever widget is pinned
-let familySelect, sizeSelect, colourInput, boldBtn, italicBtn, underlineBtn;
+let active = null; // { host, get, set, richText } for whichever widget is pinned
+let familySelect, sizeInput, colourInput, boldBtn, italicBtn, underlineBtn;
 let alignBtns, scaleInput, clearBtn;
 
 function fieldButton(label, title) {
@@ -55,18 +70,17 @@ function build() {
     familySelect.appendChild(option);
   }
 
-  sizeSelect = document.createElement("select");
-  sizeSelect.title = "Font size";
-  const defaultSizeOption = document.createElement("option");
-  defaultSizeOption.value = "";
-  defaultSizeOption.textContent = "Default size";
-  sizeSelect.appendChild(defaultSizeOption);
-  for (const { value, label } of SIZE_OPTIONS) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = label;
-    sizeSelect.appendChild(option);
-  }
+  // A typeable number, not a preset dropdown -- Google Docs' own font-size
+  // control. Displayed/edited in points (typography.js's remToPt/ptToRem);
+  // stored as rem internally, same as everything else in this system.
+  sizeInput = document.createElement("input");
+  sizeInput.type = "number";
+  sizeInput.min = "6";
+  sizeInput.max = "200";
+  sizeInput.step = "1";
+  sizeInput.placeholder = "pt";
+  sizeInput.title = "Font size (pt)";
+  sizeInput.className = "format-toolbar-size";
 
   colourInput = document.createElement("input");
   colourInput.type = "color";
@@ -102,7 +116,7 @@ function build() {
   };
 
   bar.appendChild(familySelect);
-  bar.appendChild(sizeSelect);
+  bar.appendChild(sizeInput);
   bar.appendChild(colourInput);
   bar.appendChild(divider());
   bar.appendChild(boldBtn);
@@ -115,15 +129,16 @@ function build() {
   bar.appendChild(clearBtn);
 
   familySelect.addEventListener("change", () => emit({ family: familySelect.value || undefined }));
-  sizeSelect.addEventListener("change", () =>
-    emit({ size: sizeSelect.value ? Number(sizeSelect.value) : undefined })
+  // "change" rather than "input": the native spinner buttons still fire it
+  // immediately (live feedback for those), but typing digits doesn't apply
+  // an intermediate size on every keystroke before the number is finished.
+  sizeInput.addEventListener("change", () =>
+    emit({ size: sizeInput.value ? ptToRem(Number(sizeInput.value)) : undefined })
   );
   colourInput.addEventListener("input", () => emit({ colour: colourInput.value }));
-  boldBtn.addEventListener("click", () => emit({ bold: !current().typography?.bold || undefined }));
-  italicBtn.addEventListener("click", () => emit({ italic: !current().typography?.italic || undefined }));
-  underlineBtn.addEventListener("click", () =>
-    emit({ underline: !current().typography?.underline || undefined })
-  );
+  boldBtn.addEventListener("click", () => emit({ bold: !activeStyle().bold || undefined }));
+  italicBtn.addEventListener("click", () => emit({ italic: !activeStyle().italic || undefined }));
+  underlineBtn.addEventListener("click", () => emit({ underline: !activeStyle().underline || undefined }));
   for (const { btn, value } of alignBtns) {
     btn.addEventListener("click", () => emit({ align: value }));
   }
@@ -134,7 +149,11 @@ function build() {
   });
   clearBtn.addEventListener("click", () => {
     if (!active) return;
-    active.set({ typography: {}, contentScale: undefined });
+    // Selection-scoped for rich-text widgets (consistent with the rest of
+    // this module for them), whole-widget for Title -- same split as
+    // everywhere else here.
+    if (active.richText) active.richText.clearSelectionStyle();
+    else active.set({ typography: {}, contentScale: undefined });
     refresh();
   });
 }
@@ -143,14 +162,29 @@ function current() {
   return active ? active.get() || {} : {};
 }
 
-// Merge one field's change into the active widget's typography and hand the
-// whole thing back through `set` -- the widget owns turning that into a
-// save plus a live re-render, this module only ever knows the shape of the
-// typography object itself.
+// The six character-level fields' current state -- from the live selection
+// for a rich-text widget, from the whole-widget typography object
+// otherwise (Title). Used by refresh() and by the toggle buttons, which
+// need to know the current state to know which way to flip.
+function activeStyle() {
+  if (active?.richText) return active.richText.getSelectionStyle();
+  return current().typography || {};
+}
+
+// Routes a field's change to whichever channel owns it: the six
+// character-level fields go to the active widget's selection when it's a
+// rich-text widget, everything else (and every field, for a non-rich-text
+// widget like Title) goes through the whole-widget get/set this module has
+// always used.
 function emit(patch) {
   if (!active) return;
-  const typography = { ...(current().typography || {}), ...patch };
-  active.set({ typography, contentScale: current().contentScale });
+  const isRichField = Object.keys(patch).some((key) => RICH_FIELDS.includes(key));
+  if (isRichField && active.richText) {
+    active.richText.applySelectionStyle(patch);
+  } else {
+    const typography = { ...(current().typography || {}), ...patch };
+    active.set({ typography, contentScale: current().contentScale });
+  }
   refresh();
 }
 
@@ -164,13 +198,14 @@ function inkFallback() {
 }
 
 function refresh() {
+  const style = activeStyle();
   const { typography = {}, contentScale } = current();
-  familySelect.value = typography.family || "";
-  sizeSelect.value = typography.size || "";
-  colourInput.value = typography.colour || inkFallback();
-  boldBtn.classList.toggle("is-active", Boolean(typography.bold));
-  italicBtn.classList.toggle("is-active", Boolean(typography.italic));
-  underlineBtn.classList.toggle("is-active", Boolean(typography.underline));
+  familySelect.value = style.family || "";
+  sizeInput.value = style.size ? remToPt(style.size) : "";
+  colourInput.value = style.colour || inkFallback();
+  boldBtn.classList.toggle("is-active", Boolean(style.bold));
+  italicBtn.classList.toggle("is-active", Boolean(style.italic));
+  underlineBtn.classList.toggle("is-active", Boolean(style.underline));
   for (const { btn, value } of alignBtns) {
     btn.classList.toggle("is-active", (typography.align || "left") === value);
   }
@@ -183,30 +218,46 @@ function onOutside(event) {
   close();
 }
 
+// Keeps the toolbar's pressed/value state in sync as the cursor or
+// selection moves inside a rich-text widget by anything other than the
+// mousedown that opened the toolbar (arrow keys, click-drag then release,
+// clicking to a new spot without leaving the widget).
+function onSelectionChange() {
+  if (!active || !active.richText) return;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return;
+  if (!active.host.el.contains(sel.getRangeAt(0).commonAncestorContainer)) return;
+  refresh();
+}
+
 function close() {
   if (!active) return;
+  const hadRichText = Boolean(active.richText);
   active = null;
   hideSection("format");
   document.removeEventListener("mousedown", onOutside, true);
+  if (hadRichText) document.removeEventListener("selectionchange", onSelectionChange);
 }
 
-function activate(host, get, set) {
+function activate(host, get, set, richText) {
   build();
   if (active && active.host !== host) close();
-  active = { host, get, set };
+  active = { host, get, set, richText };
   refresh();
   showSection("format", bar);
   document.addEventListener("mousedown", onOutside, true);
+  if (richText) document.addEventListener("selectionchange", onSelectionChange);
 }
 
-/** Opt a widget into the shared toolbar. See the module comment for the shape
- * of `get`/`set`. `enabled`, if given, is checked on every mousedown -- Text
- * and Title only allow formatting while host.editMode says the grid is being
- * edited; Notepad passes nothing and stays always-on. */
-export function makeFormattable(host, { get, set, enabled }) {
+/** Opt a widget into the shared toolbar. See the module comment for the
+ * shape of `get`/`set`/`richText`. `enabled`, if given, is checked on every
+ * mousedown -- Text and Title only allow formatting while host.editMode
+ * says the grid is being edited; Notepad passes nothing and stays
+ * always-on. */
+export function makeFormattable(host, { get, set, enabled, richText }) {
   const onMouseDown = () => {
     if (enabled && !enabled()) return;
-    activate(host, get, set);
+    activate(host, get, set, richText);
   };
   host.el.addEventListener("mousedown", onMouseDown);
   host.onDestroy(() => {
