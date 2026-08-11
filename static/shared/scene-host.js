@@ -43,14 +43,20 @@ export function createSceneHost(el, options = {}) {
   const theme = options.theme || currentTheme();
 
   /* `background: null` leaves the canvas transparent, so the scene sits on
-   * whatever the page behind it is -- which is what an embedded widget wants,
-   * since a project may have set its own background colour and a pane of the
-   * graph theme's grey laid over it would read as a card. Left out, the
-   * theme's own background is used, as the full-page views always have. */
+   * whatever the page behind it is -- which is what an embedded widget wants
+   * by default, since a pane of the graph theme's grey laid over a project's
+   * own background would read as a card. Left out entirely, the theme's own
+   * background is used, as the full-page views always have (graph.js never
+   * passes this option). A third case -- a colour value, neither undefined
+   * nor null -- is an explicit override: project/scene-widget.js passes the
+   * project's own 3D-background setting here when one is saved, since that
+   * colour lives in project_settings, not CSS, and the scene can't inherit
+   * it the way the DOM behind a transparent canvas can. */
   const transparent = options.background === null;
+  const backgroundColor = options.background ?? theme.background;
 
   const scene = new THREE.Scene();
-  if (!transparent) scene.background = new THREE.Color(theme.background);
+  if (!transparent) scene.background = new THREE.Color(backgroundColor);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: transparent });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO));

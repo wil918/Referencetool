@@ -39,6 +39,25 @@ const DEFAULT_PT = 11;
 
 let bar = null;
 let active = null; // { host, get, set, richText } for whichever widget is pinned
+
+// main.js listens here to keep the appearance section out of the bar while a
+// widget is being formatted -- project-wide defaults aren't what you want
+// while editing one widget's own typography. Edge-triggered like
+// registry.js's host.editMode: a subscriber only cares whether *something*
+// is pinned, not which widget or what changed about it.
+const activeSubscribers = new Set();
+function notifyActiveChange() {
+  const isActive = Boolean(active);
+  for (const fn of activeSubscribers) fn(isActive);
+}
+
+/** `fn(true)` when some widget becomes the active formatting target, `fn(false)`
+ * when it stops being one. Fires once immediately with the current state. */
+export function onActiveWidgetChange(fn) {
+  activeSubscribers.add(fn);
+  fn(Boolean(active));
+  return () => activeSubscribers.delete(fn);
+}
 let familySelect, sizeInput, sizeDropdown, colourInput, boldBtn, italicBtn, underlineBtn;
 let alignBtns, scaleInput, clearBtn;
 
@@ -322,6 +341,7 @@ function close() {
   hideSection("format");
   document.removeEventListener("mousedown", onOutside, true);
   if (hadRichText) document.removeEventListener("selectionchange", onSelectionChange);
+  notifyActiveChange();
 }
 
 function activate(host, get, set, richText) {
@@ -334,6 +354,7 @@ function activate(host, get, set, richText) {
   showSection("format", bar);
   document.addEventListener("mousedown", onOutside, true);
   if (richText) document.addEventListener("selectionchange", onSelectionChange);
+  notifyActiveChange();
 }
 
 /** Opt a widget into the shared toolbar. See the module comment for the

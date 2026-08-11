@@ -9,6 +9,7 @@ import { createGrid } from "./grid.js";
 import { all as allWidgetDefinitions, definitionFor, mountWidget } from "./registry.js";
 import { createWidgetDock } from "./widget-dock.js";
 import { createAppearancePanel } from "./appearance-panel.js";
+import { onActiveWidgetChange } from "./format-toolbar.js";
 import { createGridPage } from "./pages/grid-page.js";
 import { createCanvasPage } from "./pages/canvas-page.js";
 import * as folders from "./folders.js";
@@ -692,10 +693,24 @@ async function init() {
     wouldFit: grid.wouldFit,
   });
   const appearancePanel = createAppearancePanel({ projectId });
+
+  // Appearance shows only while editing *and* no widget is pinned to the
+  // format toolbar -- project-wide defaults aren't what you want while
+  // formatting one widget (format-toolbar.js's own section handles that
+  // case instead; top-bar.js already shows each section independently, so
+  // this only has to decide when appearance's is one of them).
+  let widgetActive = false;
+  function syncAppearancePanel() {
+    if (editMode.isEditing() && !widgetActive) appearancePanel.show();
+    else appearancePanel.hide();
+  }
   editMode.subscribe((editing) => {
     dock.setVisible(editing);
-    if (editing) appearancePanel.show();
-    else appearancePanel.hide();
+    syncAppearancePanel();
+  });
+  onActiveWidgetChange((isActive) => {
+    widgetActive = isActive;
+    syncAppearancePanel();
   });
 
   routeFromHash();

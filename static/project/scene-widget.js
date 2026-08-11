@@ -106,16 +106,19 @@ export function createSceneWidget(host, { load, build }) {
     status.hidden = true;
     status.innerHTML = "";
 
-    // Transparent rather than the graph pages' opaque theme colour, so the
-    // scene sits on the project's own background -- including a custom one --
-    // instead of laying a pale rectangle over it. On a project that hasn't
-    // changed its background the two are the same colour anyway, which is
-    // what makes an embedded scene read as the same picture as the full-page
-    // view it came from.
+    // Transparent by default, rather than the graph pages' opaque theme
+    // colour, so the scene sits on the project's own background instead of
+    // laying a pale rectangle over it. A project can also give the 3D scenes
+    // their own background distinct from the page (project/appearance.js's
+    // graphBg3d, read here rather than from CSS -- see that file's module
+    // comment for why); when it has, that colour is used instead of staying
+    // transparent. Read once, here, rather than on every frame -- never
+    // getComputedStyle inside the render loop.
     // Held locally until it is finished and running. destroy() can land at any
     // await in here, and it can only tear down what it has been given -- so
     // anything half-built is this function's own to clean up, below.
-    const scene = createSceneHost(mount, { background: null });
+    const graphBg3d = window.projectAppearance?.get()?.graphBg3d;
+    const scene = createSceneHost(mount, { background: graphBg3d || null });
     let built;
     try {
       built = (await build({ sceneHost: scene, data: outcome.data, chrome, setCaption })) || {};
