@@ -86,8 +86,20 @@ def _cluster_colors(image_paths):
     return average, dominant
 
 
-def build_graph():
+def build_graph(reference_ids=None):
+    """The whole archive laid out, or -- given `reference_ids` -- only those
+    references, clustered and connected among themselves.
+
+    A scoped graph is the same graph one level down, not a filtered view of
+    the archive's: clusters are found within the subset and the planes are
+    coloured from the subset's own images, so a project reads as its own
+    visual grouping rather than as whichever archive-wide clusters it happens
+    to land in.
+    """
     refs = db.list_references()
+    if reference_ids is not None:
+        wanted = set(reference_ids)
+        refs = [r for r in refs if r["id"] in wanted]
     if len(refs) < 2:
         return {"nodes": [], "edges": [], "planes": [], "cluster_count": 0}
 
@@ -96,13 +108,35 @@ def build_graph():
     result = collection.get(ids=list(ref_by_id.keys()), include=["embeddings"])
     ids = result["ids"]
     vectors = np.array(result["embeddings"])
+    # Nothing in this set is embedded (a project of text notes, or an index
+    # that hasn't caught up) -- there is no vector to cluster, and k-means
+    # indexes the empty result as 2-D and raises rather than returning nothing.
+    if not ids:
+        return {"nodes": [], "edges": [], "planes": [], "cluster_count": 0}
 
+    # //8 floors to 0 below eight references, so the `or` is what keeps a
+    # small set (a five-reference project) at MIN_CLUSTERS instead of asking
+    # for zero clusters. _kmeans then clamps k to the number of vectors, and
+    # a cluster that ends up with no members never becomes a plane -- planes
+    # are built from the labels that were actually assigned.
     k = max(MIN_CLUSTERS, min(MAX_CLUSTERS, len(ids) // 8 or MIN_CLUSTERS))
     with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
         labels = _kmeans(vectors, k)
     cluster_of = dict(zip(ids, labels.tolist()))
 
     scores = db.list_similarity_scores()
+    if reference_ids is not None:
+        # Only pairs with both endpoints inside the subset. Dropping them here
+        # rather than at draw time also fixes the cross-cluster cutoff below,
+        # which is a fraction of `scores`: taken over the whole archive it
+        # would spend a small project's entire allowance on pairs that aren't
+        # in it, and the scoped graph would come out with no long threads.
+        laid_out = set(ids)
+        scores = [
+            row for row in scores
+            if row["reference_id_a"] in laid_out and row["reference_id_b"] in laid_out
+        ]
+
     adjacency = {i: [] for i in ids}
     for row in scores:
         a, b, s = row["reference_id_a"], row["reference_id_b"], row["score"]

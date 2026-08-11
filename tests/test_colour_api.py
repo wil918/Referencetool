@@ -247,6 +247,48 @@ def test_map_endpoint_accepts_the_black_and_white_flag(client, archive):
     assert plain != filtered
 
 
+def test_project_map_endpoint_places_only_that_project(client, archive):
+    mine = add_image(archive, "mine", [(RED, 0.6), (BLUE, 0.4)])
+    add_image(archive, "elsewhere", [(BLACK, 0.5), (CREAM, 0.5)])
+    colour.backfill()
+
+    pid = client.post("/api/projects", json={"title": "P"}).get_json()["id"]
+    client.post(f"/api/projects/{pid}/references", json={"reference_id": mine})
+
+    body = client.get(f"/api/projects/{pid}/colour/map").get_json()
+    assert [n["id"] for n in body["nodes"]] == [mine]
+    # Same envelope as the archive map, so the same page can draw either.
+    assert len(body["hue_ticks"]) == colour.HUE_TICKS
+    assert body["radius"] > 0 and body["height"] > 0
+    # Coverage is the archive's, deliberately: the backfill it prompts is too.
+    assert body["coverage"] == client.get("/api/colour/map").get_json()["coverage"]
+
+
+def test_project_map_endpoint_accepts_the_black_and_white_flag(client, archive):
+    ref_id = add_image(archive, "on_white", [(RED, 0.3), ((250, 250, 250), 0.7)])
+    colour.backfill()
+    pid = client.post("/api/projects", json={"title": "P"}).get_json()["id"]
+    client.post(f"/api/projects/{pid}/references", json={"reference_id": ref_id})
+
+    plain = client.get(f"/api/projects/{pid}/colour/map").get_json()["nodes"]
+    filtered = client.get(f"/api/projects/{pid}/colour/map?exclude_black_white=1").get_json()["nodes"]
+    assert [n["palette"] for n in plain] != [n["palette"] for n in filtered]
+
+
+def test_project_map_endpoint_404s_for_an_unknown_project(client, archive):
+    assert client.get("/api/projects/nope/colour/map").status_code == 404
+
+
+def test_an_empty_project_maps_to_an_empty_cylinder(client, archive):
+    add_image(archive, "elsewhere", [(RED, 1.0)])
+    colour.backfill()
+    pid = client.post("/api/projects", json={"title": "P"}).get_json()["id"]
+
+    body = client.get(f"/api/projects/{pid}/colour/map").get_json()
+    assert body["nodes"] == []
+    assert len(body["hue_ticks"]) == colour.HUE_TICKS
+
+
 # --- API --------------------------------------------------------------------
 
 

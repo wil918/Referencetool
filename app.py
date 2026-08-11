@@ -42,6 +42,9 @@ PROJECT_BAR_PREVIEW_LIMIT = 30
 # Deleted reference files are moved here (next to references/) instead of
 # being unlinked, so deleting from the Archive stays recoverable on disk.
 DELETED_DIR_NAME = "deleted"
+# Shared by the archive and project graph routes so the two can't drift into
+# telling the user to do different things about the same missing table.
+NO_SIMILARITY_SCORES = "No similarity scores saved yet -- run Calculate Similarity Scores in Settings first."
 
 # Widget types that can hold other widgets. Nesting is one level deep by
 # design, so this set does double duty: it's both what may be a parent and what
@@ -869,8 +872,25 @@ def api_similarity_list():
 @app.get("/api/similarity/graph")
 def api_similarity_graph():
     if not db.list_similarity_scores():
-        return jsonify({"error": "No similarity scores saved yet -- run Calculate Similarity Scores in Settings first."}), 400
+        return jsonify({"error": NO_SIMILARITY_SCORES}), 400
     return jsonify(graph_layout.build_graph())
+
+
+@app.get("/api/projects/<project_id>/similarity/graph")
+def api_project_similarity_graph(project_id):
+    """The same graph as /api/similarity/graph, over one project's own
+    references -- clustered among themselves, and threaded only by the scores
+    whose both endpoints are in the project.
+
+    The scores are archive-wide, so the emptiness check is too: a project
+    can't have its own scores to be missing, and the fix is the same
+    archive-wide Calculate Similarity Scores run either way.
+    """
+    _require_project(project_id)
+    if not db.list_similarity_scores():
+        return jsonify({"error": NO_SIMILARITY_SCORES}), 400
+    ids = [r["id"] for r in db.list_project_references(project_id)]
+    return jsonify(graph_layout.build_graph(reference_ids=ids))
 
 
 @app.get("/media/<ref_id>")
@@ -1003,8 +1023,27 @@ def api_colour_map():
     the Project Space sidebar can't drift into disagreeing about which
     references are close in colour.
     """
+    return jsonify(_colour_map_response())
+
+
+@app.get("/api/projects/<project_id>/colour/map")
+def api_project_colour_map(project_id):
+    """The same cylinder as /api/colour/map, drawn from one project's own
+    references -- see colour.colour_map() on why a scoped map ranks radius
+    within its own subset rather than against the archive.
+
+    `coverage` stays archive-wide, because the backfill it exists to prompt
+    is archive-wide: there is one Analyse Colour button, in Settings, and it
+    works through every unanalysed image regardless of project.
+    """
+    _require_project(project_id)
+    ids = [r["id"] for r in db.list_project_references(project_id)]
+    return jsonify(_colour_map_response(include_ids=ids))
+
+
+def _colour_map_response(include_ids=None):
     exclude_black_white = request.args.get("exclude_black_white") in ("1", "true", "yes")
-    layout = colour.colour_map(exclude_black_white=exclude_black_white)
+    layout = colour.colour_map(exclude_black_white=exclude_black_white, include_ids=include_ids)
 
     refs = {r["id"]: r for r in db.get_references_by_ids([n["id"] for n in layout["nodes"]])}
     nodes = []
@@ -1014,13 +1053,13 @@ def api_colour_map():
             continue  # deleted between analysis and now
         nodes.append({**_ref_summary(ref), **node})
 
-    return jsonify({
+    return {
         "nodes": nodes,
         "radius": layout["radius"],
         "height": layout["height"],
         "hue_ticks": layout["hue_ticks"],
         "coverage": colour.coverage(),
-    })
+    }
 
 
 @app.post("/api/colour/search")

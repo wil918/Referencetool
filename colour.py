@@ -795,13 +795,16 @@ def map_colour(profile):
     )
 
 
-def colour_map(exclude_black_white=False):
+def colour_map(exclude_black_white=False, include_ids=None):
     """Every analysed reference placed in an LCh cylinder: lightness up the
     axis, chroma outward, hue around.
 
     Reads the stored profiles only -- nothing is re-analysed, so switching the
     map on (or flipping `exclude_black_white`) costs one query, not a pass over
     the archive.
+
+    `include_ids` scopes the map to a subset -- a project's own references,
+    say. `None` maps the whole archive.
 
     Radius is the chroma *rank* rather than chroma scaled against its
     theoretical ceiling. Both order the references identically -- more
@@ -811,10 +814,19 @@ def colour_map(exclude_black_white=False):
     a linear radius stacks 88% of the library into the middle 8% of the disc
     and no clustering is visible at all. Ranking spends the whole radius on
     the range the archive actually occupies.
+
+    That rank is taken across whatever set is being laid out, so a scoped map
+    ranks within its own subset and a reference's radius is not the same in a
+    project's map as in the archive's. That is deliberate, and is the same
+    argument as above one level down: a project of muted references should
+    spend its full radius separating muted from slightly-less-muted, not
+    huddle at the axis because the archive happens to contain something
+    vivid. Do not "fix" this into an absolute chroma scale -- it would undo
+    the reason ranking is used at all.
     """
     # Version-pinned, like the search: a profile written by an older algorithm
     # would be placed against rules it was never computed under.
-    rows = list(db_list_colour_analyses(set()))
+    rows = list(db_list_colour_analyses(set(), include_ids=include_ids))
     entries = []
     for ref_id, raw in rows:
         profile = profile_from_json(raw)
@@ -924,7 +936,9 @@ def search(reference_ids, weights=None, exclude_ids=None, limit=40, exclude_blac
     }
 
 
-def db_list_colour_analyses(exclude_ids):
+def db_list_colour_analyses(exclude_ids, include_ids=None):
     import db
 
-    return db.list_colour_analyses(version=ANALYSIS_VERSION, exclude_ids=exclude_ids)
+    return db.list_colour_analyses(
+        version=ANALYSIS_VERSION, exclude_ids=exclude_ids, include_ids=include_ids
+    )

@@ -796,12 +796,18 @@ def get_colour_analyses(reference_ids, version=None):
         return {r["reference_id"]: dict(r) for r in rows}
 
 
-def list_colour_analyses(version=None, exclude_ids=None):
+def list_colour_analyses(version=None, exclude_ids=None, include_ids=None):
     """Every stored analysis, for a whole-archive colour search.
 
     Returns rows rather than a generator because the caller scores all of
     them; the profiles are small (a handful of palette entries and short
     histograms), so this stays cheap at archive scale.
+
+    `include_ids` narrows the set to those references (a project's own, say)
+    and intersects with `exclude_ids` rather than overriding it, so a caller
+    can scope and exclude at once. `None` means "no restriction"; an empty
+    collection means an empty set, and correctly returns nothing -- the two
+    are not the same question.
     """
     query = "SELECT reference_id, profile FROM colour_analysis"
     params = []
@@ -812,7 +818,12 @@ def list_colour_analyses(version=None, exclude_ids=None):
         rows = conn.execute(query, params).fetchall()
 
     exclude = set(exclude_ids or [])
-    return [(r["reference_id"], r["profile"]) for r in rows if r["reference_id"] not in exclude]
+    include = None if include_ids is None else set(include_ids)
+    return [
+        (r["reference_id"], r["profile"])
+        for r in rows
+        if r["reference_id"] not in exclude and (include is None or r["reference_id"] in include)
+    ]
 
 
 def list_references_needing_colour(version, limit=None, image_exts=None):

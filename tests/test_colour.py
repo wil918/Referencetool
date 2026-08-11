@@ -308,6 +308,89 @@ def test_map_colour_of_an_empty_palette_is_none():
     assert colour.map_colour({"palette": []}) is None
 
 
+# --- Scoping the map to a subset ---------------------------------------------
+#
+# These need a database rather than just a profile, because scoping happens in
+# the query. The map reads colour_analysis and nothing else, so a stored row is
+# the whole fixture -- no ingest, no files in the archive.
+
+MUTED = (170, 130, 130)  # some chroma, but far less than RED
+
+
+def stored(tmp_path, ref_id, bands):
+    p = profile(tmp_path, ref_id, bands)
+    db.save_colour_analysis(ref_id, colour.ANALYSIS_VERSION, f"hash-{ref_id}", colour.profile_to_json(p))
+    return ref_id
+
+
+def test_scoped_map_contains_only_the_requested_ids(archive):
+    stored(archive, "a", [(RED, 1.0)])
+    stored(archive, "b", [(BLUE, 1.0)])
+    stored(archive, "c", [(GREY, 1.0)])
+
+    nodes = colour.colour_map(include_ids=["a", "b"])["nodes"]
+    assert [n["id"] for n in nodes] == ["a", "b"]
+
+
+def test_an_empty_subset_maps_to_nothing_rather_than_raising(archive):
+    """A project with no analysed references still has to render: the cylinder
+    is described, it just has nothing in it. An empty `include_ids` is a real
+    empty set, not "unfiltered"."""
+    stored(archive, "a", [(RED, 1.0)])
+
+    layout = colour.colour_map(include_ids=[])
+    assert layout["nodes"] == []
+    assert layout["radius"] > 0 and layout["hue_ticks"]
+
+
+def test_unscoped_map_still_covers_the_whole_archive(archive):
+    for name, bands in (("a", [(RED, 1.0)]), ("b", [(BLUE, 1.0)]), ("c", [(GREY, 1.0)])):
+        stored(archive, name, bands)
+
+    layout = colour.colour_map()
+    assert [n["id"] for n in layout["nodes"]] == ["a", "b", "c"]
+    assert layout == colour.colour_map(include_ids=None)
+
+
+def test_scoped_radius_ranks_within_the_subset(archive):
+    """Radius is a rank across the set being laid out, so the least saturated
+    member of a subset sits on the axis even though the archive holds something
+    greyer still. Scoping re-spends the whole radius on the subset -- see
+    colour_map()'s docstring; this is the behaviour, not a rounding artefact.
+    """
+    stored(archive, "grey", [(GREY, 1.0)])
+    stored(archive, "muted", [(MUTED, 1.0)])
+    stored(archive, "vivid", [(RED, 1.0)])
+
+    radius = lambda n: float(np.hypot(n["x"], n["z"]))  # noqa: E731
+    whole = {n["id"]: n for n in colour.colour_map()["nodes"]}
+    subset = {n["id"]: n for n in colour.colour_map(include_ids=["muted", "vivid"])["nodes"]}
+
+    assert radius(whole["muted"]) > 0  # middle of three, mid-disc
+    assert radius(subset["muted"]) == 0  # least saturated of two, on the axis
+    assert radius(subset["vivid"]) == pytest.approx(colour.MAP_RADIUS, abs=1e-3)
+
+
+def test_include_and_exclude_ids_intersect(archive):
+    for name in ("a", "b", "c"):
+        stored(archive, name, [(RED, 1.0)])
+
+    rows = db.list_colour_analyses(
+        version=colour.ANALYSIS_VERSION, include_ids=["a", "b"], exclude_ids=["b", "c"]
+    )
+    assert {ref_id for ref_id, _ in rows} == {"a"}
+
+
+def test_include_ids_respects_the_version_pin(archive):
+    stored(archive, "current", [(RED, 1.0)])
+    stored(archive, "stale", [(BLUE, 1.0)])
+    row = db.get_colour_analysis("stale")
+    db.save_colour_analysis("stale", colour.ANALYSIS_VERSION - 1, row["content_hash"], row["profile"])
+
+    ids = {n["id"] for n in colour.colour_map(include_ids=["current", "stale"])["nodes"]}
+    assert ids == {"current"}
+
+
 # --- Combined profiles ------------------------------------------------------
 
 
