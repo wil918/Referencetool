@@ -1392,6 +1392,11 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
    from starting a drag, the same way it already excludes .widget-remove and
    .widget-shadow-toggle, so clicking into the text isn't read as a move. */
 .widget-grid.is-editing .widget-body:has(.widget-editable-text) { pointer-events: auto; }
+/* The sidebar's toggle button is the other thing that must survive edit mode
+   going inert -- opening it to add/rename/reorder its contents only makes
+   sense *while* editing, unlike settings/exit which the floating edit bar
+   supersedes for the duration. */
+.widget-grid.is-editing .widget-body:has(.widget-sidebar) { pointer-events: auto; }
 .widget-grid.is-editing .widget:not(.is-locked) .widget-resize { display: block; }
 .widget-grid.is-editing .widget.is-removable .widget-remove { display: flex; }
 .widget-grid.is-editing .widget.is-removable .widget-move-handle { display: flex; }

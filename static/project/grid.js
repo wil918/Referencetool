@@ -357,8 +357,11 @@ export function createGrid(container, options = {}) {
     // while editing (style.css's :has(.widget-editable-text) exemption) so it
     // can be clicked into and typed in, and needs the same exclusion so that
     // placing a cursor or drag-selecting text isn't instead read as the start
-    // of a widget-move gesture.
-    if (event.target.closest(".widget-remove, .widget-shadow-toggle, .widget-editable-text, .widget-move-handle")) return;
+    // of a widget-move gesture. The sidebar's own open/close button needs the
+    // same treatment -- unlike settings/exit, a sidebar is meant to be usable
+    // *while* editing (that's how its contents get arranged at all), so its
+    // click can't be swallowed by pointer capture either.
+    if (event.target.closest(".widget-remove, .widget-shadow-toggle, .widget-editable-text, .widget-move-handle, .widget-sidebar-btn")) return;
 
     const el = event.target.closest(".widget");
     if (!el) return;
