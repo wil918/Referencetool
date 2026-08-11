@@ -1648,6 +1648,46 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
   text-align: center;
 }
 
+.format-toolbar-size-wrap { position: relative; }
+
+/* The preset list under the size box -- a floating panel, so it gets the
+   same fill+shadow treatment as the other overlays pinned above the grid
+   (.widget-dock-panel), not the flat/borderless rule for widget surfaces. */
+.format-toolbar-size-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 14rem;
+  overflow-y: auto;
+  padding: 0.35rem;
+  border-radius: 12px;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-md);
+}
+
+.format-toolbar-size-dropdown[hidden] { display: none; }
+
+.format-toolbar-size-option {
+  border: none;
+  background: none;
+  padding: 0.3rem 1.1rem;
+  border-radius: 8px;
+  font-family: var(--sans);
+  font-size: 0.78rem;
+  color: var(--ink);
+  text-align: center;
+  cursor: pointer;
+  transition: var(--press);
+}
+
+.format-toolbar-size-option:hover { box-shadow: var(--raise-sm); }
+.format-toolbar-size-option:active { box-shadow: var(--press-sm); }
+
 .format-toolbar-fields input[type="color"] {
   width: 30px;
   height: 28px;
