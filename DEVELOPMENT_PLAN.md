@@ -1,6 +1,6 @@
 # Development Plan — Project Spaces, Widgets & Infinite Canvas
 
-**Status: sessions 1–4 complete, plus three correction rounds. Next up: session 4b.**
+**Status: sessions 1–4 and 4b complete, plus three correction rounds and an editing redesign. Next up: session 5 (sidebar container widget).**
 
 Part 1 describes the codebase as it stood when this plan was written, before any session ran — it is kept as the starting-point record, so its line counts are deliberately historical. `CLAUDE.md` describes the code as it is *now* and is the source of truth for conventions.
 
@@ -8,7 +8,7 @@ Part 1 describes the codebase as it stood when this plan was written, before any
 
 ## Part 0 — What has changed since this plan was written
 
-Sessions 1, 2, 3 and 4 are done. Three correction rounds followed session 4, and they reversed decisions this plan originally specified. Every reversal is recorded in `CLAUDE.md`, which is what Claude Code actually reads:
+Sessions 1, 2, 3, 4 and 4b are done. Three correction rounds and one editing redesign followed, and between them they reversed decisions this plan originally specified. Every reversal is recorded in `CLAUDE.md`, which is what Claude Code actually reads:
 
 | Original spec | Now |
 |---|---|
@@ -18,9 +18,23 @@ Sessions 1, 2, 3 and 4 are done. Three correction rounds followed session 4, and
 | S4: appearance sets background, ink and text scale | Unchanged, plus **`--light` / `--dark` are now derived from the chosen background** in `appearance.js`, so shadows stay legible as depth on any page colour. |
 | S4: settings panel holds the edit-mode toggle | Entering edit mode **closes the panel**; a floating Save/Cancel sits bottom-right so the grid is reachable. |
 
-Session prompts 5–14 were written before these changes and remain accurate — none depends on the reversed behaviour. The one knock-on already applied: session 7's back arrow is a floating overlay control, because there is no header to put it in.
+### Built beyond the plan
 
-**Verified against the code:** all six project-space tables exist and are registered in `init_db()`; all 20 planned routes are present; `tests/test_project_spaces.py` holds 39 tests. Session 4b's `config.typography` and `config.contentScale` do not exist yet, as expected.
+The editing redesign added machinery no session specified. It is all recorded in `CLAUDE.md`'s project-shell module table:
+
+- **`top-bar.js`** — a shared bar in normal document flow, with independently-shown sections (`appearance`, `format`). It does not violate the no-header rule: hiding it collapses the page back to the grid starting at the top of the viewport. **New transient chrome should mount into this rather than adding another floating bar.**
+- **`widget-dock.js`** — the "+" Add Widget dock, bottom-right during edit mode. This replaces the "Add Widget palette" that sessions 4 and 5 describe. Any new widget type appears in it automatically via `shell.addableTypes()`.
+- **`notepad` widget** and per-selection rich text (`rich-text.js`, `text-utils.js`) — beyond session 4b's plain-text spec.
+- **`appearance-panel.js`** — the appearance controls, extracted out of the settings widget into the top bar.
+
+### Knock-ons for the remaining sessions
+
+- **Session 5** describes the sidebar's own "Add Widget list". That palette is now the widget dock — filter what the dock offers when the target is a sidebar, rather than building a second palette.
+- **Session 7's** back arrow is a floating overlay control, since there is no header to put it in. *(Already applied to the prompt.)*
+- **Session 9's** 3D widgets must read typography and `contentScale` through `project/typography.js` like every other widget, and will appear in the dock automatically.
+- **Session 11's** canvas text node should reuse `rich-text.js` and `format-toolbar.js`, not just the session-4b text widget. The toolbar mounts into the top bar; the canvas will need it positioned in world coordinates.
+
+**Verified against the code:** all six project-space tables exist and are registered in `init_db()`; all 20 planned routes are present; `tests/test_project_spaces.py` holds 39 tests; `typography.js` implements the per-widget contract with `contentScale`; `grid.js` is 24 columns with no compaction; `project.html` has no `<header>`.
 
 ---
 

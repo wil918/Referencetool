@@ -6,6 +6,30 @@ Build order, estimates and per-session prompts live in `DEVELOPMENT_PLAN.md`. Do
 
 ---
 
+## Git workflow
+
+**Never commit to `main`, and never work directly in the user's main folder.** `main` — local and on GitHub — must stay untouched while a feature is being built and tested.
+
+The user's folder `~/Desktop/fashion-reference-tool` is where they run and test the app. It sits on `test-widget-dock`, a disposable local-only preview branch that is never pushed. Treat that folder as theirs, not yours.
+
+Your workflow for every piece of work:
+
+1. Work in a **git worktree on your own branch**, named `claude/<worktree-name>`. Never in the user's main folder, never on `main`, never on `test-widget-dock`.
+2. **Commit and push that branch to GitHub as you go**, so there is always something for the user to pull.
+3. When there is something to try, **tell the user how to test it** — give them exactly this, to run from `~/Desktop/fashion-reference-tool`:
+
+   ```
+   git checkout test-widget-dock
+   git merge claude/<your-branch-name>
+   ```
+
+   This is repeatable: every time you push more commits, they run the merge again.
+4. **Only merge to `main` when the user explicitly confirms a feature is tested and approved.** Then fast-forward the feature branch onto `origin/main` and tell them, so they can switch their folder to `main` if they want.
+
+If you are ever unsure whether something counts as approval, it does not. Ask.
+
+---
+
 ## What this is
 
 A local-first reference library for fashion design research. Images, PDFs and text notes are ingested, auto-tagged by Claude, embedded with CLIP, and explored through a 2D archive and several 3D visualisations. Flask serves both the API and the frontend at `127.0.0.1:5050`. Everything runs on the user's machine; the only outbound calls are to the Anthropic API for tagging and analysis.
@@ -56,7 +80,24 @@ These are not preferences. Violating one means the change gets reverted.
 | `static/colour-connections.html` | `colour-connections.js` | Flat colour view. |
 | `static/project.html` | `project/main.js` | Project shell. Created in session 2. **Has no `<header>`** — see below. |
 
-**The project shell has no page header.** Inside a project there is no app title, no nav strip and no chrome of any kind — the widget grid starts at the top of the viewport and uses its full width. The project's name is the title widget; leaving a project is the exit widget. `document.title` still carries the project name for the browser tab. Any navigation a later session needs (e.g. the back control on folder and grid pages) must be a floating overlay control, not a reinstated header.
+**The project shell has no page header.** Inside a project there is no app title, no nav strip and no permanent chrome — the widget grid starts at the top of the viewport and uses its full width. The project's name is the title widget; leaving a project is the exit widget. `document.title` still carries the project name for the browser tab. Any navigation a later session needs (e.g. the back control on folder and grid pages) must be a floating overlay control, not a reinstated header.
+
+### Project shell modules
+
+| Module | Responsibility |
+|---|---|
+| `project/main.js` | Shell entry: routing, data load, wiring the pieces below. |
+| `project/grid.js` | Layout engine. 24 columns, free placement, no gravity. Pure layout — knows nothing about widget contents. |
+| `project/registry.js` | Widget type registry and the `create(host)` lifecycle. |
+| `project/appearance.js` | Project-wide ink/background/scale, applied synchronously before first paint. Derives `--light`/`--dark` from the background. |
+| `project/appearance-panel.js` | The project-wide appearance controls, mounted into the top bar during edit mode. |
+| `project/typography.js` | The shared typography contract — `applyTypography(el, typography, contentScale)`. Every text-rendering widget goes through this. |
+| `project/format-toolbar.js` | Per-widget format controls, mounted into the top bar's `format` section. |
+| `project/rich-text.js`, `text-utils.js` | Per-selection rich text editing. |
+| `project/top-bar.js` | Shared bar at the top of the page. **In normal document flow, not fixed** — showing it pushes the grid down, hiding it collapses the page back to "grid starts at the top of the viewport". Sections are keyed (`appearance`, `format`) and shown independently. This is how transient chrome is added without reinstating a header; new chrome should use it rather than inventing another bar. |
+| `project/widget-dock.js` | The "+" Add Widget dock, bottom-right, visible during edit mode. Page-level chrome, not a widget — it talks to `main.js` directly rather than through the widget host contract. Any session that adds a widget type gets it in the dock for free via `shell.addableTypes()`. |
+
+Widgets so far: `title`, `text`, `notepad`, `settings`, `exit`.
 
 Shared: `graph-common.js` (Three.js constants, themes, sprite helpers), `theme.js` (dark mode, loaded synchronously in `<head>` to avoid a flash of the wrong theme), `ui-effects.js` (button press pulse), `style.css`.
 
