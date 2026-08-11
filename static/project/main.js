@@ -10,6 +10,7 @@ import { all as allWidgetDefinitions, definitionFor, mountWidget } from "./regis
 import { createWidgetDock } from "./widget-dock.js";
 import { createAppearancePanel } from "./appearance-panel.js";
 import { createGridPage } from "./pages/grid-page.js";
+import { createCanvasPage } from "./pages/canvas-page.js";
 import * as folders from "./folders.js";
 
 const statusEl = document.getElementById("project-shell-status");
@@ -617,12 +618,26 @@ async function showFolderPage(folderId, token) {
   });
 }
 
+/* The infinite canvas, in place of the homepage grid.
+ *
+ * Same routing as the pages above, but the page it mounts is pinned to the
+ * whole viewport rather than laid out inside the container -- see
+ * pages/canvas-page.js. Everything it does persists as it happens, so unlike
+ * the grid there is nothing to warn about on the way out.
+ */
+function showCanvasPage() {
+  enterPage();
+  currentPage = createCanvasPage(pageContainerEl, { project });
+}
+
 function routeFromHash() {
   navToken++;
   const params = new URLSearchParams(location.hash.slice(1));
   const page = params.get("page");
   if (page === "grid") {
     showGridPage();
+  } else if (page === "canvas") {
+    showCanvasPage();
   } else if (page === "folder" && params.get("id")) {
     showFolderPage(params.get("id"), navToken);
   } else {

@@ -2276,3 +2276,449 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 .sidebar-panel-add-list[hidden] { display: none; }
 
 .sidebar-panel-add-item { width: 100%; }
+
+/* --- Project space: the infinite canvas ---
+ *
+ * The counterpart to the homepage grid, and deliberately not styled like it.
+ * The grid is a set of flat regions pressed into the page; the canvas is
+ * objects lying on a surface, so a node is raised at rest and lifts further
+ * while it is held -- the same three-state shadow vocabulary the grid uses
+ * for a widget being dragged, applied to a page where dragging is the
+ * ordinary case rather than something you first have to enter a mode for.
+ *
+ * Nothing here has a fill or a border. A node's surface is the page's own
+ * colour and its edges are shadows, exactly like every other surface in this
+ * system; the reference card inside one is flattened so the node carries the
+ * depth rather than the two of them stacking.
+ *
+ * Geometry lives in project/canvas/viewport.js. The only thing the stylesheet
+ * needs to know about it is --canvas-inv-scale: the reciprocal of the world
+ * scale, written on .canvas-world on every zoom. Chrome multiplies by it so a
+ * lock button stays the same size on screen at 0.1x and at 4x, without any
+ * node being re-rendered to achieve it -- the browser recomputes the calc()s
+ * from one custom property on one element.
+ */
+
+.canvas-page {
+  position: fixed;
+  inset: 0;
+  background: var(--project-bg, var(--bg));
+  overflow: hidden;
+}
+
+/* The window onto the world. Clips it, catches the pan gestures, and is the
+   element every screen<->world conversion measures against. */
+.canvas-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  /* Pointer gestures do all the panning and zooming themselves; leaving the
+     browser's own touch scrolling on would fight them. */
+  touch-action: none;
+  cursor: default;
+}
+
+.canvas-viewport.is-pan-ready { cursor: grab; }
+.canvas-viewport.is-panning { cursor: grabbing; }
+/* No text selection mid-pan or mid-drag -- a gesture across a caption would
+   otherwise highlight it. */
+.canvas-viewport.is-panning { user-select: none; }
+
+/* A reference being dragged in from the picker. Same soft accent ring the
+   grid's refused-drop placeholder uses, inset rather than around the edge of
+   the screen, so it reads as "this surface will take it". */
+.canvas-viewport.is-drop-target::after {
+  content: "";
+  position: absolute;
+  inset: 0.5rem;
+  border-radius: 26px;
+  box-shadow: 0 0 0 2px var(--accent-soft);
+  pointer-events: none;
+}
+
+/* The one element every pan and zoom moves. It has no size of its own: nodes
+   are absolutely positioned inside it at world coordinates, which are
+   routinely negative, so there is nothing here for a width to mean. */
+.canvas-world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+}
+
+.canvas-node {
+  position: absolute;
+  left: 0;
+  top: 0;
+  background: var(--project-bg, var(--bg));
+  border-radius: 22px;
+  box-shadow: var(--raise-sm);
+  /* Visible, so the controls can sit just above the box rather than on top of
+     its contents. Clipping to the rounded shape is .canvas-node-body's job
+     below -- a widget node draws its own chrome in its own corners, and node
+     controls laid over that would collide with whatever the widget put
+     there. */
+  overflow: visible;
+  /* No transform transition: a node follows the pointer and must not lag
+     behind it. Only the depth animates. */
+  transition: box-shadow 0.22s ease;
+}
+
+.canvas-node.is-active { box-shadow: var(--raise-lg); }
+
+/* Locked reads as settled into the page rather than lying on it -- the same
+   inversion that means "on" everywhere else in this system. */
+.canvas-node.is-locked { box-shadow: var(--press-sm); }
+
+.canvas-node.is-selected { box-shadow: var(--raise-md), 0 0 0 2px var(--accent-soft); }
+.canvas-node.is-locked.is-selected { box-shadow: var(--press-sm), 0 0 0 2px var(--accent-soft); }
+
+.canvas-node-body {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  overflow: hidden;
+}
+
+.canvas-node-missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  margin: 0;
+  padding: 1rem;
+  text-align: center;
+}
+
+/* The card fills the node and gives up its own depth to it: two raised
+   surfaces nested inside one another read as a card on a card. */
+.canvas-node-reference .card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  border-radius: inherit;
+  box-shadow: none;
+  cursor: grab;
+}
+
+.canvas-node-reference .card:hover { box-shadow: none; }
+/* .card's own :active press would fight the drag it is part of. */
+.canvas-node-reference .card:active { box-shadow: none; transform: none; }
+
+.canvas-node-reference .card img {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  /* The node is resizable, so the thumbnail follows the box rather than
+     holding the grid's fixed square. */
+  aspect-ratio: auto;
+}
+
+.canvas-node-reference .text-card { flex: 1 1 auto; min-height: 0; aspect-ratio: auto; }
+.canvas-node-reference .card-caption { flex: 0 0 auto; }
+
+/* The text node's editable area. Deliberately not named after the kind: the
+   node wrapper already carries .canvas-node-text, and one class on both
+   elements would put this padding on the box as well as inside it. */
+.canvas-node-editable {
+  width: 100%;
+  height: 100%;
+  padding: 1rem 1.2rem;
+  font-family: var(--widget-font-family, var(--serif));
+  font-size: var(--widget-font-size, 0.95rem);
+  color: var(--widget-font-colour, inherit);
+  line-height: 1.5;
+  /* Content is kept as plain text nodes (canvas/nodes.js), so newlines are
+     the only formatting there is and this is what renders them. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+  outline: none;
+  cursor: default;
+}
+
+.canvas-node.is-editing .canvas-node-editable { cursor: text; }
+
+/* Same empty-state treatment as .widget-text's, and the same reason it is a
+   ::before rather than a placeholder attribute the browser draws: the
+   element's own DOM must stay plain text nodes. */
+.canvas-node-editable:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+  font-family: var(--serif);
+}
+
+/* --- node chrome ---
+   Just above the node's top-right corner rather than inside it: a widget node
+   fills its own box with its own chrome (project/scene-widget.js puts a
+   toggle in exactly that corner), and node controls laid over a widget's
+   would be two sets of buttons fighting for the same pixels.
+
+   Counter-scaled against the world so it is the same size on screen at any
+   zoom -- including the gap, which would otherwise close up as you zoom in. */
+.canvas-node-chrome {
+  position: absolute;
+  bottom: calc(100% + 6px * var(--canvas-inv-scale, 1));
+  right: 0;
+  display: flex;
+  gap: calc(4px * var(--canvas-inv-scale, 1));
+  transform: scale(var(--canvas-inv-scale, 1));
+  transform-origin: bottom right;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+/* Chrome appears on approach, so a canvas at rest is the work and nothing
+   else. A locked node keeps its lock showing -- that is the one piece of
+   state you need to see without hovering to find out why nothing moves. */
+.canvas-node:hover .canvas-node-chrome,
+.canvas-node.is-selected .canvas-node-chrome,
+.canvas-node.is-active .canvas-node-chrome { opacity: 1; }
+.canvas-node.is-locked .canvas-node-chrome { opacity: 1; }
+.canvas-node.is-locked:not(:hover):not(.is-selected) .canvas-node-grip,
+.canvas-node.is-locked:not(:hover):not(.is-selected) .canvas-node-link,
+.canvas-node.is-locked:not(:hover):not(.is-selected) .canvas-node-delete { display: none; }
+
+.canvas-node-control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-sm);
+  color: var(--project-ink, var(--ink));
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: none;
+  transition: var(--press);
+}
+
+.canvas-node-control:hover { box-shadow: var(--raise-md); }
+.canvas-node-control:active { box-shadow: var(--press-sm); transform: scale(0.95); }
+.canvas-node-control svg { width: 12px; height: 12px; display: block; }
+
+.canvas-node-grip { cursor: grab; }
+.canvas-node-grip:active { cursor: grabbing; }
+.canvas-node-delete { color: var(--accent); }
+/* Lit the same way every other "on" toggle in this system is. */
+.canvas-node-lock.is-on { color: var(--accent); box-shadow: var(--press-sm); }
+
+/* The resize nub, opposite the chrome. Counter-scaled the same way, and
+   hidden on a locked node because there is nothing it could do. */
+.canvas-node-resize {
+  position: absolute;
+  right: calc(6px * var(--canvas-inv-scale, 1));
+  bottom: calc(6px * var(--canvas-inv-scale, 1));
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-sm);
+  transform: scale(var(--canvas-inv-scale, 1));
+  transform-origin: bottom right;
+  cursor: nwse-resize;
+  touch-action: none;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.canvas-node:hover .canvas-node-resize,
+.canvas-node.is-selected .canvas-node-resize { opacity: 1; }
+.canvas-node.is-locked .canvas-node-resize { display: none; }
+
+/* --- connections ---
+   Drawn in world coordinates inside the world layer, so the single transform
+   carries them. The SVG is a 1x1 box at the origin with overflow visible;
+   without that an SVG root clips to its own viewport and nothing would show.
+   Stroke widths are non-scaling (set per line in canvas/edges.js), which is
+   why they are plain pixel values here. */
+.canvas-edges {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  /* Under every node: a node's z-index is its stored z_index + 1. */
+  z-index: 0;
+  pointer-events: none;
+}
+
+.canvas-edge-line {
+  stroke: var(--edge);
+  stroke-width: 1.5;
+  fill: none;
+}
+
+/* A 1.5px line is not clickable. This one is, and is invisible. */
+.canvas-edge-hit {
+  stroke: transparent;
+  stroke-width: 14;
+  fill: none;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.canvas-edge:hover .canvas-edge-line { stroke: var(--slate); }
+.canvas-edge.is-selected .canvas-edge-line { stroke: var(--accent); stroke-width: 2; }
+
+/* The connection being drawn. Dashed, because it is not a connection yet. */
+.canvas-edge-draft {
+  stroke: var(--accent-soft);
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+  fill: none;
+  pointer-events: none;
+}
+
+/* --- canvas chrome: status, hint, zoom cluster, add dock --- */
+
+.canvas-status {
+  position: absolute;
+  top: 1.15rem;
+  left: 1.15rem;
+  margin: 0;
+  pointer-events: none;
+}
+
+.canvas-status:empty { display: none; }
+
+.canvas-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 26rem;
+  margin: 0;
+  text-align: center;
+  pointer-events: none;
+}
+
+.canvas-hint[hidden] { display: none; }
+
+.canvas-view-controls {
+  position: fixed;
+  left: 1.15rem;
+  bottom: 1.15rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 999px;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-sm);
+}
+
+.canvas-view-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--project-ink, var(--ink));
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: var(--press);
+}
+
+.canvas-view-btn:hover { color: var(--ink-strong); }
+.canvas-view-btn:active { box-shadow: var(--press-sm); transform: scale(0.95); }
+
+.canvas-view-zoom {
+  min-width: 3rem;
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+/* The add dock. Same corner and same shape as the homepage's Add Widget dock
+   (.widget-dock-fab), because it is the same idea -- but always visible,
+   since the canvas has no edit mode to reveal it in. */
+.canvas-dock-fab {
+  position: fixed;
+  right: 1.15rem;
+  bottom: 1.15rem;
+  width: 3rem;
+  height: 3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-md);
+  color: var(--project-ink, var(--ink));
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: var(--press);
+}
+
+.canvas-dock-fab:hover { box-shadow: var(--raise-lg); }
+.canvas-dock-fab:active { box-shadow: var(--press-sm); transform: scale(0.96); }
+.canvas-dock-fab.is-open { box-shadow: var(--press-sm); }
+
+.canvas-dock-panel {
+  position: fixed;
+  right: 1.15rem;
+  bottom: 5rem;
+  width: min(22rem, calc(100vw - 2.3rem));
+  max-height: min(28rem, calc(100vh - 8rem));
+  overflow-y: auto;
+  padding: 1.1rem 1.25rem;
+  border-radius: 26px;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-md);
+}
+
+.canvas-dock-panel[hidden] { display: none; }
+
+.canvas-dock-section + .canvas-dock-section { margin-top: 1.25rem; }
+.canvas-dock-heading { margin: 0 0 0.6rem; }
+
+.canvas-dock-add-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.canvas-dock-add { font-size: 0.78rem; padding: 0.45rem 0.9rem; }
+
+.canvas-dock-search { width: 100%; margin: 0 0 0.75rem; }
+
+.canvas-dock-refs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: 0.5rem;
+}
+
+.canvas-dock-refs[hidden] { display: none; }
+
+.canvas-dock-ref { cursor: grab; }
+.canvas-dock-ref:active { cursor: grabbing; }
+.canvas-dock-ref .bar-thumb { width: 100%; height: auto; aspect-ratio: 1 / 1; }
+.canvas-dock-ref:hover .bar-thumb { box-shadow: var(--raise-md); }
+
+/* --- Project widget: canvas (project/widgets/canvas.js) ---
+   The door into the page above, styled the same compact-button-filling-the-
+   tile way as .widget-grid-button and .widget-exit. */
+.widget-canvas {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+}
+
+.widget-canvas .btn {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
