@@ -1,42 +1,37 @@
+/* The 3D similarity graph at /graph.html -- the archive's homepage.
+ *
+ * This module is the page, not the picture: the choreography (a drifting
+ * opening shot, the scroll-triggered move to the isometric view, the fold
+ * down into the flat Connections canvas), the chrome, and the mode switch
+ * between the similarity layout and the colour cylinder. What those two
+ * layouts are made of lives in similarity-map.js and colour-map.js, which
+ * build into a scene handed to them and know nothing about this page -- which
+ * is what lets a project widget put the same layouts in a box a few grid
+ * cells wide (static/project/widgets/).
+ *
+ * The renderer, camera and orbit controls come from shared/scene-host.js for
+ * the same reason. Everything below still drives them directly; the host just
+ * owns creating, sizing and disposing them.
+ */
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
   COLOUR_FLAT_MARGIN,
-  CROSS_THREAD_OPACITY,
-  DOT_SIZE,
+  COLOUR_THUMB_BUDGET,
+  FIELD_OF_VIEW,
   HANDOFF_IMAGE_KEY,
   HANDOFF_KEY,
-  HUB_DOT_SIZE,
-  INTRA_THREAD_OPACITY,
-  PLANE_SIZE,
-  TAG_LABEL_OFFSET,
-  TAG_LINE_OPACITY,
-  THUMB_SIZE,
+  THUMBNAIL_DISTANCE,
   currentTheme,
   dotTexture,
   easeInOutCubic,
   easeOutCubic,
-  makeEdgeGroup,
-  makeNodeSprite,
-  makePlane,
-  makeTagSprite,
-  planeOffsets2d,
-  setupEnvironment,
-  tagAngle,
-  updateEdgeGroup,
+  loadThumbnail,
+  revertToDot,
 } from "./graph-common.js";
+import { createSceneHost } from "./shared/scene-host.js";
+import { createSimilarityMap } from "./similarity-map.js";
 import { createColourMap } from "./colour-map.js";
 import { createColourPanel } from "./colour-panel.js";
-
-// Nodes swap from a plain dot to a loaded thumbnail once the camera gets
-// this close (world units) -- so zoomed out shows only the thread/dot
-// structure, and thumbnails reveal themselves as you move in on a cluster.
-const THUMBNAIL_DISTANCE = 9;
-
-// New thumbnails started per check in Colour mode, where every node loads one
-// regardless of distance -- the same budgeting the flat Connections view uses
-// to keep panning from firing off a request storm.
-const COLOUR_THUMB_BUDGET = 6;
 
 const TRANSITION_DURATION_MS = 2200; // scroll-triggered camera move to the isometric view
 const START_DISTANCE_RATIO = 0.9; // how far in front of the first plane the static opening shot sits, relative to the stack's total depth
@@ -46,7 +41,7 @@ const START_DISTANCE_RATIO = 0.9; // how far in front of the first plane the sta
 // layout while the projection flattens out with it.
 const FOLD_TO_FRONT_MS = 1700;
 const FOLD_FLATTEN_MS = 2600;
-const START_FOV = 50;
+const START_FOV = FIELD_OF_VIEW;
 // Narrow enough that the projection is orthographic for all practical
 // purposes by the end (the camera dollies back to compensate, holding the
 // framing steady), so the flat page can pick it up with a real orthographic
@@ -96,36 +91,19 @@ function buildScene(data) {
   const dotTex = dotTexture(theme.dot);
   const hubTex = dotTexture(theme.hub);
 
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(theme.background);
+  // Renderer, camera, orbit controls, lighting and environment (clearcoat
+  // still benefits from something to reflect, even without full
+  // transmission). #scene is fixed to the viewport, so sizing to the element
+  // is sizing to the window, as it always was.
+  const host = createSceneHost(container, { theme });
+  const { scene, camera, renderer, controls } = host;
 
-  // --- Renderer, camera, lighting, environment (clearcoat still benefits
-  // from something to reflect, even without full transmission). ---
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  container.appendChild(renderer.domElement);
+  // --- The similarity layout: one translucent plane per cluster, a billboard
+  // per reference, floating tag captions and the threads between them. ---
+  const map = createSimilarityMap(scene, theme);
+  const spriteList = map.setData(data, dotTex, hubTex);
+  const { zFirst, span: finalSpan, boundingSize } = map.metrics;
 
-  setupEnvironment(scene, renderer);
-
-  // Planes sit at their default/final spacing from the start. Their x/y
-  // offset stays at zero for the whole 3D view and only moves during the
-  // fold into the flat layout.
-  const clusterZCurrent = {};
-  const clusterOffsetCurrent = {};
-  data.planes.forEach((p) => {
-    clusterZCurrent[p.cluster] = p.z;
-    clusterOffsetCurrent[p.cluster] = { x: 0, y: 0 };
-  });
-  const zValues = data.planes.map((p) => p.z);
-  const zFirst = Math.min(...zValues);
-  const zLast = Math.max(...zValues);
-  const finalSpan = zLast - zFirst || 1;
-
-  const boundingSize = Math.max(PLANE_SIZE, finalSpan);
-  // far is generous because the fold dollies a long way back as the field of
-  // view narrows toward orthographic.
-  const camera = new THREE.PerspectiveCamera(START_FOV, window.innerWidth / window.innerHeight, 0.1, 2000);
   const isoRadius = boundingSize * 1.15;
   const isoPosition = new THREE.Vector3(1, 1, 1).normalize().multiplyScalar(isoRadius);
   const isoTarget = new THREE.Vector3(0, 0, 0);
@@ -191,126 +169,10 @@ function buildScene(data) {
   const distanceFor = (fov, height) => height / (2 * Math.tan(THREE.MathUtils.degToRad(fov / 2)));
   const distanceForFov = (fov) => distanceFor(fov, frameHeight);
 
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
   controls.target.set(0, 0, 0);
   controls.minDistance = 2;
   controls.maxDistance = boundingSize * 3;
   controls.enabled = false; // re-enabled once the scroll-triggered transition finishes
-
-  // --- Planes: one translucent glass sheet per cluster. Real physical
-  // transmission from the start -- more expensive per frame than plain alpha
-  // (an extra full-scene render pass per transmissive object), but the intro
-  // no longer does continuous per-frame plane movement, so it's a flat cost
-  // rather than one that compounds with a busy animation. ---
-  const planeObjects = [];
-  data.planes.forEach((p) => {
-    const { mesh, rim, glow } = makePlane(p, theme.planeTint, theme.planeTintAmount);
-    scene.add(mesh);
-    scene.add(rim);
-    scene.add(glow);
-    planeObjects.push({ cluster: p.cluster, mesh, rim, glow });
-  });
-
-  // --- Nodes: one billboard sprite per reference, starting as a plain dot. ---
-  const nodesById = new Map();
-  data.nodes.forEach((n) => {
-    const sprite = makeNodeSprite(n, dotTex, hubTex);
-    sprite.userData = { ref: n, thumbState: "none" }; // "none" | "loading" | "loaded" | "failed"
-    scene.add(sprite);
-    nodesById.set(n.id, sprite);
-  });
-
-  // --- Tag labels: a couple of small floating captions per node, each with
-  // a thin line back to its dot. ---
-  const tagSprites = [];
-  const tagLineDefs = [];
-  data.nodes.forEach((n) => {
-    (n.tags || []).forEach((tag, idx) => {
-      const sprite = makeTagSprite(tag, theme.tagLabel);
-      const angle = tagAngle(idx);
-      const dx = Math.cos(angle) * TAG_LABEL_OFFSET;
-      const dy = Math.sin(angle) * TAG_LABEL_OFFSET;
-      sprite.userData = { cluster: n.cluster, x: n.x + dx, y: n.y + dy };
-      scene.add(sprite);
-      tagSprites.push(sprite);
-      tagLineDefs.push({ cluster: n.cluster, x1: n.x, y1: n.y, x2: n.x + dx, y2: n.y + dy });
-    });
-  });
-
-  const tagLineGeometry = new THREE.BufferGeometry();
-  tagLineGeometry.setAttribute(
-    "position",
-    new THREE.BufferAttribute(new Float32Array(tagLineDefs.length * 6), 3)
-  );
-  const tagLineMesh = new THREE.LineSegments(
-    tagLineGeometry,
-    new THREE.LineBasicMaterial({
-      color: theme.tagLine, transparent: true, opacity: TAG_LINE_OPACITY, depthWrite: false,
-    })
-  );
-  scene.add(tagLineMesh);
-
-  // --- Threads: intra-cluster edges drawn a little stronger than the
-  // sparser cross-cluster ones, which are what visually cross between planes. ---
-  const threadGroups = [
-    makeEdgeGroup(scene, data.edges.filter((e) => !e.cross_cluster), data.nodes, INTRA_THREAD_OPACITY, theme.thread),
-    makeEdgeGroup(scene, data.edges.filter((e) => e.cross_cluster), data.nodes, CROSS_THREAD_OPACITY, theme.thread),
-  ].filter(Boolean);
-
-  // Everything belonging to the similarity layout, so switching modes is a
-  // visibility flip on one list rather than a teardown and rebuild -- the
-  // scene, camera and controls are shared and never re-created.
-  const visualObjects = [
-    ...planeObjects.flatMap((p) => [p.mesh, p.rim, p.glow]),
-    ...nodesById.values(),
-    ...tagSprites,
-    tagLineMesh,
-    ...threadGroups.map((g) => g.mesh),
-  ];
-
-  const nodeWorldPosition = (n) => {
-    const off = clusterOffsetCurrent[n.cluster];
-    return [n.x + off.x, n.y + off.y, clusterZCurrent[n.cluster]];
-  };
-
-  function applyClusterLayout() {
-    planeObjects.forEach((p) => {
-      const z = clusterZCurrent[p.cluster];
-      const off = clusterOffsetCurrent[p.cluster];
-      [p.mesh, p.rim, p.glow].forEach((obj) => obj.position.set(off.x, off.y, z));
-    });
-    nodesById.forEach((sprite) => {
-      const [x, y, z] = nodeWorldPosition(sprite.userData.ref);
-      sprite.position.set(x, y, z);
-    });
-    tagSprites.forEach((sprite) => {
-      const off = clusterOffsetCurrent[sprite.userData.cluster];
-      sprite.position.set(
-        sprite.userData.x + off.x,
-        sprite.userData.y + off.y,
-        clusterZCurrent[sprite.userData.cluster]
-      );
-    });
-    updateTagLines();
-    threadGroups.forEach((g) => updateEdgeGroup(g, nodeWorldPosition));
-  }
-
-  function updateTagLines() {
-    const positions = tagLineGeometry.attributes.position.array;
-    tagLineDefs.forEach((d, i) => {
-      const z = clusterZCurrent[d.cluster];
-      const off = clusterOffsetCurrent[d.cluster];
-      positions.set([d.x1 + off.x, d.y1 + off.y, z, d.x2 + off.x, d.y2 + off.y, z], i * 6);
-    });
-    tagLineGeometry.attributes.position.needsUpdate = true;
-  }
-
-  // Positions don't change again until the fold -- but the thread/tag-line
-  // geometries were created with zeroed buffers, so this one call is what
-  // actually populates them.
-  applyClusterLayout();
 
   const introTitle = document.getElementById("intro-title");
   const hint = document.getElementById("hint");
@@ -410,8 +272,11 @@ function buildScene(data) {
     modeButtons.forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
     document.body.classList.toggle("colour-mode", mode === "colour");
 
+    // Switching modes is a visibility flip on the two layouts' groups rather
+    // than a teardown and rebuild -- the scene, camera and controls are
+    // shared and never re-created.
     const showColour = mode === "colour";
-    visualObjects.forEach((o) => (o.visible = !showColour));
+    map.group.visible = !showColour;
     colourMap.group.visible = showColour;
     if (showColour) colourPanel.setSelection(colourSelection, colourNodesById);
     else colourPanel.hide();
@@ -444,17 +309,11 @@ function buildScene(data) {
   }
 
   // --- Hover label ---
-  const raycaster = new THREE.Raycaster();
-  const pointer = new THREE.Vector2();
-  const spriteList = Array.from(nodesById.values());
   const activeSprites = () => (mode === "colour" ? colourSprites : spriteList);
 
   window.addEventListener("pointermove", (e) => {
     if (folding) return;
-    pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
-    pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
-    raycaster.setFromCamera(pointer, camera);
-    const hit = raycaster.intersectObjects(activeSprites())[0];
+    const hit = host.pick(e, activeSprites());
     if (hit) {
       const ref = hit.object.userData.ref;
       nodeLabelTitle.textContent = ref.title;
@@ -481,11 +340,7 @@ function buildScene(data) {
     downAt = null;
     if (moved > 4) return;
 
-    pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
-    pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
-    raycaster.setFromCamera(pointer, camera);
-    const hit = raycaster.intersectObjects(colourSprites)[0];
-
+    const hit = host.pick(e, colourSprites);
     if (!hit) {
       if (!e.shiftKey) setColourSelection(new Set());
       return;
@@ -499,11 +354,9 @@ function buildScene(data) {
     setColourSelection(next);
   });
 
-  window.addEventListener("resize", () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-  });
+  // Resizing is the scene host's ResizeObserver on #scene -- which is fixed
+  // to the viewport, so it hears about a window resize the same way the
+  // listener that used to live here did.
 
   const cameraWorldPos = new THREE.Vector3();
   let frame = 0;
@@ -569,7 +422,6 @@ function buildScene(data) {
 
   // --- Fold down into the flat Archive Connections canvas ---
 
-  const offsets2d = planeOffsets2d(data.planes);
   const foldFromPos = new THREE.Vector3();
   const foldFromTarget = new THREE.Vector3();
   const frontPosition = startPosition.clone();
@@ -669,10 +521,12 @@ function buildScene(data) {
     startFold();
   });
 
-  animate();
+  // The choreography runs as a per-frame callback on the scene host, which
+  // owns the loop and the render itself.
+  host.onFrame(animate);
+  host.start();
 
   function animate() {
-    requestAnimationFrame(animate);
     frame++;
 
     if (phase === "idle") {
@@ -740,15 +594,9 @@ function buildScene(data) {
       const eased = easeInOutCubic(t);
 
       // The panes slide out to their flat positions and come forward onto the
-      // first plane's depth. The first plane is the one the camera is looking
-      // at and its offset is (0, 0), so it never moves -- the framing holds
-      // while everything else unfolds from behind it.
-      data.planes.forEach((p) => {
-        const target = offsets2d.get(p.cluster);
-        clusterOffsetCurrent[p.cluster] = { x: target.x * eased, y: target.y * eased };
-        clusterZCurrent[p.cluster] = p.z + (zFirst - p.z) * eased;
-      });
-      applyClusterLayout();
+      // first plane's depth, holding the framing while everything unfolds
+      // from behind the one the camera is looking at.
+      map.setFoldProgress(eased);
 
       // Dolly out while narrowing the field of view, which keeps what's on
       // the first plane exactly the same size while the projection loses its
@@ -762,9 +610,9 @@ function buildScene(data) {
         finishFold();
         return;
       }
-    } else if (phase === "done") {
-      controls.update();
     }
+    // "done" needs nothing here: the scene host calls controls.update() for
+    // every frame the controls are enabled, which they only are in that phase.
 
     // Distance checks are cheap but texture swaps aren't worth doing every
     // single frame -- every few frames is plenty responsive. Paused during
@@ -779,7 +627,9 @@ function buildScene(data) {
           .filter((s) => s.userData.thumbState === "none")
           .sort((a, b) => a.position.distanceTo(cameraWorldPos) - b.position.distanceTo(cameraWorldPos))
           .slice(0, COLOUR_THUMB_BUDGET)
-          .forEach(loadThumbnail);
+          // The colour map sizes its own sprites -- a selected node is drawn
+          // larger than the rest -- so it re-applies that once one grows.
+          .forEach((sprite) => loadThumbnail(sprite, () => colourMap.refresh()));
       } else {
         camera.getWorldPosition(cameraWorldPos);
         for (const sprite of spriteList) {
@@ -793,40 +643,6 @@ function buildScene(data) {
         }
       }
     }
-
-    renderer.render(scene, camera);
-  }
-
-  function loadThumbnail(sprite) {
-    const ref = sprite.userData.ref;
-    sprite.userData.thumbState = "loading";
-    new THREE.TextureLoader().load(
-      `/media/${ref.id}/thumb`,
-      (texture) => {
-        texture.colorSpace = THREE.SRGBColorSpace;
-        sprite.material.map = texture;
-        sprite.material.needsUpdate = true;
-        // The colour map sets its own size per sprite, since a selected node
-        // is drawn larger than the rest.
-        const size = sprite.userData.baseSize || THUMB_SIZE;
-        sprite.scale.set(size, size, 1);
-        sprite.userData.thumbState = "loaded";
-        if (sprite.userData.baseSize) colourMap.refresh();
-      },
-      undefined,
-      () => {
-        // Text/PDF references have no /thumb -- leave the dot as-is.
-        sprite.userData.thumbState = "failed";
-      }
-    );
-  }
-
-  function revertToDot(sprite, dotTex, hubTex) {
-    const ref = sprite.userData.ref;
-    sprite.material.map = ref.is_hub ? hubTex : dotTex;
-    sprite.material.needsUpdate = true;
-    const size = ref.is_hub ? HUB_DOT_SIZE : DOT_SIZE;
-    sprite.scale.set(size, size, 1);
-    sprite.userData.thumbState = "none";
+    // The render itself is the scene host's, at the end of every frame.
   }
 }

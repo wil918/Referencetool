@@ -16,6 +16,19 @@
     <div id="project-shell-body"></div>
   </main>
 
+  <!-- Same map as graph.html's. There is no build step, so bare specifiers
+       are resolved by the browser itself; the 3D widgets (colourspace,
+       similarity) import "three" and "three/addons/" through this, and load
+       the vendored copy on demand only once one of them is actually on the
+       page. Must come before the module below, which is what starts them. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/vendor/three/three.module.js",
+      "three/addons/": "/vendor/three/addons/"
+    }
+  }
+  </script>
   <script type="module" src="/project/main.js"></script>
 </body>
 </html>

@@ -40,7 +40,7 @@ A local-first reference library for fashion design research. Images, PDFs and te
 
 These are not preferences. Violating one means the change gets reverted.
 
-1. **No build step.** No `package.json`, no bundler, no npm. The frontend is ES modules served directly by Flask. Bare specifiers resolve through an `<script type="importmap">` in each page that needs them (see `static/graph.html`). Third-party code is vendored into `static/vendor/`, as Three.js already is.
+1. **No build step.** No `package.json`, no bundler, no npm. The frontend is ES modules served directly by Flask. Bare specifiers resolve through an `<script type="importmap">` in each page that needs them (`static/graph.html`, `static/connections.html`, `static/colour-connections.html`, `static/project.html` — all the same map). Third-party code is vendored into `static/vendor/`, as Three.js already is.
 2. **User data persists to SQLite through the API.** Never `localStorage` or `sessionStorage` for widget layouts, folders, canvas contents, project settings or anything else the user created. The only permitted uses are the existing ones: the theme preference in `theme.js`, and the graph→connections handoff in `graph-common.js`.
 3. **Relative fetch paths only.** `fetch("/api/...")`. No absolute URLs, no hard-coded ports, no `http://` literals in client code. Only `app.py` knows the port. This keeps a desktop webview build viable later.
 4. **Never assume `file://`.** ES modules and the import map break under it. Everything is served over the local HTTP origin.
@@ -96,10 +96,25 @@ These are not preferences. Violating one means the change gets reverted.
 | `project/rich-text.js`, `text-utils.js` | Per-selection rich text editing. |
 | `project/top-bar.js` | Shared bar at the top of the page. **In normal document flow, not fixed** — showing it pushes the grid down, hiding it collapses the page back to "grid starts at the top of the viewport". Sections are keyed (`appearance`, `format`) and shown independently. This is how transient chrome is added without reinstating a header; new chrome should use it rather than inventing another bar. |
 | `project/widget-dock.js` | The "+" Add Widget dock, bottom-right, visible during edit mode. Page-level chrome, not a widget — it talks to `main.js` directly rather than through the widget host contract. Any session that adds a widget type gets it in the dock for free via `shell.addableTypes()`. |
+| `project/scene-widget.js` | The frame every 3D widget is built in: on-demand Three.js import, empty state instead of a scene when there is nothing to draw, `host.onResize` → `resize()`, `destroy()` → `dispose()`, and the scene going inert during edit mode. A new 3D widget supplies `load()` and `build()`; it never touches a renderer. |
 
-Widgets so far: `title`, `text`, `notepad`, `settings`, `exit`.
+Widgets so far: `title`, `text`, `notepad`, `settings`, `exit`, `sidebar`, `folders`, `grid-button`, `folder`, `colourspace`, `similarity`.
 
-Shared: `graph-common.js` (Three.js constants, themes, sprite helpers), `theme.js` (dark mode, loaded synchronously in `<head>` to avoid a flash of the wrong theme), `ui-effects.js` (button press pulse), `style.css`.
+### The 3D scenes
+
+Three modules, none of which own a page:
+
+| Module | Responsibility |
+|---|---|
+| `shared/scene-host.js` | `createSceneHost(el)` → renderer, camera, OrbitControls and the render loop, **sized to an element, not the window** (ResizeObserver, not a resize listener). Pauses when its element is off screen (IntersectionObserver) so several scenes on one page don't all render at once. Every visual constant comes from `graph-common.js`. `dispose()` releases the WebGL context — a widget that leaks one per add/remove cycle breaks the page after a handful. |
+| `similarity-map.js` | The plane stack, nodes, tag captions and threads, built into a scene handed in. |
+| `colour-map.js` | The LCh cylinder, same deal. |
+
+`graph.js`, and the two 3D widgets, are all callers of these — the full-page view adds the intro choreography and the fold into the flat Connections canvas; a widget adds a caption, a toggle and nothing else. Any new view of the archive in 3D should be a fourth caller, not a fourth renderer.
+
+**Textures and geometries are shared across scenes.** `graph-common.js`'s `disposeSubtree` frees what a subtree genuinely owns and skips anything marked `userData.shared` (the page-wide plane geometries and tag-label cache, and a view's own dot/ring textures, which it disposes itself). Disposing a shared resource from one widget's teardown breaks every other scene still on the page.
+
+Shared: `graph-common.js` (Three.js constants, themes, sprite helpers, the dispose rule), `theme.js` (dark mode, loaded synchronously in `<head>` to avoid a flash of the wrong theme), `ui-effects.js` (button press pulse), `style.css`.
 
 ---
 

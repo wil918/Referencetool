@@ -14,6 +14,26 @@ export const DOT_SIZE = 0.16;
 export const HUB_DOT_SIZE = 0.23;
 export const THUMB_SIZE = 1.3;
 
+/* The lens every 3D view of the archive is seen through -- the full-page
+ * graph's opening shot, and the embedded scene host (shared/scene-host.js)
+ * that project widgets render into. Here rather than in either of them so an
+ * embedded scene is recognisably the same picture as the full-page one, at a
+ * different size. `far` is generous because the full-page fold dollies a long
+ * way back as the field of view narrows toward orthographic. */
+export const FIELD_OF_VIEW = 50;
+export const CAMERA_NEAR = 0.1;
+export const CAMERA_FAR = 2000;
+
+// Nodes swap from a plain dot to a loaded thumbnail once the camera gets
+// this close (world units) -- so zoomed out shows only the thread/dot
+// structure, and thumbnails reveal themselves as you move in on a cluster.
+export const THUMBNAIL_DISTANCE = 9;
+
+// New thumbnails started per check in Colour mode, where every node loads one
+// regardless of distance -- the same budgeting the flat Connections view uses
+// to keep panning from firing off a request storm.
+export const COLOUR_THUMB_BUDGET = 6;
+
 export const PLANE_SIZE = 16;
 export const PLANE_THICKNESS = 0.35;
 export const PLANE_GAP_2D = 3; // breathing room between panes once they lie side by side
@@ -62,6 +82,11 @@ export function currentTheme() {
 export const INTRA_THREAD_OPACITY = 0.45;
 export const CROSS_THREAD_OPACITY = 0.22;
 
+// How far a node recedes once something else has been singled out -- the
+// colour map's selection and the similarity map's, which have to agree or the
+// same gesture would read as a different strength of answer in each.
+export const DIMMED_OPACITY = 0.22;
+
 // What the 3D page hands to the flat page through sessionStorage: the camera
 // framing to resume from, the graph data (so the flat page can draw its first
 // frame without waiting on a fetch), and a still of the last 3D frame to hold
@@ -89,6 +114,9 @@ export function dotTexture(color) {
   ctx.fill();
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  // One texture behind every dot in the view -- belongs to whoever made it,
+  // not to any one sprite. See disposeSubtree.
+  texture.userData.shared = true;
   return texture;
 }
 
@@ -108,11 +136,14 @@ export function ringTexture(color, lineWidth = 5) {
   ctx.stroke();
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.userData.shared = true; // one ring texture behind every node's ring
   return texture;
 }
 
 // Keyed on colour as well as text: the two themes need different textures
-// for the same tag, so a switch doesn't keep serving the stale one.
+// for the same tag, so a switch doesn't keep serving the stale one. Cached
+// across every view on the page, which is why the entries are marked shared
+// below -- see disposeSubtree.
 const tagTextureCache = new Map();
 export function tagTexture(text, color) {
   const key = `${color}::${text}`;
@@ -135,6 +166,7 @@ export function tagTexture(text, color) {
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.userData.shared = true;
   const entry = { texture, aspect: canvas.width / canvas.height };
   tagTextureCache.set(key, entry);
   return entry;
@@ -145,14 +177,22 @@ export function tagAngle(index) {
   return index * 2.399963;
 }
 
+/* Returns the environment map it installed, so a scene that doesn't live for
+ * the lifetime of the page (a widget's) can release it again -- unlike the
+ * lights, which own no GPU memory. The generator itself is disposed here and
+ * now: it only owns the scratch targets used to build the map, never the map
+ * it returns. */
 export function setupEnvironment(scene, renderer) {
   const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  const environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  pmrem.dispose();
+  scene.environment = environment;
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.7));
   const keyLight = new THREE.DirectionalLight(0xffffff, 1.1);
   keyLight.position.set(6, 10, 8);
   scene.add(keyLight);
+  return environment;
 }
 
 let sharedPlaneGeo = null;
@@ -161,8 +201,94 @@ function planeGeometries() {
   if (!sharedPlaneGeo) {
     sharedPlaneGeo = new THREE.BoxGeometry(PLANE_SIZE, PLANE_SIZE, PLANE_THICKNESS);
     sharedPlaneEdgeGeo = new THREE.EdgesGeometry(sharedPlaneGeo);
+    // One pair for every plane in every view on the page -- see disposeSubtree.
+    sharedPlaneGeo.userData.shared = true;
+    sharedPlaneEdgeGeo.userData.shared = true;
   }
   return { geo: sharedPlaneGeo, edgeGeo: sharedPlaneEdgeGeo };
+}
+
+/* Release everything a subtree of the scene graph owns on the GPU, and detach
+ * it from its parent.
+ *
+ * Several project widgets can be on screen at once, each with its own scene,
+ * and a removed widget has to give its memory back. What it may not free is
+ * anything it merely *references*: `userData.shared` marks a resource that
+ * belongs to something outside this subtree -- the plane geometries and tag
+ * label textures cached once for the whole page, and the dot and ring
+ * textures a view creates and hands to every one of its sprites. Those are
+ * the creator's to dispose, once, when the view itself goes. Sprite geometry
+ * is skipped for the same reason: every Sprite on the page shares one
+ * module-level geometry inside three.js.
+ *
+ * What is left -- per-object line geometries, every material, and the
+ * thumbnails loaded onto individual nodes -- is genuinely this subtree's.
+ */
+export function disposeSubtree(root) {
+  root.traverse((object) => {
+    if (object.geometry && !object.isSprite && !object.geometry.userData.shared) {
+      object.geometry.dispose();
+    }
+    const materials = Array.isArray(object.material)
+      ? object.material
+      : object.material ? [object.material] : [];
+    for (const material of materials) {
+      if (material.map && !material.map.userData.shared) material.map.dispose();
+      material.dispose();
+    }
+  });
+  root.parent?.remove(root);
+}
+
+/* Swap a node's dot for its own thumbnail.
+ *
+ * Shared by the full-page graph and the project widgets so a reference looks
+ * the same in both. `onLoaded` is for a caller that sizes sprites itself (the
+ * colour map draws a selected node larger, so it has to re-apply its
+ * emphasis once the texture arrives and the sprite grows).
+ *
+ * A view torn down mid-flight marks its sprites "gone" (each map module's
+ * dispose does this), which is what stops a late arrival from resurrecting a
+ * texture on a sprite whose scene no longer exists.
+ */
+export function loadThumbnail(sprite, onLoaded) {
+  const ref = sprite.userData.ref;
+  sprite.userData.thumbState = "loading";
+  new THREE.TextureLoader().load(
+    `/media/${ref.id}/thumb`,
+    (texture) => {
+      if (sprite.userData.thumbState !== "loading") {
+        texture.dispose();
+        return;
+      }
+      texture.colorSpace = THREE.SRGBColorSpace;
+      sprite.material.map = texture;
+      sprite.material.needsUpdate = true;
+      const size = sprite.userData.baseSize || THUMB_SIZE;
+      sprite.scale.set(size, size, 1);
+      sprite.userData.thumbState = "loaded";
+      onLoaded?.(sprite);
+    },
+    undefined,
+    () => {
+      // Text/PDF references have no /thumb -- leave the dot as-is.
+      if (sprite.userData.thumbState === "loading") sprite.userData.thumbState = "failed";
+    }
+  );
+}
+
+export function revertToDot(sprite, dotTex, hubTex) {
+  const ref = sprite.userData.ref;
+  // The thumbnail it was showing is this view's own, loaded for this sprite
+  // and referenced by nothing else once it is off the material.
+  if (sprite.material.map !== dotTex && sprite.material.map !== hubTex) {
+    sprite.material.map?.dispose();
+  }
+  sprite.material.map = ref.is_hub ? hubTex : dotTex;
+  sprite.material.needsUpdate = true;
+  const size = ref.is_hub ? HUB_DOT_SIZE : DOT_SIZE;
+  sprite.scale.set(size, size, 1);
+  sprite.userData.thumbState = "none";
 }
 
 /* One translucent glass sheet for a cluster, tinted by the average colour of
@@ -249,8 +375,12 @@ export function planeOffsets2d(planes) {
 
 /* Builds one LineSegments covering a whole group of edges, plus enough
  * bookkeeping (each edge's two endpoint node records) for updateEdgeGroup()
- * to fill in the actual vertex positions afterward. */
-export function makeEdgeGroup(scene, edges, nodes, opacity, color) {
+ * to fill in the actual vertex positions afterward.
+ *
+ * `parent` is any Object3D: the flat page adds these straight to its scene,
+ * while the similarity map puts them in its own group so the whole layout can
+ * be shown, hidden and disposed as one thing. */
+export function makeEdgeGroup(parent, edges, nodes, opacity, color) {
   if (!edges.length) return null;
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const defs = edges.map((e) => ({ a: byId.get(e.source), b: byId.get(e.target) })).filter((d) => d.a && d.b);
@@ -260,7 +390,7 @@ export function makeEdgeGroup(scene, edges, nodes, opacity, color) {
   geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(defs.length * 6), 3));
   const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
   const mesh = new THREE.LineSegments(geometry, material);
-  scene.add(mesh);
+  parent.add(mesh);
   return { geometry, defs, mesh };
 }
 

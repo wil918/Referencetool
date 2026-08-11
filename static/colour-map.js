@@ -18,7 +18,9 @@
  */
 import * as THREE from "three";
 import {
+  DIMMED_OPACITY,
   DOT_SIZE,
+  disposeSubtree,
   makeNodeSprite,
   makeTagSprite,
   ringTexture,
@@ -34,7 +36,6 @@ const RING_SIZE = 1.9;
 
 const GUIDE_OPACITY = 0.3;
 const HUE_TICK_SIZE = 0.34;
-const DIMMED_OPACITY = 0.22; // unselected nodes, once a selection exists
 const RELATION_OPACITY = 0.55;
 
 const CIRCLE_SEGMENTS = 96;
@@ -140,30 +141,34 @@ export function createColourMap(scene, theme) {
     });
   }
 
-  function setData(data, dotTex) {
-    // Rings and guides are separate objects from the nodes, so clearing only
-    // the nodes would leave the previous layout's rings and rim floating at
-    // positions nothing occupies any more -- visible every time the black and
-    // white toggle rebuilds the map.
-    //
-    // Only a loaded thumbnail's texture is freed: the dot, ring and tag-label
-    // textures are shared or cached in graph-common, and disposing one would
-    // pull it out from under every other sprite still using it.
-    nodes.forEach((sprite) => {
-      if (sprite.userData.thumbState === "loaded") sprite.material.map?.dispose();
-    });
+  /* Rings and guides are separate objects from the nodes, so clearing only
+   * the nodes would leave the previous layout's rings and rim floating at
+   * positions nothing occupies any more -- visible every time the black and
+   * white toggle rebuilds the map.
+   *
+   * guideGroup itself is emptied rather than removed: it is what the fold
+   * turns as a rigid body, and buildGuides fills it again straight after, so
+   * detaching it here would leave the rebuilt scaffolding parented to nothing
+   * in the scene and simply not drawn.
+   *
+   * What is and isn't this map's to free is graph-common's disposeSubtree
+   * rule -- the dot, ring and tag-label textures are shared with sprites this
+   * clear knows nothing about. */
+  function clear() {
+    // Stops a thumbnail that is still in flight from landing on a sprite that
+    // no longer belongs to anything (graph-common's loadThumbnail).
+    nodes.forEach((sprite) => (sprite.userData.thumbState = "gone"));
+    [...guideGroup.children].forEach(disposeSubtree);
+    guides.length = 0;
     [...group.children]
-      .filter((child) => child !== relationLines)
-      .forEach((child) => {
-        group.remove(child);
-        // Every Sprite in three.js shares one module-level geometry, so
-        // disposing it here would pull the rug out from under the similarity
-        // view's sprites too. Only the guide lines own theirs.
-        if (!child.isSprite) child.geometry?.dispose();
-        child.material?.dispose();
-      });
+      .filter((child) => child !== relationLines && child !== guideGroup)
+      .forEach(disposeSubtree);
     nodes.clear();
+    sprites = [];
+  }
 
+  function setData(data, dotTex) {
+    clear();
     buildGuides(data);
 
     data.nodes.forEach((n) => {
@@ -288,6 +293,17 @@ export function createColourMap(scene, theme) {
     hideChrome() {
       relationLines.visible = false;
       nodes.forEach((sprite) => (sprite.userData.ring.material.opacity = 0));
+    },
+
+    /* Everything this map made, released. Needed because a project widget can
+     * be removed from the grid while the page lives on -- unlike the
+     * full-page view, whose scene only ever ends with the document. The ring
+     * texture is disposed here rather than by disposeSubtree because it is
+     * this map's, handed to every ring sprite it built. */
+    dispose() {
+      clear();
+      disposeSubtree(group);
+      ringTex.dispose();
     },
   };
 }
