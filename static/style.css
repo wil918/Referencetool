@@ -1328,7 +1328,8 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
    as a button sitting on the page, not a card with something small centred
    inside a block of empty padding. */
 .widget-body:has(.widget-settings),
-.widget-body:has(.widget-exit) {
+.widget-body:has(.widget-exit),
+.widget-body:has(.widget-sidebar) {
   padding: 0.35rem;
 }
 
@@ -1393,6 +1394,7 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
 .widget-grid.is-editing .widget-body:has(.widget-editable-text) { pointer-events: auto; }
 .widget-grid.is-editing .widget:not(.is-locked) .widget-resize { display: block; }
 .widget-grid.is-editing .widget.is-removable .widget-remove { display: flex; }
+.widget-grid.is-editing .widget.is-removable .widget-move-handle { display: flex; }
 .widget-grid.is-editing .widget-shadow-toggle { display: flex; }
 .widget-grid.is-gesturing { user-select: none; }
 .widget-grid.is-gesturing .widget { cursor: grabbing; }
@@ -1454,6 +1456,35 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
 .widget-shadow-toggle:hover { box-shadow: var(--raise-md); }
 .widget-shadow-toggle:active { box-shadow: var(--press-sm); transform: scale(0.95); }
 .widget.is-shadow-on .widget-shadow-toggle { color: var(--accent); }
+
+/* The drag-out-of-the-grid handle, bottom-left -- opposite the resize nub,
+   under the shadow toggle. A native HTML5 drag source (grid.js), not the
+   pointer gesture the other three corners take part in, so it can be dropped
+   on a sidebar's panel outside .widget-grid entirely. */
+.widget-move-handle {
+  display: none;
+  position: absolute;
+  bottom: clamp(4px, 18cqmin, 10px);
+  left: clamp(4px, 18cqmin, 10px);
+  width: clamp(14px, 44cqmin, 22px);
+  height: clamp(14px, 44cqmin, 22px);
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-sm);
+  color: var(--muted);
+  font-size: clamp(0.55rem, 16cqmin, 0.85rem);
+  line-height: 1;
+  padding: 0;
+  cursor: grab;
+  touch-action: none;
+  transition: var(--press);
+}
+
+.widget-move-handle:hover { box-shadow: var(--raise-md); }
+.widget-move-handle:active { cursor: grabbing; }
 
 /* Floating Save/Cancel for the grid's edit mode -- pinned to a corner so it
    never covers the widgets being arranged, but above them in z-index so it's
@@ -1850,3 +1881,196 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
    jumps straight into edit mode instead. Add Widget is the dock
    (.widget-dock-*  above); Appearance is .appearance-panel, a section of
    .project-top-bar above. */
+
+/* --- Project widget: sidebar (widgets/sidebar.js) ---
+   The grid tile is a compact button, styled the same way as the settings
+   gear and exit link it sits alongside. */
+.widget-sidebar {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+}
+
+.widget-sidebar-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  width: 100%;
+  height: 100%;
+  font-family: var(--sans);
+  font-size: clamp(0.55rem, 16cqmin, 0.75rem);
+  text-align: center;
+}
+
+.widget-sidebar-icon { font-size: clamp(0.9rem, 30cqmin, 1.3rem); line-height: 1; }
+
+.widget-sidebar-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.widget-sidebar-btn.is-active { color: var(--accent); }
+
+/* The slide-in panel -- same fixed-edge-panel treatment as .analysis-sidebar/
+   .colour-sidebar above, so it reads as part of the same app, plus a
+   transform-driven slide (those two just snap via [hidden]) since this one is
+   explicitly asked to "slide in from the edge of the page". Kept in the DOM
+   at all times rather than [hidden] -- display:none can't be transitioned --
+   and pushed off-screen by transform plus pointer-events:none while closed.
+   Appended to <body>, not host.el -- see the widget module's own comment for
+   why a container widget's panel can't live inside its grid tile. */
+.sidebar-panel {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: 340px;
+  max-width: 90vw;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-lg);
+  z-index: 9;
+  padding: 1.5rem;
+  overflow-y: auto;
+  pointer-events: none;
+  transition: transform 0.22s ease;
+}
+
+.sidebar-panel.side-left { left: 0; transform: translateX(-100%); }
+.sidebar-panel.side-right { right: 0; transform: translateX(100%); }
+/* One extra class each, deliberately more specific than the two rules above
+   -- same specificity plus source order should be enough, but this makes
+   "open" win outright rather than depending on it. */
+.sidebar-panel.side-left.is-open,
+.sidebar-panel.side-right.is-open { transform: translateX(0); pointer-events: auto; }
+
+.sidebar-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.sidebar-panel-label {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  font-family: var(--serif);
+  font-size: 1.2rem;
+  color: var(--ink);
+  padding: 0.2rem 0;
+}
+
+.sidebar-panel-label:read-only { cursor: default; }
+
+.sidebar-panel-label:not(:read-only) {
+  border-radius: 10px;
+  box-shadow: var(--press-sm);
+  padding: 0.3rem 0.6rem;
+}
+
+.sidebar-panel-flip,
+.sidebar-panel-close {
+  flex: none;
+  width: 1.8rem;
+  height: 1.8rem;
+  padding: 0;
+  border-radius: 50%;
+  line-height: 1;
+}
+
+.sidebar-panel-flip { display: none; }
+.sidebar-panel.is-editing .sidebar-panel-flip { display: inline-flex; align-items: center; justify-content: center; }
+
+.sidebar-panel-error {
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 12px;
+  box-shadow: var(--press-sm);
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+.sidebar-panel-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Children stack vertically in their own position order -- a second grid in
+   a space this narrow would just fight the 24-column one on the homepage. */
+.sidebar-child {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+  border-radius: 18px;
+}
+
+.sidebar-child.is-dragging { opacity: 0.6; }
+
+.sidebar-child-grip {
+  display: none;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none;
+}
+
+.sidebar-panel.is-editing .sidebar-child-grip { display: flex; }
+.sidebar-child-grip:active { cursor: grabbing; }
+
+.sidebar-child-body {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  height: auto;
+}
+
+.sidebar-child-remove {
+  display: none;
+  position: absolute;
+  top: 0.3rem;
+  right: 0.3rem;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-sm);
+  color: var(--accent);
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+}
+
+.sidebar-panel.is-editing .sidebar-child-remove { display: flex; }
+
+.sidebar-panel-add { margin-top: 0.5rem; }
+
+.sidebar-panel-add-toggle { display: none; width: 100%; }
+.sidebar-panel.is-editing .sidebar-panel-add-toggle { display: block; }
+
+.sidebar-panel-add-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+/* display above beats the hidden attribute's UA rule, so say it again --
+   same reasoning as .selection-toolbar[hidden] further up. */
+.sidebar-panel-add-list[hidden] { display: none; }
+
+.sidebar-panel-add-item { width: 100%; }

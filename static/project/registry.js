@@ -20,6 +20,14 @@
  * needs to know whether the grid is being edited without needing the
  * settings widget's actions to go with it.
  *
+ * A container widget (sidebar, so far) also gets host.children -- undefined
+ * for everyone else, the same pattern as host.shell -- a narrow controller
+ * for the widgets parented to it: { list(), subscribe(fn), add(type),
+ * remove(id), reorder(orderedIds), moveIn(widgetId), persistConfig(id, config) }.
+ * A container's contents live in main.js's project-wide widget rows, not in
+ * anything the container's own element holds, so it reaches them the same
+ * indirect way settings.js reaches the grid.
+ *
  * The imports below are static because there is no build step: the browser
  * resolves them itself, so a new widget is one file plus one line here.
  */
@@ -29,8 +37,9 @@ import exitWidget from "./widgets/exit.js";
 import settingsWidget from "./widgets/settings.js";
 import textWidget from "./widgets/text.js";
 import notepadWidget from "./widgets/notepad.js";
+import sidebarWidget from "./widgets/sidebar.js";
 
-const MODULES = [titleWidget, exitWidget, settingsWidget, textWidget, notepadWidget];
+const MODULES = [titleWidget, exitWidget, settingsWidget, textWidget, notepadWidget, sidebarWidget];
 
 // How long a widget's config sits before it is written. Config saves are the
 // widget's own business and happen as the user edits, unlike the grid layout,
@@ -113,7 +122,7 @@ export function definitionFor(type) {
  * `persist` is how this widget's config reaches the API; the debounce lives
  * here so no widget has to think about it.
  */
-export function mountWidget(definition, el, { project, config = null, persist, shell = null, editMode = null }) {
+export function mountWidget(definition, el, { project, config = null, persist, shell = null, editMode = null, children = null }) {
   const resizeCallbacks = [];
   const destroyCallbacks = [];
   let saveTimer = null;
@@ -139,6 +148,11 @@ export function mountWidget(definition, el, { project, config = null, persist, s
     // same state main.js already tracks for the floating edit bar, handed
     // out unconditionally rather than restricted the way host.shell is.
     editMode,
+
+    // Undefined for every widget except a container's -- see the module
+    // docblock. Only registry.js's caller (main.js) knows how to build one,
+    // since it's the only place that holds every widget's row.
+    children,
 
     save(next) {
       host.config = next;

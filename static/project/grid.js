@@ -222,6 +222,29 @@ export function createGrid(container, options = {}) {
     el.appendChild(shadowToggle);
     el.classList.toggle("is-shadow-on", item.shadow);
 
+    // A native HTML5 drag source, deliberately separate from the pointer-based
+    // gesture the rest of this file implements -- that gesture only ever
+    // moves a widget within this one container, and has no way to know when
+    // the pointer is over a sidebar's slide-in panel, which lives outside
+    // .widget-grid entirely (see widgets/sidebar.js for why). A native drag
+    // still fires dragover/drop on whatever element the pointer is over
+    // regardless of container boundaries, so it's the one mechanism that can
+    // carry a widget out of the grid. Only offered on removable widgets --
+    // the permanent controls (settings/exit/canvas) stay on the homepage.
+    const moveHandle = document.createElement("button");
+    moveHandle.type = "button";
+    moveHandle.className = "widget-move-handle";
+    moveHandle.setAttribute("aria-label", "Drag into a sidebar");
+    moveHandle.title = "Drag into a sidebar";
+    moveHandle.textContent = "⠿";
+    moveHandle.draggable = true;
+    moveHandle.addEventListener("dragstart", (event) => {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("application/x-widget-id", item.id);
+      event.dataTransfer.setData("text/plain", item.id);
+    });
+    el.appendChild(moveHandle);
+
     container.appendChild(el);
     entries.set(item.id, { item, el, body });
     mount(item, body);
@@ -328,12 +351,14 @@ export function createGrid(container, options = {}) {
     if (!editing || gesture || !event.isPrimary || event.button !== 0) return;
     // The remove and shadow-toggle buttons are click targets, not drag
     // handles -- capturing the pointer here would swallow their click before
-    // it fires. Text/Title/Notepad's own editable content joins them: it
-    // stays hit-testable while editing (style.css's :has(.widget-editable-text)
-    // exemption) so it can be clicked into and typed in, and needs the same
-    // exclusion so that placing a cursor or drag-selecting text isn't instead
-    // read as the start of a widget-move gesture.
-    if (event.target.closest(".widget-remove, .widget-shadow-toggle, .widget-editable-text")) return;
+    // it fires. The move handle is its own native drag source (see
+    // createEntry) and must never also start this pointer gesture. Text/
+    // Title/Notepad's own editable content joins them: it stays hit-testable
+    // while editing (style.css's :has(.widget-editable-text) exemption) so it
+    // can be clicked into and typed in, and needs the same exclusion so that
+    // placing a cursor or drag-selecting text isn't instead read as the start
+    // of a widget-move gesture.
+    if (event.target.closest(".widget-remove, .widget-shadow-toggle, .widget-editable-text, .widget-move-handle")) return;
 
     const el = event.target.closest(".widget");
     if (!el) return;

@@ -43,16 +43,21 @@ function showMissing(message) {
 
 // --- persistence -------------------------------------------------------------
 
+// { ok: true, saved } on success, { ok: false, error } on rejection -- the
+// nesting rules can reject a bulk save (app.py's _layout_nesting_error), and
+// that message is worth showing rather than swallowing into a generic
+// failure, both for the ordinary Save/Cancel flow and for a sidebar's
+// reparenting calls below.
 async function putWidgets(entries) {
   const res = await fetch(`/api/projects/${projectId}/widgets`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ widgets: entries }),
   });
-  if (!res.ok) return null;
-  const saved = await res.json();
-  saved.forEach((row) => rows.set(row.id, row));
-  return saved;
+  const body = await res.json().catch(() => null);
+  if (!res.ok) return { ok: false, error: body?.error || "Couldn't save." };
+  body.forEach((row) => rows.set(row.id, row));
+  return { ok: true, saved: body };
 }
 
 function layoutEntry(row, position = row.position) {
@@ -101,13 +106,92 @@ function toItem(row) {
 // inside that container and is laid out by it, not here.
 const gridRows = () => [...rows.values()].filter((row) => !row.parent_id);
 
+// Every widget parented to one container, in display order. Used both to
+// render a container's contents and to work out the next position when
+// something is added or reparented into it.
+const childRows = (parentId) =>
+  [...rows.values()]
+    .filter((row) => row.parent_id === parentId)
+    .sort((a, b) => a.position - b.position);
+
+/* Fires whenever a widget is created, deleted, or reparented/reordered --
+ * never on an ordinary config edit (persistConfig below deliberately doesn't
+ * call this). A container widget's rendered list is the one thing that needs
+ * to react to *other* widgets' existence changing; re-running that on every
+ * keystroke elsewhere in the project would tear down and reinsert its
+ * children's DOM -- including whatever the user is mid-edit inside -- for no
+ * reason. Structural changes are comparatively rare user actions, so a full
+ * re-render in response to them is cheap and expected.
+ */
+const structureSubscribers = new Set();
+function notifyStructureChange() {
+  for (const fn of structureSubscribers) fn();
+}
+
+/* The host.children controller handed to a container widget (registry.js).
+ * Bound to one container id -- the container reaches its own contents
+ * through this rather than main.js's rows map directly, the same arm's-length
+ * relationship host.shell gives the settings widget to the grid.
+ */
+function containerHost(containerId) {
+  return {
+    list: () => childRows(containerId),
+    subscribe(fn) {
+      structureSubscribers.add(fn);
+      return () => structureSubscribers.delete(fn);
+    },
+    add: (type) => addWidget(type, null, containerId),
+    remove: (id) => removeWidget(id),
+    persistConfig: (id, config) => persistConfig(id, config),
+
+    // Reordering is the container's own business -- position among its
+    // siblings, nothing to do with grid cells -- so it writes position
+    // directly rather than going through the grid's getLayout/setLayout.
+    async reorder(orderedIds) {
+      const entries = orderedIds.map((id, index) => ({
+        ...layoutEntry(rows.get(id), index),
+      }));
+      const result = await putWidgets(entries);
+      if (result.ok) notifyStructureChange();
+      return result;
+    },
+
+    // Reparents an existing widget (dragged out of the grid, or out of a
+    // different container) into this one, appended after its current
+    // children. The API re-checks every nesting rule against the layout's
+    // final state, so a stale or otherwise-invalid source id surfaces as its
+    // rejection message rather than a silent no-op.
+    async moveIn(widgetId) {
+      const source = rows.get(widgetId);
+      if (!source) return { ok: false, error: "That widget no longer exists." };
+      if (source.id === containerId) return { ok: false, error: "A sidebar can't hold itself." };
+      if (source.parent_id === containerId) return { ok: true };
+      const definition = definitionFor(source.type);
+      if (definition.permanent) {
+        return { ok: false, error: `The ${definition.label} widget can't be moved.` };
+      }
+      const entry = {
+        ...layoutEntry(source, childRows(containerId).length),
+        parent_id: containerId,
+      };
+      const result = await putWidgets([entry]);
+      if (result.ok) {
+        grid.setItems(gridRows().map(toItem));
+        notifyStructureChange();
+      }
+      return result;
+    },
+  };
+}
+
 function buildGrid() {
   grid = createGrid(gridEl, {
     mount(item, el) {
       const row = rows.get(item.id);
+      const definition = definitionFor(row.type);
       mounted.set(
         item.id,
-        mountWidget(definitionFor(row.type), el, {
+        mountWidget(definition, el, {
           project,
           config: row.config,
           persist: (config) => persistConfig(item.id, config),
@@ -118,6 +202,9 @@ function buildGrid() {
           // need to know whether the grid is being edited (see the block
           // below, and registry.js's host.editMode).
           editMode,
+          // Only a container widget gets a handle on its own contents --
+          // see registry.js's host.children.
+          children: definition.container ? containerHost(item.id) : null,
         })
       );
     },
@@ -193,9 +280,9 @@ async function saveLayout() {
     return { ...layoutEntry(row, index), x: box.x, y: box.y, w: box.w, h: box.h, locked: box.locked };
   });
 
-  const saved = await putWidgets(entries);
-  if (!saved) {
-    statusEl.textContent = "Couldn't save the layout.";
+  const result = await putWidgets(entries);
+  if (!result.ok) {
+    statusEl.textContent = result.error || "Couldn't save the layout.";
     return false;
   }
   statusEl.textContent = "";
@@ -210,36 +297,52 @@ async function saveLayout() {
  * snapshot Cancel can revert.
  *
  * `position` is the dock's drop cell (widget-dock.js); omitted, a widget is
- * appended below everything else, same as before the dock existed.
+ * appended below everything else, same as before the dock existed. Passing
+ * `parentId` is how a container widget (registry.js's host.children.add)
+ * creates a widget as its own child instead of a grid tile -- x/y are then
+ * meaningless (the container lays its children out itself) and left at 0.
+ *
+ * Returns { ok: true, row } or { ok: false, error } -- the API's nesting
+ * rejection (app.py's _nesting_error) is worth surfacing verbatim rather than
+ * failing silently, which matters most for the parentId path.
  */
-async function addWidget(type, position = null) {
+async function addWidget(type, position = null, parentId = null) {
   const definition = definitionFor(type);
-  const bottom = gridRows().reduce((max, row) => Math.max(max, row.y + row.h), 0);
-  const { x, y } = position || { x: 0, y: bottom };
+  const body = { type, w: definition.defaultSize.w, h: definition.defaultSize.h };
+  if (parentId) {
+    body.parent_id = parentId;
+    body.x = 0;
+    body.y = 0;
+  } else {
+    const bottom = gridRows().reduce((max, row) => Math.max(max, row.y + row.h), 0);
+    ({ x: body.x, y: body.y } = position || { x: 0, y: bottom });
+  }
   const res = await fetch(`/api/projects/${projectId}/widgets`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      type,
-      x,
-      y,
-      w: definition.defaultSize.w,
-      h: definition.defaultSize.h,
-    }),
+    body: JSON.stringify(body),
   });
-  if (!res.ok) return false;
-  const row = await res.json();
-  rows.set(row.id, row);
-  grid.setItems(gridRows().map(toItem));
-  return true;
+  const data = await res.json().catch(() => null);
+  if (!res.ok) return { ok: false, error: data?.error || "Couldn't add the widget." };
+  rows.set(data.id, data);
+  if (!parentId) grid.setItems(gridRows().map(toItem));
+  notifyStructureChange();
+  return { ok: true, row: data };
 }
 
 async function removeWidget(id) {
   const res = await fetch(`/api/widgets/${id}`, { method: "DELETE" });
-  if (!res.ok) return false;
+  const data = await res.json().catch(() => null);
+  if (!res.ok) return { ok: false, error: data?.error || "Couldn't remove the widget." };
   rows.delete(id);
+  // Mirrors db.py's delete_widget: deleting a container takes its children
+  // with it, so their rows are stale here too -- without this they'd sit
+  // inert in memory (harmless, since nothing renders a row with a dead
+  // parent_id) until the next reload fetched the server's actual state.
+  for (const row of childRows(id)) rows.delete(row.id);
   grid.setItems(gridRows().map(toItem));
-  return true;
+  notifyStructureChange();
+  return { ok: true };
 }
 
 /* The floating Save/Cancel control shown while the grid is being edited.
