@@ -129,107 +129,6 @@
         <div id="projects-list" class="projects-list"></div>
         <p id="projects-empty-msg" class="muted" hidden>No projects yet. Create one to start grouping references.</p>
       </div>
-
-      <div id="project-detail-view" hidden>
-        <button id="project-back-btn" class="btn">&larr; All projects</button>
-        <div class="project-detail-header">
-          <div class="project-detail-heading-row">
-            <h2 id="project-detail-title"></h2>
-            <div class="project-detail-actions">
-              <button id="analysis-sidebar-btn" class="btn">Previous Analysis</button>
-              <button id="project-select-btn" class="btn">Select</button>
-              <button id="project-edit-btn" class="btn">Edit</button>
-            </div>
-          </div>
-          <p id="project-detail-description" class="muted"></p>
-        </div>
-        <div id="project-selection-toolbar" class="selection-toolbar" hidden>
-          <span id="selection-count" class="muted">0 selected</span>
-          <div class="selection-actions">
-            <select id="selection-folder-select" disabled>
-              <option value="" selected>Move to folder…</option>
-            </select>
-            <button id="selection-delete-btn" class="btn" disabled>Delete</button>
-            <button id="selection-colour-btn" class="btn" disabled>Colour Similarity</button>
-            <button id="selection-analyze-btn" class="btn primary" disabled>Analyze</button>
-          </div>
-        </div>
-        <p id="selection-status" class="muted"></p>
-        <div id="project-grid" class="grid"></div>
-        <p id="project-empty-msg" class="muted" hidden>No references in this project yet. Add some from the Archive page.</p>
-
-        <aside id="analysis-sidebar" class="analysis-sidebar" hidden>
-          <div class="analysis-sidebar-header">
-            <h3>Previous Analysis</h3>
-            <button id="analysis-sidebar-close" class="btn">Close</button>
-          </div>
-
-          <div id="analysis-sidebar-list-view">
-            <div id="analysis-sidebar-list" class="analysis-list"></div>
-            <p id="analysis-sidebar-empty" class="muted" hidden>
-              No saved analyses yet. Run Analyze and save the conversation to see it here.
-            </p>
-          </div>
-
-          <div id="analysis-sidebar-detail" hidden>
-            <button id="analysis-detail-back" class="btn">&larr; All analyses</button>
-            <p id="analysis-detail-date" class="muted"></p>
-            <div id="analysis-detail-refs" class="grid small"></div>
-            <div id="analysis-detail-transcript" class="analyze-transcript"></div>
-          </div>
-        </aside>
-
-        <!-- Colour Similarity. Pinned to the left, so it can sit open beside
-             the analysis sidebar on the right without the two fighting for
-             the same space. -->
-        <aside id="colour-sidebar" class="colour-sidebar" hidden>
-          <div class="analysis-sidebar-header">
-            <h3>Colour Similarity</h3>
-            <button id="colour-sidebar-close" class="btn">Close</button>
-          </div>
-
-          <p id="colour-empty" class="muted" hidden>
-            Select one or more references to search by colour.
-          </p>
-
-          <div id="colour-body" hidden>
-            <div class="colour-section">
-              <div class="colour-section-label">Selected</div>
-              <div id="colour-selected" class="colour-selected"></div>
-              <div class="colour-section-label">Combined palette</div>
-              <div id="colour-combined-palette" class="palette-strip large"></div>
-            </div>
-
-            <div class="colour-section">
-              <div class="colour-controls">
-                <label class="colour-control">
-                  <span>Hue</span>
-                  <input type="range" min="0" max="100" value="50" data-weight="hue">
-                </label>
-                <label class="colour-control">
-                  <span>Lightness</span>
-                  <input type="range" min="0" max="100" value="50" data-weight="lightness">
-                </label>
-                <label class="colour-control">
-                  <span>Saturation</span>
-                  <input type="range" min="0" max="100" value="50" data-weight="saturation">
-                </label>
-                <label class="colour-control">
-                  <span>Proportions</span>
-                  <input type="range" min="0" max="100" value="50" data-weight="proportions">
-                </label>
-              </div>
-              <label class="checkbox-label colour-bw-toggle">
-                <input type="checkbox" id="colour-exclude-bw">
-                Remove black &amp; white
-              </label>
-            </div>
-
-            <p id="colour-status" class="muted"></p>
-            <div id="colour-results" class="colour-results"></div>
-          </div>
-        </aside>
-      </div>
     </section>
 
     <section id="tab-settings" class="tab">
@@ -302,7 +201,7 @@
 
   <div id="new-project-overlay" class="modal-overlay" hidden>
     <div class="modal-box">
-      <h3 id="project-modal-heading">New project</h3>
+      <h3>New project</h3>
       <input type="text" id="new-project-title" placeholder="Project title">
       <textarea id="new-project-description" rows="3" placeholder="Description (optional)"></textarea>
       <p id="new-project-status" class="muted"></p>
@@ -311,37 +210,6 @@
         <button id="new-project-create" class="btn primary">Create</button>
       </div>
     </div>
-  </div>
-
-  <div id="analyze-mode-overlay" class="modal-overlay" hidden>
-    <div class="modal-box">
-      <h3>Run analysis</h3>
-      <p class="muted">How detailed should the write-up be?</p>
-      <div class="mode-choice-actions">
-        <button id="analyze-mode-summary" class="btn">Summarised</button>
-        <button id="analyze-mode-full" class="btn primary">Full analysis</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="analyze-overlay" class="modal-overlay" hidden>
-    <div class="modal-box analyze-box">
-      <h3>Analysis</h3>
-      <div id="analyze-transcript" class="analyze-transcript"></div>
-      <div class="analyze-input-row">
-        <input type="text" id="analyze-followup-input" placeholder="Ask a follow-up...">
-        <button id="analyze-followup-send" class="btn primary">Send</button>
-      </div>
-      <div class="modal-actions">
-        <button id="analyze-save-btn" class="btn" disabled>Save conversation</button>
-        <button id="analyze-close-btn" class="btn">Close</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="ref-preview-popup" class="ref-preview-popup" hidden>
-    <div id="ref-preview-media" class="ref-preview-media"></div>
-    <div id="ref-preview-title" class="ref-preview-title"></div>
   </div>
 
   <div id="carousel-overlay" class="carousel-overlay" hidden>

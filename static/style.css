@@ -705,6 +705,39 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
 .project-detail-header { margin-bottom: 1.5rem; }
 .project-detail-header p { margin: 0; }
 
+/* project.html's pages (project/pages/grid-page.js) have no back button of
+   their own in flow -- main.js's router pins one to the viewport instead
+   (.project-page-back below), so the heading row reserves room on the right
+   for it rather than letting "Previous Analysis"/"Select" sit underneath. */
+body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
+
+/* The floating back arrow project/main.js's router shows on every hash-routed
+   project page. Above every sidebar (.analysis-sidebar/.colour-sidebar are
+   z-index: 50) so it stays reachable even with one open -- the same
+   "corner control wins over what it sits above" reasoning as
+   .widget-dock-fab over .widget-dock-panel. */
+.project-page-back {
+  position: fixed;
+  top: 1.15rem;
+  right: 1.15rem;
+  z-index: 60;
+  width: 2.5rem;
+  height: 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-md);
+  color: var(--project-ink, var(--ink));
+  transition: var(--press);
+}
+
+.project-page-back:hover { box-shadow: var(--raise-lg); }
+.project-page-back:active { box-shadow: var(--press-sm); transform: scale(0.96); }
+.project-page-back svg { width: 1.1rem; height: 1.1rem; display: block; }
+.project-page-back[hidden] { display: none; }
+
 .project-detail-heading-row {
   display: flex;
   align-items: center;
@@ -1933,6 +1966,27 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
 }
 
 .widget-missing { margin: 0; text-align: center; }
+
+/* --- Project widgets: grid-button, folder (project/widgets/grid-button.js,
+   folder.js) --- links into the project's hash-routed pages, styled the same
+   compact-button-filling-the-tile way as .widget-exit above, including its
+   min-width: 0 truncation fix for narrow columns. */
+.widget-grid-button,
+.widget-folder-button {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+}
+
+.widget-grid-button .btn,
+.widget-folder-button .btn {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 
 .widget-settings {
   display: flex;

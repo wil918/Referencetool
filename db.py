@@ -551,10 +551,19 @@ def add_reference_to_project(project_id, reference_id):
 
 
 def remove_reference_from_project(project_id, reference_id):
+    """Drop a reference from a project, and from every one of that project's
+    folders with it -- a folder is a view over its project's references, so a
+    reference that's no longer in the project can't legitimately stay filed in
+    a folder that belongs to it."""
     with get_conn() as conn:
         conn.execute(
             "DELETE FROM project_references WHERE project_id = ? AND reference_id = ?",
             (project_id, reference_id),
+        )
+        conn.execute(
+            """DELETE FROM folder_references WHERE reference_id = ? AND folder_id IN
+                   (SELECT id FROM folders WHERE project_id = ?)""",
+            (reference_id, project_id),
         )
 
 

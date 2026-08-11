@@ -39,8 +39,20 @@ import textWidget from "./widgets/text.js";
 import notepadWidget from "./widgets/notepad.js";
 import sidebarWidget from "./widgets/sidebar.js";
 import foldersWidget from "./widgets/folders.js";
+import gridButtonWidget from "./widgets/grid-button.js";
+import folderWidget from "./widgets/folder.js";
 
-const MODULES = [titleWidget, exitWidget, settingsWidget, textWidget, notepadWidget, sidebarWidget, foldersWidget];
+const MODULES = [
+  titleWidget,
+  exitWidget,
+  settingsWidget,
+  textWidget,
+  notepadWidget,
+  sidebarWidget,
+  foldersWidget,
+  gridButtonWidget,
+  folderWidget,
+];
 
 // How long a widget's config sits before it is written. Config saves are the
 // widget's own business and happen as the user edits, unlike the grid layout,

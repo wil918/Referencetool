@@ -223,9 +223,15 @@ export default {
     // Anti-stacking, enforced here too, not just server-side: a sidebar's own
     // Add Widget list excludes every container (nesting is one level deep)
     // and every permanent widget (settings/exit/canvas are homepage fixtures,
-    // not panel contents).
+    // not panel contents). "folder" is excluded too -- unlike every other
+    // type here, it needs a folder_id seeded at creation time (one widget per
+    // folder, not one generic type), which this list's plain add(type) has no
+    // way to supply; the main grid's dock expands it into one card per
+    // existing folder instead (project/main.js's shell.addableTypes).
     function eligibleChildTypes() {
-      return allWidgetDefinitions().filter((definition) => !definition.container && !definition.permanent);
+      return allWidgetDefinitions().filter(
+        (definition) => !definition.container && !definition.permanent && definition.type !== "folder"
+      );
     }
 
     function buildAddList() {

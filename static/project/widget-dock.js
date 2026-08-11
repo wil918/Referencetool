@@ -5,7 +5,7 @@
  * to main.js's own addWidget/grid geometry directly rather than through the
  * widget host contract.
  *
- * Each addable type (shell.addableTypes() -- already excludes permanent
+ * Each addable entry (shell.addableTypes() -- already excludes permanent
  * types, so this naturally surfaces Title/Text/Notepad and nothing else)
  * gets a small stacked "deck" card. Dragging a card onto the grid places a
  * widget at the drop cell, falling back to the default bottom-of-grid
@@ -13,6 +13,13 @@
  * clicking a card is the same fallback, for touch and keyboard use -- native
  * drag-and-drop suppresses the trailing click after a real drag completes,
  * so no click-vs-drag disambiguation is needed here.
+ *
+ * "entry" rather than "type" throughout: shell.addableTypes() can list the
+ * same type more than once (one folder widget entry per existing folder,
+ * each with its own config.folder_id), so drag state has to track which
+ * specific entry is being dragged, not just its type string -- looking a
+ * dropped type back up in the definitions list would find only the first of
+ * however many folder entries share it.
  */
 
 export function createWidgetDock({ gridEl, addableTypes, addWidget, cellFromPoint, wouldFit }) {
@@ -40,7 +47,7 @@ export function createWidgetDock({ gridEl, addableTypes, addWidget, cellFromPoin
   panel.appendChild(list);
 
   const definitions = addableTypes();
-  let dragType = null;
+  let dragEntry = null;
 
   for (const definition of definitions) {
     const card = document.createElement("button");
@@ -76,33 +83,32 @@ export function createWidgetDock({ gridEl, addableTypes, addWidget, cellFromPoin
     card.appendChild(top);
 
     card.addEventListener("dragstart", (event) => {
-      dragType = definition.type;
+      dragEntry = definition;
       event.dataTransfer.effectAllowed = "copy";
       event.dataTransfer.setData("text/plain", definition.type);
     });
     card.addEventListener("dragend", () => {
-      dragType = null;
+      dragEntry = null;
     });
-    card.addEventListener("click", () => addWidget(definition.type));
+    card.addEventListener("click", () => addWidget(definition.type, null, null, definition.config));
 
     list.appendChild(card);
   }
 
   function onDragOver(event) {
-    if (!dragType) return;
+    if (!dragEntry) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   }
 
   function onDrop(event) {
-    if (!dragType) return;
+    if (!dragEntry) return;
     event.preventDefault();
-    const definition = definitions.find((d) => d.type === dragType);
-    const size = (definition && definition.defaultSize) || { w: 3, h: 2 };
+    const size = dragEntry.defaultSize || { w: 3, h: 2 };
     const { x, y } = cellFromPoint(event.clientX, event.clientY, size.w, size.h);
     const box = { x, y, w: size.w, h: size.h };
-    addWidget(dragType, wouldFit(box) ? { x, y } : null);
-    dragType = null;
+    addWidget(dragEntry.type, wouldFit(box) ? { x, y } : null, null, dragEntry.config);
+    dragEntry = null;
   }
 
   gridEl.addEventListener("dragover", onDragOver);

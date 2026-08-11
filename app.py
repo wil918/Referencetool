@@ -376,6 +376,14 @@ def api_create_folder(project_id):
     return jsonify(db.get_folder(folder_id))
 
 
+@app.get("/api/folders/<folder_id>")
+def api_get_folder(folder_id):
+    folder = db.get_folder(folder_id)
+    if not folder:
+        abort(404)
+    return jsonify(folder)
+
+
 @app.put("/api/folders/<folder_id>")
 def api_update_folder(folder_id):
     """Rename or reorder a folder.

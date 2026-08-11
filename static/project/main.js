@@ -9,14 +9,22 @@ import { createGrid } from "./grid.js";
 import { all as allWidgetDefinitions, definitionFor, mountWidget } from "./registry.js";
 import { createWidgetDock } from "./widget-dock.js";
 import { createAppearancePanel } from "./appearance-panel.js";
+import { createGridPage } from "./pages/grid-page.js";
+import * as folders from "./folders.js";
 
 const statusEl = document.getElementById("project-shell-status");
 const bodyEl = document.getElementById("project-shell-body");
 const gridEl = document.getElementById("widget-grid");
+const pageContainerEl = document.getElementById("project-page-container");
 
 let projectId = null;
 let project = null;
 let grid = null;
+// This project's folders, fetched once at boot -- the dock's one-card-per-
+// -folder expansion (shell.addableTypes below) reads it synchronously, so it
+// has to already be in hand by the time the dock is built, not fetched on
+// demand per open.
+let folderRows = [];
 
 // Every widget row as the server last returned it. The grid only carries
 // layout, so this is where type, parent_id, position and config live.
@@ -305,10 +313,16 @@ async function saveLayout() {
  * Returns { ok: true, row } or { ok: false, error } -- the API's nesting
  * rejection (app.py's _nesting_error) is worth surfacing verbatim rather than
  * failing silently, which matters most for the parentId path.
+ *
+ * `config` seeds the widget's config at creation time -- every other addable
+ * type starts from nothing, but a folder widget (widgets/folder.js) is
+ * meaningless without a folder_id, and the dock's per-folder cards
+ * (shell.addableTypes below) carry one to seed here.
  */
-async function addWidget(type, position = null, parentId = null) {
+async function addWidget(type, position = null, parentId = null, config = null) {
   const definition = definitionFor(type);
   const body = { type, w: definition.defaultSize.w, h: definition.defaultSize.h };
+  if (config) body.config = config;
   if (parentId) {
     body.parent_id = parentId;
     body.x = 0;
@@ -394,15 +408,38 @@ const shell = {
   // defaultSize/thumbnail ride along for widget-dock.js's cards -- it needs
   // a box size to compute a drop cell, and an optional thumbnail is the
   // extension point for a future resource-heavy widget's card.
-  addableTypes: () =>
-    allWidgetDefinitions()
-      .filter((definition) => !definition.permanent)
-      .map((definition) => ({
+  //
+  // "folder" is expanded rather than listed once: a folder widget is
+  // meaningless without knowing which folder it opens, so instead of one
+  // generic "Folder" card the dock gets one per folder this project actually
+  // has, each seeding config.folder_id (addWidget above) at creation time.
+  // A project with no folders simply contributes no folder cards -- not an
+  // error, just nothing to expand.
+  addableTypes: () => {
+    const entries = [];
+    for (const definition of allWidgetDefinitions()) {
+      if (definition.permanent) continue;
+      if (definition.type === "folder") {
+        for (const folder of folderRows) {
+          entries.push({
+            type: definition.type,
+            label: folder.name,
+            defaultSize: definition.defaultSize,
+            thumbnail: definition.thumbnail,
+            config: { folder_id: folder.id },
+          });
+        }
+        continue;
+      }
+      entries.push({
         type: definition.type,
         label: definition.label,
         defaultSize: definition.defaultSize,
         thumbnail: definition.thumbnail,
-      })),
+      });
+    }
+    return entries;
+  },
   addWidget,
 };
 
@@ -438,6 +475,163 @@ window.addEventListener("beforeunload", (event) => {
   event.returnValue = "";
 });
 
+// --- pages: hash routes on this same document ---------------------------
+//
+// #page=grid and #page=folder&id=<fid> both mount project/pages/grid-page.js
+// over #project-page-container, in place of the homepage grid -- real hash
+// changes (not history.pushState) so the browser's own back button walks the
+// same route history as the on-screen back arrow (below) does.
+
+let currentPage = null;
+let backBtn = null;
+// Bumped on every routeFromHash call; an in-flight async page load (folder
+// pages fetch the folder before mounting) checks its own snapshot against
+// this before mounting, so a slow load that's since been navigated away from
+// can't clobber whatever the user is looking at now.
+let navToken = 0;
+
+function ensureBackButton() {
+  if (backBtn) return backBtn;
+  backBtn = document.createElement("a");
+  backBtn.className = "project-page-back";
+  backBtn.href = "#";
+  backBtn.hidden = true;
+  backBtn.setAttribute("aria-label", "Back to project");
+  backBtn.title = "Back to project";
+  backBtn.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M15 18l-6-6 6-6"/></svg>';
+  document.body.appendChild(backBtn);
+  return backBtn;
+}
+
+function teardownPage() {
+  if (currentPage) {
+    currentPage.destroy();
+    currentPage = null;
+  }
+}
+
+function showHomepage() {
+  teardownPage();
+  pageContainerEl.hidden = true;
+  gridEl.hidden = false;
+  if (backBtn) backBtn.hidden = true;
+}
+
+function enterPage() {
+  teardownPage();
+  gridEl.hidden = true;
+  pageContainerEl.hidden = false;
+  pageContainerEl.innerHTML = "";
+  ensureBackButton().hidden = false;
+}
+
+// Delete means "remove from the project" here -- and, since a folder is only
+// ever a view over its project's references (CLAUDE.md), that has to take
+// the reference out of every one of this project's folders too, not just
+// project_references (db.py's remove_reference_from_project does that
+// cascade). The confirmation text says so, rather than leaving it to be
+// discovered.
+function projectGridDeleteBehaviour() {
+  return {
+    label: "Delete",
+    confirmHeading: "Remove from project",
+    confirmText: (n) => `Remove ${n} reference${n === 1 ? "" : "s"} from this project?`,
+    note: "This takes them out of every folder in this project too. Their record in the archive is untouched.",
+    async perform(ids) {
+      const results = await Promise.all(
+        ids.map((id) =>
+          fetch(`/api/projects/${projectId}/references/${id}`, { method: "DELETE" }).then((r) => r.ok)
+        )
+      );
+      const deleted = results.filter(Boolean).length;
+      return { deleted, failed: results.length - deleted };
+    },
+  };
+}
+
+// Delete means "unfile from this folder" here -- the project membership and
+// the archive record are untouched, which is exactly what makes this
+// different from the grid page's Delete and worth saying in the confirm text.
+function folderDeleteBehaviour(folder) {
+  return {
+    label: "Remove from folder",
+    confirmHeading: `Remove from "${folder.name}"`,
+    confirmText: (n) => `Remove ${n} reference${n === 1 ? "" : "s"} from "${folder.name}"?`,
+    note: "They stay in the project and the archive -- only this folder's grouping is removed.",
+    async perform(ids) {
+      const results = await Promise.all(
+        ids.map((id) =>
+          fetch(`/api/folders/${folder.id}/references/${id}`, { method: "DELETE" }).then((r) => r.ok)
+        )
+      );
+      const deleted = results.filter(Boolean).length;
+      return { deleted, failed: results.length - deleted };
+    },
+  };
+}
+
+function showGridPage() {
+  enterPage();
+  currentPage = createGridPage(pageContainerEl, {
+    project,
+    heading: project.title,
+    subheading: "All references in this project -- folders are just a view, nothing here is filtered by them.",
+    emptyMessage: "No references in this project yet. Add some from the Archive page.",
+    async load() {
+      const res = await fetch(`/api/projects/${projectId}`);
+      const data = await res.json();
+      // Kept in step so a rename made elsewhere (the title widget, back on
+      // the homepage) is reflected if the user returns to this page later.
+      project.title = data.title;
+      project.description = data.description;
+      return data.references;
+    },
+    deleteBehaviour: projectGridDeleteBehaviour(),
+  });
+}
+
+async function showFolderPage(folderId, token) {
+  enterPage();
+  let folder;
+  try {
+    folder = await folders.getFolder(folderId);
+  } catch (err) {
+    if (token !== navToken) return; // navigated elsewhere while this was in flight
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "This folder doesn't exist, or may have been deleted.";
+    pageContainerEl.appendChild(p);
+    return;
+  }
+  if (token !== navToken) return;
+  currentPage = createGridPage(pageContainerEl, {
+    project,
+    heading: folder.name,
+    subheading: `Folder in "${project.title}"`,
+    emptyMessage: `No references in "${folder.name}" yet.`,
+    load: () => folders.listFolderReferences(folderId),
+    deleteBehaviour: folderDeleteBehaviour(folder),
+  });
+}
+
+function routeFromHash() {
+  navToken++;
+  const params = new URLSearchParams(location.hash.slice(1));
+  const page = params.get("page");
+  if (page === "grid") {
+    showGridPage();
+  } else if (page === "folder" && params.get("id")) {
+    showFolderPage(params.get("id"), navToken);
+  } else {
+    showHomepage();
+  }
+}
+
+window.addEventListener("hashchange", routeFromHash);
+
 // --- boot --------------------------------------------------------------------
 
 async function init() {
@@ -452,9 +646,10 @@ async function init() {
   // Appearance settings are fetched separately, synchronously, by
   // project/appearance.js before this module even runs -- see that file for
   // why. The settings widget reads its own copy from window.projectAppearance.
-  const [projectRes, widgetsRes] = await Promise.all([
+  const [projectRes, widgetsRes, folderRes] = await Promise.all([
     fetch(`/api/projects/${projectId}`),
     fetch(`/api/projects/${projectId}/widgets`),
+    fetch(`/api/projects/${projectId}/folders`),
   ]);
 
   if (!projectRes.ok) {
@@ -464,6 +659,7 @@ async function init() {
 
   project = await projectRes.json();
   const widgets = widgetsRes.ok ? await widgetsRes.json() : [];
+  folderRows = folderRes.ok ? await folderRes.json() : [];
 
   // The project shell has no header -- the title widget is the only chrome
   // that carries the project's name, so the browser tab needs it set here.
@@ -486,6 +682,8 @@ async function init() {
     if (editing) appearancePanel.show();
     else appearancePanel.hide();
   });
+
+  routeFromHash();
 }
 
 init();

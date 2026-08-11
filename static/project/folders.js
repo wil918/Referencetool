@@ -17,6 +17,10 @@ export function listFolders(projectId) {
   return fetch(`/api/projects/${projectId}/folders`).then(asJson);
 }
 
+export function getFolder(folderId) {
+  return fetch(`/api/folders/${folderId}`).then(asJson);
+}
+
 export function createFolder(projectId, name) {
   return fetch(`/api/projects/${projectId}/folders`, {
     method: "POST",
