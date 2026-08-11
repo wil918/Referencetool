@@ -98,7 +98,11 @@ These are not preferences. Violating one means the change gets reverted.
 | `project/widget-dock.js` | The "+" Add Widget dock, bottom-right, visible during edit mode. Page-level chrome, not a widget — it talks to `main.js` directly rather than through the widget host contract. Any session that adds a widget type gets it in the dock for free via `shell.addableTypes()`. |
 | `project/scene-widget.js` | The frame every 3D widget is built in: on-demand Three.js import, empty state instead of a scene when there is nothing to draw, `host.onResize` → `resize()`, `destroy()` → `dispose()`, and the scene going inert during edit mode. A new 3D widget supplies `load()` and `build()`; it never touches a renderer. |
 
-Widgets so far: `title`, `text`, `notepad`, `settings`, `exit`, `sidebar`, `folders`, `grid-button`, `folder`, `colourspace`, `similarity`.
+| `project/folders.js`, `folders-panel.js` | Folder API client (no DOM) and the folder management UI. |
+| `project/pages/*` | Hash-routed pages inside the shell: `grid-page.js` (the reference grid, used by both the project grid and folder pages), `canvas-page.js`, plus `analysis-panel.js`, `colour-panel.js` and `overlays.js` ported from `app.js`. |
+| `project/canvas/*` | The infinite canvas: `viewport.js` (single world transform, pan/zoom, screen↔world), `nodes.js` (reference/text/widget nodes, drag, lock, z-order), `edges.js` (one SVG inside the world layer, so edges need no separate projection), `store.js` (debounced per-node persistence), `palette.js` (how things get added). |
+
+Widgets so far: `title`, `text`, `notepad`, `settings`, `exit`, `canvas`, `sidebar`, `folders`, `grid-button`, `folder`, `colourspace`, `similarity`.
 
 ### The 3D scenes
 

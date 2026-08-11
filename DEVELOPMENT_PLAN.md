@@ -1,6 +1,17 @@
 # Development Plan — Project Spaces, Widgets & Infinite Canvas
 
-**Status: sessions 1–4 and 4b complete, plus three correction rounds and an editing redesign. Next up: session 5 (sidebar container widget).**
+**Status: sessions 1–10 complete, plus part of 11 and 12. Remaining: 11a → 11b → 11c → 12 → 13 → 14.**
+
+| Session | State |
+|---|---|
+| 1–10 | Done. |
+| 11 — canvas edges + text | **Partly shipped in S10.** Remaining scope moved into 11b and 11c. |
+| 11a — expanded appearance | New. Do this first: accent colour is 11c's default. |
+| 11b — rich text everywhere + highlight | New/absorbed. |
+| 11c — connection line editing | New/absorbed. |
+| 12 — canvas widgets | **Part done.** `canvasEligible` shipped. Revised to add the colour palette widget (named `colour-palette.js`, since `canvas/palette.js` is taken), the analysis widget, and the canvas preview. |
+| 13 — archive roll-up | Not started. No `/api/folders/rollup` route yet. |
+| 14 — integrity + audit | Not started. |
 
 Part 1 describes the codebase as it stood when this plan was written, before any session ran — it is kept as the starting-point record, so its line counts are deliberately historical. `CLAUDE.md` describes the code as it is *now* and is the source of truth for conventions.
 
@@ -200,7 +211,7 @@ Thinking levels are the six Claude Code offers: `low` < `medium` < `high` < `ext
 |---|---|
 | `low` | Nothing planned. Fine for one-line fixes and rename passes. |
 | `medium` | Mechanical feature work against an existing contract — sessions 2, 4, 6, 12, 13. |
-| `high` | Work with real design decisions inside it — sessions 4b, 5, 7, 8, 11, 14. |
+| `high` | Work with real design decisions inside it — sessions 4b, 5, 7, 8, 11a, 11b, 11c, 12, 14. |
 | `extra` | Session 9 only. Refactoring renderer ownership out of `graph.js` and getting WebGL disposal right is fiddly and expensive to get wrong. |
 | `max` | The two load-bearing architectural sessions, 3 and 10. |
 | `ultracode` | Not scheduled. Reserve it for a debugging emergency — something subtly wrong that two ordinary attempts have failed to fix. Spending it on planned work wastes budget you'll want later. |
@@ -915,6 +926,8 @@ reload restores positions precisely; a locked node cannot be dragged.
 
 ### Session 11 — Canvas connections and text
 
+> **Partly shipped.** `canvas/edges.js` delivered the edge layer inside the session-10 commit. The rest of this session's scope is superseded by **11a / 11b / 11c** below, which also absorb the new requirements. Kept for the record.
+
 **Model:** Sonnet 5, `high`
 **Estimate:** 3–4 h · 250–350k tokens · ~1 window
 
@@ -961,40 +974,249 @@ not just the screen.
 
 ---
 
-### Session 12 — Canvas widget nodes
+---
 
-**Model:** Sonnet 5, `medium`
-**Estimate:** 2–3 h · 150–250k tokens · ~0.6 window
+### Session 11a — Expanded project appearance
+
+**Delivers:** the full project-wide palette and type controls, an Advanced drop-down when the bar fills, and appearance yielding to the format section when a widget is selected.
+
+**Why this comes first:** accent colour is the default for connection lines in 11c, and the palette affects every widget added in 12. Building those against a colour system that then changes means doing them twice.
+
+**Model:** Sonnet 5, `high`
+**Estimate:** 3–4 h · 250–350k tokens · ~1 window
 
 ````
-Read static/project/canvas/nodes.js, static/project/registry.js and
-static/project/widgets/colourspace.js first.
+Read static/project/appearance.js, appearance-panel.js, top-bar.js,
+typography.js, style.css's :root block, and graph-common.js's THEMES first.
 
-Allow widget nodes on the canvas, reusing the registry rather than building a
-parallel widget system.
+Expand project-wide appearance from three controls to a full palette.
 
-1. Add a canvasEligible flag to the widget definition, defaulting to
-   (!container && !permanent). The canvas palette lists only eligible widgets.
-   Do not maintain a hand-written allowlist — it will drift.
+1. Settings to add, alongside the existing background, text colour and content
+   scale:
+     - primary text colour   (what --project-ink already is; label it
+                              "Primary text", keep the stored key)
+     - secondary text colour (the muted tone -- overrides --muted)
+     - accent colour         (overrides --accent; default stays #c23b2e)
+     - button colour         (the surface controls sit on)
+     - primary font          (headings and titles)
+     - secondary font        (body and UI text)
+     - 3D graph background   (see item 4 -- not a CSS variable)
+   Each is optional and falls back to the current global exactly as
+   --project-ink does now. Apply them as scoped custom properties in
+   appearance.js's apply(), before first paint, beside the existing ones. Keep
+   the derived --light/--dark logic working from the background.
 
-2. Add static/project/widgets/palette.js — a colour palette widget showing the
-   combined palette of a chosen set of references, using the existing
-   /api/colour/search combined-profile semantics rather than computing a
-   palette client-side. config: { reference_ids }.
+   Fonts: offer the families already in style.css (--serif, --sans, --display)
+   plus a monospace. Vendor nothing, add no webfonts.
 
-3. Make the colourspace widget work as a canvas node: it must resize with the
-   node box and pause rendering when scrolled out of view, which the scene host
-   from session 9 already supports. Confirm the IntersectionObserver still
-   works inside the transformed canvas world layer — a CSS transform on an
-   ancestor can affect intersection calculations, so verify rather than assume.
+2. These are project-wide DEFAULTS. A widget with its own config.typography
+   still wins. The fallback chain is: widget typography -> project appearance
+   -> style.css globals. Do not let the new settings override an explicit
+   per-widget choice.
 
-4. Widget nodes participate in edges exactly like reference and text nodes.
+3. Top bar behaviour.
+   - When a widget is selected, hide the appearance section entirely and show
+     only format -- project-wide defaults are not what you want while
+     formatting one widget. Restore it when the selection clears. top-bar.js
+     already shows sections independently by key; drive it from the selection
+     rather than adding a third section.
+   - The bar will not hold this many controls. Keep the most-used in the bar
+     (background, primary text, accent, content scale) and put the rest behind
+     an "Advanced" control that drops down from it. The drop-down overlays --
+     it must not push the grid down the way the bar itself does.
 
-Verify: a colourspace widget node and a reference node can be connected; the
-widget resizes with its node; panning away pauses its render loop.
+4. The 3D graph background is not a CSS variable. graph-common.js's THEMES
+   hard-code it as a hex number per theme, read by the WebGL scenes, which do
+   not inherit custom properties. Thread the project's value in instead:
+   scene-host.js (or the widget creating it) takes a background override and
+   falls back to currentTheme() when there is none. Never call getComputedStyle
+   inside the render loop. /graph.html has no project context and must keep
+   using the theme value -- verify by hand.
+
+Verify: every setting persists and survives a reload; a widget with its own
+typography ignores the project defaults while its neighbours follow them;
+selecting a widget hides the appearance controls and deselecting restores them;
+the colourspace and similarity widgets pick up the 3D background while
+/graph.html does not.
 ````
 
-**Exit criteria:** widget nodes are first-class canvas citizens with no duplicated widget infrastructure.
+**Exit criteria:** the full palette persists, per-widget typography still wins, and the 3D widgets recolour without touching the standalone graph pages.
+
+---
+
+### Session 11b — Rich text everywhere, and highlight
+
+**Delivers:** one text-editing implementation across grid widgets, canvas text nodes and canvas widget nodes; a highlight colour; canvas undo.
+
+**Model:** Sonnet 5, `high`
+**Estimate:** 3–4 h · 250–350k tokens · ~1 window
+
+````
+Read static/project/rich-text.js, text-utils.js, format-toolbar.js,
+typography.js, canvas/nodes.js and pages/canvas-page.js first.
+
+Three things, all on the one text-editing implementation. There must not be a
+second one when this is done.
+
+1. Rich text on the canvas. Canvas text nodes do not currently use
+   rich-text.js or format-toolbar.js, so canvas text and grid-widget text
+   behave differently. Wire the canvas to the same modules:
+     - canvas TEXT nodes get per-selection formatting
+     - canvas WIDGET nodes that render text get it too, through the same
+       typography contract they use on the grid
+   On the grid the toolbar mounts into top-bar.js's "format" section. On the
+   canvas it attaches to the node being edited. If it must follow a node in
+   world coordinates, adapt the existing toolbar -- do not fork it. It must
+   never cover the text being edited: flip below when there is no room above.
+
+2. Highlight colour, working like the existing colour control.
+   rich-text.js's ALLOWED_PROPS is currently ["color", "font-family",
+   "font-size", "font-weight", "font-style", "text-decoration"] -- add
+   background-color, and extend the abstract style shape ({ family, size,
+   colour, bold, italic, underline }) with a highlight field, through
+   styleOf(), applyStyle(), getSelectionStyle(), applySelectionStyle() and
+   clearSelectionStyle(). Sanitisation keeps accepting only allowed properties.
+
+   Highlight needs a "none" distinct from "white": clearing it removes the
+   property rather than painting the background white, which would look wrong
+   on any custom project background.
+
+3. Canvas undo, deferred from the original session 11 spec. Cmd/Ctrl+Z undoes
+   the last structural change (add node, delete node, connect, disconnect).
+   In-memory stack, capped around 50. Do not attempt undo for text edits --
+   contenteditable has native undo and fighting it behaves worse than leaving
+   it alone.
+
+Verify: formatting a selection in a canvas text node and in a grid notepad
+produce identical markup; highlight applies, clears cleanly and survives a
+reload; undo reverses an add, a delete and a connection; no second copy of the
+text-editing logic exists anywhere.
+````
+
+**Exit criteria:** one text implementation, highlight round-trips, undo covers canvas structure.
+
+---
+
+### Session 11c — Connection line editing
+
+**Delivers:** click-to-edit connection styling — colour, arrowhead, straight vs curved — per edge.
+
+**Depends on 11a** for the accent colour default.
+
+**Model:** Sonnet 5, `high`
+**Estimate:** 3–4 h · 250–350k tokens · ~1 window
+
+````
+Read static/project/canvas/edges.js, viewport.js, nodes.js, the canvas_edges
+schema in db.py, and the canvas edge routes in app.py first.
+
+edges.js already tracks selection (select(), getSelected(), an .is-selected
+class) and draws a visible hairline plus a fat transparent hit line per edge.
+Build on that rather than restructuring it.
+
+1. Clicking a connection selects it and opens a small style editor anchored to
+   the line, editing only that edge. Clicking empty canvas, another node, or
+   pressing Escape dismisses it.
+
+2. Per-edge style persisted in canvas_edges.style. The column exists and the
+   POST route accepts it -- add a PATCH route for updating an existing edge if
+   one is missing.
+     - colour: defaults to the project accent from session 11a, itself
+       defaulting to #c23b2e. An edge that has never been styled must FOLLOW
+       the project accent when it changes; only an explicitly coloured edge
+       keeps its own value. Store the difference -- absent means "follow the
+       accent", not a copied hex.
+     - arrowhead: none | target end | source end. Use an SVG marker, and make
+       it inherit the edge's colour rather than being painted separately, or a
+       recoloured edge keeps a stale arrowhead.
+     - shape: straight (what is drawn now) or curved. Curved is the bezier the
+       original session 11 spec described -- a cubic with control points offset
+       along the connection's dominant axis, so crossing edges stay readable.
+       Both re-anchor correctly as either endpoint moves.
+   Keep vector-effect="non-scaling-stroke" on the visible and hit lines for
+   every shape, so a thread stays a thread at 4x and findable at 0.1x.
+
+3. Style applies to the selected edge only. Do not add a global edge style.
+
+Verify: two edges with different colours, arrow directions and shapes coexist;
+an unstyled edge follows a changed project accent and a styled one does not;
+arrowheads point correctly after switching shape; everything survives a reload;
+edges re-anchor while dragging either endpoint at several zoom levels.
+````
+
+**Exit criteria:** per-edge styling persists, unstyled edges track the accent, both shapes anchor correctly.
+
+---
+
+### Session 12 — Canvas widgets, analysis widget, canvas preview
+
+**Delivers:** the colour palette widget, a saved-analysis widget, and a live preview inside the homepage canvas widget.
+
+**Model:** Sonnet 5, `high`
+**Estimate:** 3–4 h · 250–350k tokens · ~1 window
+
+````
+Read static/project/registry.js, canvas/nodes.js, canvas/palette.js,
+widgets/canvas.js, pages/analysis-panel.js, widgets/colourspace.js and
+shared/cards.js first.
+
+1. canvasEligible already exists in registry.js, defaulting to
+   (!container && !permanent), and nodes.js enforces it. Verify it, don't
+   rebuild it.
+
+2. static/project/widgets/colour-palette.js -- a colour palette widget showing
+   the combined palette of a chosen set of references, via the existing
+   /api/colour/search combined-profile semantics. Do not compute a palette
+   client-side. config: { reference_ids }.
+
+   NAME CARE: canvas/palette.js already exists and is a different thing -- the
+   add-to-canvas UI. Do not call this widgets/palette.js; the two would read as
+   the same module.
+
+3. static/project/widgets/analysis.js -- puts a saved analysis on the canvas.
+   Analyses are already per project in the analyses table, listed by
+   /api/projects/<pid>/analyses and fetched by /api/analyses/<aid>.
+   pages/analysis-panel.js renders them in the sidebar today.
+     - config: { analysis_id }
+     - it should read like the sidebar version: date, reference thumbnails,
+       transcript. Reuse analysis-panel.js's rendering rather than writing a
+       second one; extract what it needs into a shared function if the panel
+       is too coupled to its own container.
+     - the transcript supports the same per-selection text editing as
+       everything else, including the highlight colour from session 11b. Same
+       rich-text.js, same toolbar. Editing the display must not alter the
+       stored analysis -- persist any styling in the widget's own config, not
+       back into the analyses row, which is a record of what Claude actually
+       said.
+     - canvasEligible, and usable on the homepage grid too.
+
+4. Give widgets/canvas.js a preview of the canvas's current contents. It is a
+   plain navigation link today. Add a non-interactive miniature: fetch
+   /api/projects/<pid>/canvas, draw nodes as simple blocks at their world
+   positions scaled to fit the widget, with edges as thin lines. Reference
+   nodes can show a thumbnail; text and widget nodes are blocks.
+     - Not interactable: no pan, no zoom, no drag, no click targets inside it.
+       The whole widget stays one link to #page=canvas.
+     - Cheap: no Three.js, no live subscription. Render once on load, and
+       again on host.onResize. An empty canvas shows an empty state, not a
+       blank box.
+     - It must not fight the widget's flat-at-rest rule: no border, no fill
+       around the preview.
+
+5. Confirm the colourspace widget works as a canvas node -- it resizes with the
+   node and pauses rendering when scrolled out of view, which scene-host.js
+   already supports. Verify the IntersectionObserver still fires correctly
+   inside the transformed canvas world layer; a CSS transform on an ancestor
+   can affect intersection calculations, so test rather than assume.
+
+Verify: a colour palette node and a reference node can be connected; an
+analysis widget renders on both the canvas and the grid, and styling its text
+does not change the saved analysis; the canvas widget preview matches the
+canvas after adding and moving a node; a colourspace node pauses when panned
+off screen.
+````
+
+**Exit criteria:** three new widgets, all first-class canvas citizens, no duplicated widget infrastructure, and the canvas preview stays cheap.
 
 ---
 
@@ -1102,11 +1324,14 @@ against it.
 | 8 | Scoping refactor | Opus 5 | high | 2.5–3.5 | 200–300k | 0.75 |
 | 9 | 3D widgets | Sonnet 5 | extra | 3.5–4.5 | 280–400k | 1 |
 | 10 | Canvas core | Opus 5 | max | 4–5 | 300–500k | 1–1.5 |
-| 11 | Canvas edges + text | Sonnet 5 | high | 3–4 | 250–350k | 1 |
-| 12 | Canvas widgets | Sonnet 5 | medium | 2–3 | 150–250k | 0.6 |
+| 11 | Canvas edges + text | Sonnet 5 | high | — | — | *partly shipped in S10* |
+| 11a | Expanded project appearance | Sonnet 5 | high | 3–4 | 250–350k | 1 |
+| 11b | Rich text everywhere + highlight | Sonnet 5 | high | 3–4 | 250–350k | 1 |
+| 11c | Connection line editing | Sonnet 5 | high | 3–4 | 250–350k | 1 |
+| 12 | Canvas + analysis widgets, preview | Sonnet 5 | high | 3–4 | 250–350k | 1 |
 | 13 | Archive roll-up | Sonnet 5 | medium | 2–3 | 150–250k | 0.6 |
 | 14 | Integrity + audit | Sonnet 5 | high | 2.5–3.5 | 200–300k | 0.75 |
-| | **Total** | | | **43–56 h** | **3.2–4.9M** | **13–15** |
+| | **Remaining (11a–14)** | | | **14–18 h** | **1.1–1.6M** | **4.4–5** |
 
 **Realistic calendar:** at one window a day, a little over three weeks. At two windows a day, eight to ten days. Add roughly 20% for the debugging sessions that always appear — sessions 3, 9 and 10 are the likeliest to need a follow-up window.
 
@@ -1173,6 +1398,15 @@ Every item you specified, and where it lands.
 | Canvas drag, lock and unlock | 10 |
 | Canvas feels loose, homepage feels gridlike | 3 (grid), 10 (canvas) |
 | Canvas easy to edit; homepage requires settings + save | 4, 10 |
+| Project palette: primary/secondary text, accent, button, fonts, 3D background | 11a |
+| Advanced settings drop-down when the bar fills | 11a |
+| Appearance controls hide when a widget is selected | 11a |
+| Text style editing in canvas widgets | 11b |
+| Highlight colour in text editing | 11b |
+| Click a connection to edit its style | 11c |
+| Per-edge colour, arrowhead, straight vs curved | 11c |
+| Saved-analysis widget | 12 |
+| Canvas widget shows a preview of its contents | 12 |
 | Everything persists | 1, and every session after |
 
 ---
