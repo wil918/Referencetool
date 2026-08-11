@@ -976,6 +976,65 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
   margin-top: 1.25rem;
 }
 
+.folders-modal-box { max-width: 480px; }
+
+.folders-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 320px;
+  overflow-y: auto;
+  margin-bottom: 1rem;
+}
+
+.folders-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 14px;
+  box-shadow: var(--raise-sm);
+}
+
+.folders-row.is-dragging { opacity: 0.4; }
+
+.folders-row-handle {
+  cursor: grab;
+  color: var(--muted);
+  user-select: none;
+}
+
+.folders-row-name {
+  flex: 1;
+  cursor: text;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.folders-row-rename-input { flex: 1; margin: 0; }
+
+.folders-row-count { flex-shrink: 0; font-size: 0.8rem; }
+
+.folders-row-confirm {
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.folders-row-confirm-text {
+  flex-basis: 100%;
+  font-family: var(--serif);
+  font-size: 0.85rem;
+}
+
+.folders-create-row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.folders-create-row input { flex: 1; margin: 0; }
+
 .mode-choice-actions {
   display: flex;
   justify-content: center;
@@ -1879,7 +1938,10 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
   height: 100%;
   align-items: center;
   justify-content: center;
+  gap: 0.4rem;
 }
+
+.widget-settings-btn { padding: 0.4rem 0.6rem; }
 
 /* Project Settings used to be a modal here (Edit Layout button, Add Widget
    list, Appearance form) -- see widgets/settings.js for why the gear now

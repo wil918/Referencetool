@@ -1,5 +1,6 @@
 import { makeCard, markSelectable, makeBarThumb } from "./shared/cards.js";
 import * as carousel from "./shared/carousel.js";
+import * as folders from "./project/folders.js";
 
 const SUPPORTED_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".txt", ".md", ".pdf"];
 
@@ -299,6 +300,8 @@ function updateArchiveSelectionToolbar() {
   document.getElementById("archive-selection-count").textContent = `${n} selected`;
   archiveDeleteBtn.disabled = n === 0;
   archiveProjectSelect.disabled = n === 0;
+  archiveFolderProjectSelect.disabled = n === 0;
+  if (!archiveFolderSelect.hidden) archiveFolderSelect.disabled = n === 0;
 }
 
 archiveSelectBtn.addEventListener("click", () => setArchiveSelectionMode(!archiveSelectionMode));
@@ -339,7 +342,82 @@ async function populateArchiveProjectSelect() {
   newOpt.textContent = "+ New project…";
   archiveProjectSelect.appendChild(newOpt);
   archiveProjectSelect.value = "";
+
+  // Same project list, reused rather than fetched twice: the folder move
+  // picks a project first (to know whose folders to offer), then its
+  // folders -- no "+ New project…" here since a folder needs a project that
+  // already exists.
+  archiveFolderProjectSelect.innerHTML = "";
+  const folderPlaceholder = document.createElement("option");
+  folderPlaceholder.value = "";
+  folderPlaceholder.textContent = "Move to folder…";
+  archiveFolderProjectSelect.appendChild(folderPlaceholder);
+  projects.forEach((p) => {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = p.title;
+    archiveFolderProjectSelect.appendChild(opt);
+  });
+  archiveFolderProjectSelect.value = "";
+  resetArchiveFolderSelect();
 }
+
+// --- Move to folder (archive selection toolbar) ---
+//
+// Two-step because a folder belongs to one project: pick the project whose
+// folders to browse, then the folder itself. Filing into it adds the
+// reference to that project too if it wasn't already a member (see
+// app.py's POST /api/folders/<id>/references).
+
+const archiveFolderProjectSelect = document.getElementById("archive-folder-project-select");
+const archiveFolderSelect = document.getElementById("archive-folder-select");
+
+function resetArchiveFolderSelect() {
+  archiveFolderSelect.hidden = true;
+  archiveFolderSelect.disabled = true;
+  archiveFolderSelect.innerHTML = '<option value="" selected>Choose a folder…</option>';
+}
+
+archiveFolderProjectSelect.addEventListener("change", async () => {
+  const projectId = archiveFolderProjectSelect.value;
+  resetArchiveFolderSelect();
+  if (!projectId) return;
+
+  const rows = await folders.listFolders(projectId);
+  archiveFolderSelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Choose a folder…";
+  archiveFolderSelect.appendChild(placeholder);
+  rows.forEach((folder) => {
+    const opt = document.createElement("option");
+    opt.value = folder.id;
+    opt.textContent = folder.name;
+    archiveFolderSelect.appendChild(opt);
+  });
+  archiveFolderSelect.hidden = false;
+  archiveFolderSelect.disabled = archiveSelectedIds.size === 0;
+});
+
+archiveFolderSelect.addEventListener("change", async () => {
+  const folderId = archiveFolderSelect.value;
+  if (!folderId || archiveSelectedIds.size === 0) return;
+  const label = archiveFolderSelect.options[archiveFolderSelect.selectedIndex].textContent;
+  const ids = Array.from(archiveSelectedIds);
+  archiveSelectionStatus.textContent = `Adding ${ids.length} reference${ids.length === 1 ? "" : "s"} to "${label}"...`;
+  try {
+    await folders.addReferencesToFolder(folderId, ids);
+    const message =
+      `Added ${ids.length} reference${ids.length === 1 ? "" : "s"} to "${label}". ` +
+      "A reference can sit in several folders at once -- this doesn't remove it from any project or other folder.";
+    archiveFolderProjectSelect.value = "";
+    resetArchiveFolderSelect();
+    setArchiveSelectionMode(false); // clears the status line, so set it afterwards
+    archiveSelectionStatus.textContent = message;
+  } catch (err) {
+    archiveSelectionStatus.textContent = `Error: ${err.message}`;
+  }
+});
 
 async function addSelectionToProject(projectId, projectTitle) {
   const ids = Array.from(archiveSelectedIds);
@@ -592,6 +670,8 @@ function setSelectionMode(on) {
   selectedRefIds.clear();
   selectBtn.textContent = on ? "Cancel" : "Select";
   selectionToolbar.hidden = !on;
+  selectionStatus.textContent = "";
+  if (on) populateSelectionFolderSelect();
   updateSelectionToolbar();
 }
 
@@ -610,8 +690,53 @@ function updateSelectionToolbar() {
   document.getElementById("selection-count").textContent = `${n} selected`;
   document.getElementById("selection-delete-btn").disabled = n === 0;
   document.getElementById("selection-analyze-btn").disabled = n === 0;
+  selectionFolderSelect.disabled = n === 0;
   syncColourSidebarToSelection();
 }
+
+// --- Move to folder (project detail selection toolbar) ---
+//
+// Additive, like the archive's "Add to project…": choosing a folder files
+// every selected reference into it without touching the project or any
+// folder a reference already sits in, so the selection is deliberately left
+// active afterwards -- filing the same selection into a second folder is a
+// normal thing to want to do next.
+
+const selectionFolderSelect = document.getElementById("selection-folder-select");
+const selectionStatus = document.getElementById("selection-status");
+
+async function populateSelectionFolderSelect() {
+  if (!currentProject) return;
+  const rows = await folders.listFolders(currentProject.id);
+  selectionFolderSelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Move to folder…";
+  selectionFolderSelect.appendChild(placeholder);
+  rows.forEach((folder) => {
+    const opt = document.createElement("option");
+    opt.value = folder.id;
+    opt.textContent = folder.name;
+    selectionFolderSelect.appendChild(opt);
+  });
+}
+
+selectionFolderSelect.addEventListener("change", async () => {
+  const folderId = selectionFolderSelect.value;
+  if (!folderId || selectedRefIds.size === 0) return;
+  const label = selectionFolderSelect.options[selectionFolderSelect.selectedIndex].textContent;
+  const ids = Array.from(selectedRefIds);
+  selectionStatus.textContent = `Adding ${ids.length} reference${ids.length === 1 ? "" : "s"} to "${label}"...`;
+  try {
+    await folders.addReferencesToFolder(folderId, ids);
+    selectionStatus.textContent =
+      `Added ${ids.length} reference${ids.length === 1 ? "" : "s"} to "${label}". ` +
+      "A reference can sit in several folders at once -- this doesn't remove it from any other.";
+  } catch (err) {
+    selectionStatus.textContent = `Error: ${err.message}`;
+  }
+  selectionFolderSelect.value = "";
+});
 
 document.getElementById("project-back-btn").addEventListener("click", showProjectsList);
 

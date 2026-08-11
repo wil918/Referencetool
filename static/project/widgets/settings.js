@@ -11,7 +11,13 @@
  * already renders.
  *
  * config: unused -- nothing here is this widget's own state to persist.
+ *
+ * Folder management (folders-panel.js) hangs off this widget too: folders
+ * are project data rather than layout, so unlike Add Widget/Appearance they
+ * don't belong to edit mode -- a second button opens that modal directly.
  */
+
+import { openFoldersModal } from "../folders-panel.js";
 
 export default {
   type: "settings",
@@ -33,6 +39,16 @@ export default {
     openBtn.textContent = "⚙";
     openBtn.addEventListener("click", () => host.shell.enterEdit());
     wrap.appendChild(openBtn);
+
+    const foldersBtn = document.createElement("button");
+    foldersBtn.type = "button";
+    foldersBtn.className = "btn widget-settings-btn";
+    foldersBtn.setAttribute("aria-label", "Manage folders");
+    foldersBtn.title = "Manage folders";
+    foldersBtn.textContent = "🗀";
+    foldersBtn.addEventListener("click", () => openFoldersModal(host.project.id));
+    wrap.appendChild(foldersBtn);
+
     host.el.appendChild(wrap);
 
     return {

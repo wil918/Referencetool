@@ -96,6 +96,12 @@
             <option value="" selected>Add to project…</option>
             <option value="__new__">+ New project…</option>
           </select>
+          <select id="archive-folder-project-select" disabled title="Choose which project's folders to move into">
+            <option value="" selected>Move to folder…</option>
+          </select>
+          <select id="archive-folder-select" disabled hidden>
+            <option value="" selected>Choose a folder…</option>
+          </select>
           <button id="archive-selection-delete-btn" class="btn danger" disabled>Delete from archive</button>
         </div>
       </div>
@@ -140,11 +146,15 @@
         <div id="project-selection-toolbar" class="selection-toolbar" hidden>
           <span id="selection-count" class="muted">0 selected</span>
           <div class="selection-actions">
+            <select id="selection-folder-select" disabled>
+              <option value="" selected>Move to folder…</option>
+            </select>
             <button id="selection-delete-btn" class="btn" disabled>Delete</button>
             <button id="selection-colour-btn" class="btn" disabled>Colour Similarity</button>
             <button id="selection-analyze-btn" class="btn primary" disabled>Analyze</button>
           </div>
         </div>
+        <p id="selection-status" class="muted"></p>
         <div id="project-grid" class="grid"></div>
         <p id="project-empty-msg" class="muted" hidden>No references in this project yet. Add some from the Archive page.</p>
 
