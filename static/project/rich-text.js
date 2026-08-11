@@ -364,6 +364,42 @@ function stripEmptyMarkers(root) {
   }
 }
 
+/* Removes any <span> left with no text at all -- not the ZWSP-marker case
+ * above (that always has one character until stripEmptyMarkers runs), but
+ * the native-editing case: backspacing every character out of a styled run
+ * doesn't delete the browser's own <span>, and deliberately leaves the
+ * cursor inside it so continued typing keeps the style. Left alone, that
+ * span still carries its old font-size/line-height into the line box even
+ * though it renders no text -- an empty inline element's own font metrics
+ * still count toward CSS line-height calculation, which is exactly why a
+ * deleted "big" run leaves the caret and line spacing stuck big.
+ *
+ * If the cursor is currently inside a span being removed, it's relocated
+ * to a bare (unstyled) text node planted in the span's place, rather than
+ * left dangling -- that's also the correct "no active style" reset once
+ * the run it belonged to is gone. */
+export function pruneEmptySpans(root) {
+  const sel = window.getSelection();
+  const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+  const cursorNode = range && range.collapsed && root.contains(range.startContainer) ? range.startContainer : null;
+
+  const spans = [...root.querySelectorAll("span")];
+  for (let i = spans.length - 1; i >= 0; i--) {
+    const span = spans[i];
+    if (span.textContent !== "") continue;
+    const cursorWasInside = cursorNode && span.contains(cursorNode);
+    const placeholder = document.createTextNode("");
+    span.replaceWith(placeholder);
+    if (cursorWasInside) {
+      const newRange = document.createRange();
+      newRange.setStart(placeholder, 0);
+      newRange.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+    }
+  }
+}
+
 /** Whitelist-sanitize an HTML string down to <span style="..."> (six known
  * properties, shape-checked values) and plain text, nothing else. Also
  * doubles as the migration path for old plain-text content: a plain string
@@ -374,5 +410,6 @@ export function sanitizeHtml(html) {
   container.innerHTML = html || "";
   sanitizeNode(container);
   stripEmptyMarkers(container);
+  pruneEmptySpans(container);
   return container.innerHTML;
 }

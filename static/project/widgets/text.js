@@ -24,7 +24,7 @@
 import { applyTypography } from "../typography.js";
 import { makeFormattable } from "../format-toolbar.js";
 import { insertPlainText } from "../text-utils.js";
-import { sanitizeHtml, getSelectionStyle, applySelectionStyle, clearSelectionStyle } from "../rich-text.js";
+import { sanitizeHtml, getSelectionStyle, applySelectionStyle, clearSelectionStyle, pruneEmptySpans } from "../rich-text.js";
 
 export default {
   type: "text",
@@ -71,7 +71,16 @@ export default {
       persist();
     });
 
-    el.addEventListener("input", persist);
+    el.addEventListener("input", () => {
+      // Native typing/deletion isn't intercepted (see the module comment),
+      // so a styled run backspaced down to nothing can leave an empty,
+      // still-styled <span> behind -- see rich-text.js's pruneEmptySpans
+      // for why that alone is enough to keep the caret/line spacing stuck
+      // at the old size. Run before every persist so it's cleaned up as
+      // part of normal editing, not just on next load.
+      pruneEmptySpans(el);
+      persist();
+    });
     el.addEventListener("blur", persist);
 
     makeFormattable(host, {

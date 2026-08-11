@@ -1642,8 +1642,8 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
    digits plus the native spinner, matching Google Docs' own compact size
    field rather than a full-width input. */
 .format-toolbar-size {
-  width: 3.2rem;
-  padding: 0.4rem 0.4rem;
+  width: 4.2rem;
+  padding: 0.4rem 0.3rem;
   font-size: 0.78rem;
   text-align: center;
 }

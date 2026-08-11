@@ -15,7 +15,7 @@
 import { applyTypography } from "../typography.js";
 import { makeFormattable } from "../format-toolbar.js";
 import { insertPlainText } from "../text-utils.js";
-import { sanitizeHtml, getSelectionStyle, applySelectionStyle, clearSelectionStyle } from "../rich-text.js";
+import { sanitizeHtml, getSelectionStyle, applySelectionStyle, clearSelectionStyle, pruneEmptySpans } from "../rich-text.js";
 
 export default {
   type: "notepad",
@@ -57,7 +57,13 @@ export default {
       persist();
     });
 
-    el.addEventListener("input", persist);
+    el.addEventListener("input", () => {
+      // See text.js's identical listener -- native deletion can leave an
+      // empty, still-styled <span> behind that keeps the caret/line
+      // spacing stuck at its old size until pruned.
+      pruneEmptySpans(el);
+      persist();
+    });
     el.addEventListener("blur", persist);
 
     // No `enabled` guard, unlike text.js/title.js -- the toolbar activates on
