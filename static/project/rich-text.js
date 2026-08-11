@@ -1,20 +1,25 @@
-/* Per-selection rich text formatting for Text and Notepad -- Google-Docs
- * style: highlight a range and only that range changes; a collapsed cursor
- * sets the style new characters will be typed in, without touching anything
- * already there. Hand-rolled against the DOM Selection/Range API rather
- * than document.execCommand (deprecated, and its fontSize/fontName commands
- * don't support arbitrary values), which also means the markup this module
- * produces is fully under our control: only <span style="..."> and plain
- * text, which is what makes sanitizeHtml's whitelist tractable.
+/* Per-selection rich text formatting for Notepad (and any future rich-text
+ * widget) -- Google-Docs style: highlight a range and only that range
+ * changes; a collapsed cursor sets the style new characters will be typed
+ * in, without touching anything already there. Hand-rolled against the DOM
+ * Selection/Range API rather than document.execCommand (deprecated, and its
+ * fontSize/fontName commands don't support arbitrary values), which also
+ * means the markup this module produces is fully under our control: only
+ * <span style="..."> and plain text, which is what makes sanitizeHtml's
+ * whitelist tractable.
  *
- * The six character-level fields live here as a plain object -- the same
+ * The seven character-level fields live here as a plain object -- the same
  * shape format-toolbar.js already speaks in for whole-widget typography --
- * { family, size, colour, bold, italic, underline }, every field optional.
- * Absent means "not set at this point"; present-with-undefined (as
+ * { family, size, colour, bold, italic, underline, highlight }, every field
+ * optional. Absent means "not set at this point"; present-with-undefined (as
  * format-toolbar.js's emit() already produces for a toggled-off field)
- * means "explicitly cleared here." Align and content-scale are NOT part of
- * this module -- those stay whole-widget, via typography.js/applyTypography,
- * same as before.
+ * means "explicitly cleared here" -- this is also how `highlight` tells
+ * "no highlight" apart from "highlight painted white": clearing it patches
+ * `{ highlight: undefined }`, which mergePatch below deletes the key for
+ * rather than writing any background-color at all, so a cleared highlight
+ * never paints white over a custom project background. Align and
+ * content-scale are NOT part of this module -- those stay whole-widget, via
+ * typography.js/applyTypography, same as before.
  */
 
 import { FONT_OPTIONS } from "./typography.js";
@@ -22,7 +27,15 @@ import { FONT_OPTIONS } from "./typography.js";
 // The only CSS this module (or a sanitized widget's stored HTML) may ever
 // carry. Anything else -- other tags, other attributes, other properties,
 // other-shaped values -- is stripped by sanitizeHtml.
-const ALLOWED_PROPS = ["color", "font-family", "font-size", "font-weight", "font-style", "text-decoration"];
+const ALLOWED_PROPS = [
+  "color",
+  "font-family",
+  "font-size",
+  "font-weight",
+  "font-style",
+  "text-decoration",
+  "background-color",
+];
 
 // A cursor's "pending style" is materialized as a real span containing just
 // this character, so native typing (including IME composition) continues
@@ -52,7 +65,8 @@ function rgbToHex(value) {
 // --- reading -----------------------------------------------------------------
 
 /** This element's own inline style, as the abstract { family, size, colour,
- * bold, italic, underline } shape -- only the fields it actually sets. */
+ * bold, italic, underline, highlight } shape -- only the fields it actually
+ * sets. */
 function styleFromElement(el) {
   const result = {};
   const family = cssToFamily(el.style.fontFamily);
@@ -63,6 +77,7 @@ function styleFromElement(el) {
   if (el.style.fontWeight === "700" || el.style.fontWeight === "bold") result.bold = true;
   if (el.style.fontStyle === "italic") result.italic = true;
   if (el.style.textDecoration && el.style.textDecoration.includes("underline")) result.underline = true;
+  if (el.style.backgroundColor) result.highlight = rgbToHex(el.style.backgroundColor);
   return result;
 }
 
@@ -120,6 +135,7 @@ function applyAbstractStyleToElement(el, style) {
   if (style.bold) el.style.fontWeight = "700";
   if (style.italic) el.style.fontStyle = "italic";
   if (style.underline) el.style.textDecoration = "underline";
+  if (style.highlight) el.style.backgroundColor = style.highlight;
 }
 
 /* Promotes `node` up to be a direct child of `root`, splitting every
@@ -250,7 +266,7 @@ function applyToRange(root, range, patch) {
   return nodes.map((node) => restyleTextNode(root, node, patch));
 }
 
-/** Apply `patch` (the abstract six-field shape, format-toolbar.js's emit()
+/** Apply `patch` (the abstract seven-field shape, format-toolbar.js's emit()
  * shape) to the current selection within `root`. A real selection is
  * re-styled in place; a collapsed cursor gets a typing-style marker so
  * subsequent native typing (including IME composition -- this is why
@@ -276,9 +292,11 @@ export function applySelectionStyle(root, patch) {
   }
 }
 
-/** Clear the six rich fields on the current selection -- deliberately
+/** Clear the seven rich fields on the current selection -- deliberately
  * selection-scoped, not the whole widget (align/scale, which live outside
- * this module entirely, are untouched either way). */
+ * this module entirely, are untouched either way). Clearing `highlight` here
+ * removes the background-color property rather than setting it to white --
+ * see the module comment for why that distinction matters. */
 export function clearSelectionStyle(root) {
   applySelectionStyle(root, {
     family: undefined,
@@ -287,6 +305,7 @@ export function clearSelectionStyle(root) {
     bold: undefined,
     italic: undefined,
     underline: undefined,
+    highlight: undefined,
   });
 }
 
@@ -295,6 +314,7 @@ export function clearSelectionStyle(root) {
 function isValidStyleValue(prop, value) {
   switch (prop) {
     case "color":
+    case "background-color":
       return /^#[0-9a-f]{3,8}$/i.test(value) || /^rgba?\([\d.,\s%]+\)$/i.test(value);
     case "font-family":
       return FONT_OPTIONS.some((option) => option.family === value);
@@ -400,7 +420,7 @@ export function pruneEmptySpans(root) {
   }
 }
 
-/** Whitelist-sanitize an HTML string down to <span style="..."> (six known
+/** Whitelist-sanitize an HTML string down to <span style="..."> (seven known
  * properties, shape-checked values) and plain text, nothing else. Also
  * doubles as the migration path for old plain-text content: a plain string
  * has no tags to strip and no styles to validate, so sanitizing it is a

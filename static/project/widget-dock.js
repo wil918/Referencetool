@@ -6,7 +6,7 @@
  * widget host contract.
  *
  * Each addable entry (shell.addableTypes() -- already excludes permanent
- * types, so this naturally surfaces Title/Text/Notepad and nothing else)
+ * types, so this naturally surfaces Title/Notepad and nothing else)
  * gets a small stacked "deck" card. Dragging a card onto the grid places a
  * widget at the drop cell, falling back to the default bottom-of-grid
  * position (today's only placement) if that cell is already occupied;

@@ -48,7 +48,7 @@ export function createCanvasPage(el, { project }) {
   const hint = document.createElement("p");
   hint.className = "muted canvas-hint";
   hint.textContent =
-    "Nothing on the canvas yet — open + to add a text box or a widget, or drag a reference in.";
+    "Nothing on the canvas yet — open + to add simple text or a widget, or drag a reference in.";
   hint.hidden = true;
   root.appendChild(hint);
 

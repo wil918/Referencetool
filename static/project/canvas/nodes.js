@@ -1,10 +1,10 @@
 /* What is on the canvas, and what you can do to it.
  *
  * Three kinds of node share one table and one set of gestures (db.py's
- * canvas_nodes schema says why): a reference from this project, a text box,
- * or a widget instance. They are dragged, locked, deleted, connected and
- * resized identically; only what is drawn inside the box differs, which is
- * the one thing buildBody() below branches on.
+ * canvas_nodes schema says why): a reference from this project, a simple
+ * text node, or a widget instance. They are dragged, locked, deleted,
+ * connected and resized identically; only what is drawn inside the box
+ * differs, which is the one thing buildBody() below branches on.
  *
  * Two rules shape the whole file:
  *
@@ -132,6 +132,26 @@ export function createNodes({
   // being drawn. Only ever one, since all three start from a pointerdown that
   // captures the pointer.
   let gesture = null;
+
+  /* Undo, for structural changes only: add node, delete node, connect,
+   * disconnect. Not a drag, a resize, a lock, or a text edit -- a drag or
+   * resize is a continuous gesture with no single "before" to jump back to
+   * (and grid.js/this module already treat moves and sizes as fire-and-forget
+   * writes, never something to step backward through), and contenteditable
+   * already has its own native undo for text, which fighting over would
+   * behave worse than doing nothing (see onKeyDown below).
+   *
+   * In-memory only, capped so a long session doesn't grow this unboundedly --
+   * an undo stack is a convenience for the last few actions, not a durable
+   * history, and nothing here is persisted or expected to survive a reload.
+   */
+  const UNDO_LIMIT = 50;
+  const undoStack = [];
+
+  function pushUndo(action) {
+    undoStack.push(action);
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  }
 
   // --- geometry ------------------------------------------------------------
 
@@ -291,7 +311,7 @@ export function createNodes({
     entry.text = text;
 
     // Click selects and drags; double-click is how you get the caret. Without
-    // that split, every attempt to move a text box would land in its text.
+    // that split, every attempt to move a simple text node would land in its text.
     entry.el.addEventListener("dblclick", () => beginTextEdit(entry));
 
     text.addEventListener("paste", (event) => {
@@ -671,7 +691,11 @@ export function createNodes({
     indexEdge(edge);
   }
 
-  async function connect(sourceId, targetId) {
+  /** `record` is false only when this is undo() itself reversing a prior
+   *  disconnect -- the reconnection it makes must not push a fresh "connect"
+   *  entry, or a second Cmd/Ctrl+Z would just disconnect it again instead of
+   *  undoing whatever came before the original disconnect. */
+  async function connect(sourceId, targetId, { record = true } = {}) {
     const already = [...(edgesByNode.get(sourceId) || [])].some((edgeId) => {
       const edge = edges.get(edgeId);
       return edge.source_node_id === targetId || edge.target_node_id === targetId;
@@ -679,7 +703,9 @@ export function createNodes({
     if (already) return;
 
     try {
-      addEdge(await store.createEdge(sourceId, targetId));
+      const edge = await store.createEdge(sourceId, targetId);
+      addEdge(edge);
+      if (record) pushUndo({ type: "connect", edgeId: edge.id });
     } catch (err) {
       onStatus(err.message);
     }
@@ -694,9 +720,20 @@ export function createNodes({
     edges.remove(edgeId);
   }
 
-  async function removeEdge(edgeId) {
+  /** `record` is false only when this is undo() reversing a prior connect. */
+  async function removeEdge(edgeId, { record = true } = {}) {
+    // Read before dropEdge -- edges.remove() (inside it) is what makes
+    // edges.get() stop finding this row, so the source/target this undo
+    // entry needs has to be captured first.
+    const edge = edges.get(edgeId);
     dropEdge(edgeId);
     if (selectedEdgeId === edgeId) selectedEdgeId = null;
+    if (record && edge) {
+      pushUndo({
+        type: "disconnect",
+        edge: { source_node_id: edge.source_node_id, target_node_id: edge.target_node_id },
+      });
+    }
     try {
       await store.deleteEdge(edgeId);
     } catch (err) {
@@ -705,8 +742,11 @@ export function createNodes({
   }
 
   /** Create a node and put it on the canvas. `fields` is whatever the API
-   *  needs beyond a position: kind, and reference_id or config. */
-  async function addNode(fields) {
+   *  needs beyond a position: kind, and reference_id or config. `record` is
+   *  false only when this is undo() restoring a node a delete just removed --
+   *  that restoration is itself the undo, and must not push a second "add"
+   *  entry that a further Cmd/Ctrl+Z would just delete right back out. */
+  async function addNode(fields, { record = true } = {}) {
     const kind = fields.kind;
     const size =
       DEFAULT_SIZE[kind] || widgetDefaultSize(definitionFor(fields.config?.type));
@@ -723,6 +763,7 @@ export function createNodes({
       const entry = addEntry(node);
       selectNode(node.id);
       onCountChange(entries.size);
+      if (record) pushUndo({ type: "add", nodeId: entry.node.id });
       return entry.node;
     } catch (err) {
       onStatus(err.message);
@@ -730,14 +771,30 @@ export function createNodes({
     }
   }
 
-  async function removeNode(nodeId) {
+  /** `record` is false only when this is undo() reversing a prior add. */
+  async function removeNode(nodeId, { record = true } = {}) {
     const entry = entries.get(nodeId);
     if (!entry) return;
 
-    // Mirrors db.py's delete_canvas_node, which drops the edges server-side:
-    // an edge to a node that is gone is a line into empty space.
-    for (const edgeId of [...(edgesByNode.get(nodeId) || [])]) dropEdge(edgeId);
+    // Captured before dropEdge below removes them from the edge layer -- a
+    // "delete node" undo entry has to carry who this node was connected to,
+    // so undo can offer to reconnect the survivor once the node is back.
+    const removedEdges = [];
+    for (const edgeId of [...(edgesByNode.get(nodeId) || [])]) {
+      const edge = edges.get(edgeId);
+      if (edge) removedEdges.push({ source_node_id: edge.source_node_id, target_node_id: edge.target_node_id });
+      // Mirrors db.py's delete_canvas_node, which drops the edges
+      // server-side: an edge to a node that is gone is a line into empty
+      // space.
+      dropEdge(edgeId);
+    }
     edgesByNode.delete(nodeId);
+
+    // The full row, id included -- undo needs the old id to tell which edge
+    // endpoints pointed at this node (see undo()'s "delete" branch below).
+    // Harmless to send back to the create endpoint too: it always mints a
+    // fresh id of its own and simply never reads one from the body.
+    const snapshot = { ...entry.node };
 
     entry.mounted?.destroy();
     entry.el.remove();
@@ -746,6 +803,8 @@ export function createNodes({
     if (topNodeId === nodeId) topNodeId = null;
     onCountChange(entries.size);
 
+    if (record) pushUndo({ type: "delete", node: snapshot, edges: removedEdges });
+
     try {
       await store.deleteNode(nodeId);
     } catch (err) {
@@ -753,9 +812,65 @@ export function createNodes({
     }
   }
 
+  /* Reverse the most recent structural change -- add, delete, connect or
+   * disconnect -- if there is one. Each branch calls the same functions the
+   * original gesture called ({ record: false } so the reversal doesn't push
+   * its own undo entry, which would turn Cmd/Ctrl+Z into a toggle instead of
+   * a walk backward through history).
+   *
+   * A restored node gets a new server id (see removeNode's snapshot comment
+   * above), so reconnecting its former edges has to happen after the restore,
+   * substituting that new id for whichever end used to be the deleted node --
+   * and only for edges whose other end is still on the canvas, since undoing
+   * a single node's deletion can't also resurrect a node deleted separately.
+   */
+  async function undo() {
+    const action = undoStack.pop();
+    if (!action) return;
+
+    if (action.type === "add") {
+      await removeNode(action.nodeId, { record: false });
+    } else if (action.type === "delete") {
+      const restored = await addNode({ ...action.node }, { record: false });
+      if (!restored) return;
+      for (const edge of action.edges) {
+        const sourceId = edge.source_node_id === action.node.id ? restored.id : edge.source_node_id;
+        const targetId = edge.target_node_id === action.node.id ? restored.id : edge.target_node_id;
+        if (entries.has(sourceId) && entries.has(targetId)) {
+          await connect(sourceId, targetId, { record: false });
+        }
+      }
+    } else if (action.type === "connect") {
+      await removeEdge(action.edgeId, { record: false });
+    } else if (action.type === "disconnect") {
+      const { source_node_id: sourceId, target_node_id: targetId } = action.edge;
+      if (entries.has(sourceId) && entries.has(targetId)) {
+        await connect(sourceId, targetId, { record: false });
+      }
+    }
+  }
+
   // --- keyboard ------------------------------------------------------------
 
+  function isUndoChord(event) {
+    // Cmd on Mac, Ctrl elsewhere; not Shift, which is conventionally redo --
+    // there is no redo stack here, so Shift+Z is left alone entirely rather
+    // than silently doing the same thing as plain undo.
+    return (event.key === "z" || event.key === "Z") && (event.metaKey || event.ctrlKey) && !event.shiftKey;
+  }
+
   function onKeyDown(event) {
+    if (isUndoChord(event)) {
+      // Inside a contenteditable, this chord belongs to the browser's own
+      // undo for the text just typed -- intercepting it here would fight
+      // that native undo rather than improve on it (see the undoStack
+      // comment above). Everywhere else on the canvas there is no other
+      // consumer of Cmd/Ctrl+Z, so it's ours.
+      if (isTypingTarget(document.activeElement)) return;
+      event.preventDefault();
+      undo();
+      return;
+    }
     if (event.key !== "Delete" && event.key !== "Backspace") return;
     // Backspace inside a text node is a backspace. So is Delete.
     if (isTypingTarget(document.activeElement)) return;

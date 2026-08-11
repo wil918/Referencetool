@@ -35,7 +35,6 @@
 import titleWidget from "./widgets/title.js";
 import exitWidget from "./widgets/exit.js";
 import settingsWidget from "./widgets/settings.js";
-import textWidget from "./widgets/text.js";
 import notepadWidget from "./widgets/notepad.js";
 import sidebarWidget from "./widgets/sidebar.js";
 import foldersWidget from "./widgets/folders.js";
@@ -49,7 +48,6 @@ const MODULES = [
   titleWidget,
   exitWidget,
   settingsWidget,
-  textWidget,
   notepadWidget,
   sidebarWidget,
   foldersWidget,

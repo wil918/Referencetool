@@ -103,6 +103,7 @@ export function createAppearancePanel({ projectId }) {
 
   const muted = colourRow("appearance-muted", "Secondary text");
   const button = colourRow("appearance-button", "Button colour");
+  const buttonInk = colourRow("appearance-button-ink", "Button text colour");
   const primaryFont = fontRow("appearance-primary-font", "Primary font");
   const secondaryFont = fontRow("appearance-secondary-font", "Secondary font");
   const graphBg3d = colourRow("appearance-graph-bg", "3D graph background");
@@ -110,6 +111,7 @@ export function createAppearancePanel({ projectId }) {
   dropdown.append(
     muted.wrap,
     button.wrap,
+    buttonInk.wrap,
     primaryFont.wrap,
     secondaryFont.wrap,
     graphBg3d.wrap
@@ -130,6 +132,9 @@ export function createAppearancePanel({ projectId }) {
     // Buttons fall back to the page's own colour when unset -- see style.css --
     // so that's the truest "what will this look like if I leave it blank".
     button: computed.getPropertyValue("--bg").trim() || "#eff2f9",
+    // Button text falls back to --ink, independent of the button's own
+    // background default above.
+    buttonInk: computed.getPropertyValue("--ink").trim() || "#46545f",
     graphBg3d: isDark ? DEFAULT_GRAPH_BG.dark : DEFAULT_GRAPH_BG.light,
   };
 
@@ -149,6 +154,7 @@ export function createAppearancePanel({ projectId }) {
     scaleInput.value = s.contentScale || 1;
     muted.input.value = s.muted || defaults.muted;
     button.input.value = s.button || defaults.button;
+    buttonInk.input.value = s.buttonInk || defaults.buttonInk;
     primaryFont.select.value = s.primaryFont || "";
     secondaryFont.select.value = s.secondaryFont || "";
     graphBg3d.input.value = s.graphBg3d || defaults.graphBg3d;
@@ -172,6 +178,7 @@ export function createAppearancePanel({ projectId }) {
     if (touched.has("contentScale")) value.contentScale = Number(scaleInput.value);
     if (touched.has("muted")) value.muted = muted.input.value;
     if (touched.has("button")) value.button = button.input.value;
+    if (touched.has("buttonInk")) value.buttonInk = buttonInk.input.value;
     if (touched.has("primaryFont") && primaryFont.select.value) value.primaryFont = primaryFont.select.value;
     if (touched.has("secondaryFont") && secondaryFont.select.value) value.secondaryFont = secondaryFont.select.value;
     if (touched.has("graphBg3d")) value.graphBg3d = graphBg3d.input.value;
@@ -221,6 +228,8 @@ export function createAppearancePanel({ projectId }) {
   muted.input.addEventListener("input", onInput);
   button.input.addEventListener("input", markTouched("button"));
   button.input.addEventListener("input", onInput);
+  buttonInk.input.addEventListener("input", markTouched("buttonInk"));
+  buttonInk.input.addEventListener("input", onInput);
   primaryFont.select.addEventListener("change", markTouched("primaryFont"));
   primaryFont.select.addEventListener("change", onInput);
   secondaryFont.select.addEventListener("change", markTouched("secondaryFont"));

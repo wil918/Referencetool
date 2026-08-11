@@ -1,8 +1,8 @@
 /* The project's name, as the homepage's masthead -- and, while the grid is
  * in edit mode, the actual control for renaming the project: typing into it
  * writes straight through to PUT /api/projects/<id>, the same route the
- * Archive's own rename control uses. Outside edit mode it's read-only, same
- * as text.js, gated through host.editMode.
+ * Archive's own rename control uses. Outside edit mode it's read-only,
+ * gated through host.editMode.
  *
  * config: { showDescription: bool, typography, contentScale }
  *
@@ -88,7 +88,7 @@ export default {
 
     name.addEventListener("keydown", (event) => {
       // A project name is one line -- Enter commits instead of inserting a
-      // newline the way text.js's does.
+      // newline, unlike notepad.js's handling of the same key.
       if (event.key !== "Enter") return;
       event.preventDefault();
       name.blur();

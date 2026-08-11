@@ -1,13 +1,13 @@
 # Development Plan — Project Spaces, Widgets & Infinite Canvas
 
-**Status: sessions 1–11a complete. Remaining: 11b → 11c → 12 → 13 → 14.**
+**Status: sessions 1–10 complete, plus part of 11 and 12. Remaining: 11a → 11b → 11c → 12 → 13 → 14.**
 
 | Session | State |
 |---|---|
 | 1–10 | Done. |
 | 11 — canvas edges + text | **Partly shipped in S10.** Remaining scope moved into 11b and 11c. |
-| 11a — expanded appearance | **Done.** One gap found afterwards: button *text* colour, picked up in 11b. |
-| 11b — text cleanup, highlight, undo | Revised: Notepad already had canvas rich text, so this is now removing the broken `text` widget, renaming Text box to Simple text, adding highlight, and undo. |
+| 11a — expanded appearance | New. Do this first: accent colour is 11c's default. |
+| 11b — rich text everywhere + highlight | New/absorbed. |
 | 11c — connection line editing | New/absorbed. |
 | 12 — canvas widgets | **Part done.** `canvasEligible` shipped. Revised to add the colour palette widget (named `colour-palette.js`, since `canvas/palette.js` is taken), the analysis widget, and the canvas preview. |
 | 13 — archive roll-up | Not started. No `/api/folders/rollup` route yet. |
@@ -1044,78 +1044,56 @@ the colourspace and similarity widgets pick up the 3D background while
 
 ---
 
-### Session 11b — Text widget cleanup, highlight, undo
+### Session 11b — Rich text everywhere, and highlight
 
-**Revised after 11a.** The original scope assumed the canvas had no rich text. It does — Notepad already works there. The real problem turned out to be three overlapping text things on the canvas, one of them broken.
-
-**Delivers:** one plain text option and one rich one, highlight colour, a button-text-colour setting missed in 11a, and canvas undo.
+**Delivers:** one text-editing implementation across grid widgets, canvas text nodes and canvas widget nodes; a highlight colour; canvas undo.
 
 **Model:** Sonnet 5, `high`
-**Estimate:** 2.5–3.5 h · 200–300k tokens · ~0.75 window
+**Estimate:** 3–4 h · 250–350k tokens · ~1 window
 
 ````
-Read static/project/widgets/text.js, widgets/notepad.js, canvas/palette.js,
-canvas/nodes.js, rich-text.js, appearance-panel.js and appearance.js first.
+Read static/project/rich-text.js, text-utils.js, format-toolbar.js,
+typography.js, canvas/nodes.js and pages/canvas-page.js first.
 
-The canvas currently offers three text things, which is two too many:
-  - "Text box"  -- the canvas's own text node (canvas_nodes.kind = "text").
-                   Inherits the project text colour, no per-selection editing.
-  - "Text"      -- widgets/text.js dropped as a widget node. Broken.
-  - "Notepad"   -- widgets/notepad.js. Already has full rich text and works.
+Three things, all on the one text-editing implementation. There must not be a
+second one when this is done.
 
-1. Delete the `text` widget: remove static/project/widgets/text.js and its
-   registry entry. Notepad covers everything it was for.
+1. Rich text on the canvas. Canvas text nodes do not currently use
+   rich-text.js or format-toolbar.js, so canvas text and grid-widget text
+   behave differently. Wire the canvas to the same modules:
+     - canvas TEXT nodes get per-selection formatting
+     - canvas WIDGET nodes that render text get it too, through the same
+       typography contract they use on the grid
+   On the grid the toolbar mounts into top-bar.js's "format" section. On the
+   canvas it attaches to the node being edited. If it must follow a node in
+   world coordinates, adapt the existing toolbar -- do not fork it. It must
+   never cover the text being edited: flip below when there is no room above.
 
-   Migrate existing data rather than leaving broken widgets behind. Anything
-   already placed will otherwise render registry.js's missing-widget state:
-     - `widgets` rows with type = 'text'
-     - `canvas_nodes` rows with kind = 'widget' and config type 'text'
-   Convert them to `notepad`, carrying the content across if the two config
-   shapes allow it. Compare them first and say in a comment what was preserved
-   and what could not be. Write it as a guarded one-off migration in
-   db.py's init_db(), following the existing ALTER TABLE try/except pattern.
-
-2. Rename the canvas text node from "Text box" to "Simple text", in
-   canvas/palette.js and anywhere else it is surfaced. The comment there
-   explaining why it is not called "Text" is obsolete once the Text widget is
-   gone -- replace it with the new distinction:
-
-   Simple text stays deliberately plain. It takes the project's typography and
-   has no per-selection formatting. Notepad is the rich one. Do not add rich
-   text to Simple text -- having one of each is the point. Record that in the
-   comment so a later session does not "fix" it.
-
-3. Highlight colour, on everything that already uses rich text -- Notepad now,
-   and the analysis widget when session 12 adds it. Works like the existing
-   colour control.
-   rich-text.js's ALLOWED_PROPS is ["color", "font-family", "font-size",
-   "font-weight", "font-style", "text-decoration"] -- add background-color, and
-   extend the abstract style shape ({ family, size, colour, bold, italic,
-   underline }) with a highlight field, through styleOf(), applyStyle(),
-   getSelectionStyle(), applySelectionStyle() and clearSelectionStyle().
-   Sanitisation keeps accepting only allowed properties.
+2. Highlight colour, working like the existing colour control.
+   rich-text.js's ALLOWED_PROPS is currently ["color", "font-family",
+   "font-size", "font-weight", "font-style", "text-decoration"] -- add
+   background-color, and extend the abstract style shape ({ family, size,
+   colour, bold, italic, underline }) with a highlight field, through
+   styleOf(), applyStyle(), getSelectionStyle(), applySelectionStyle() and
+   clearSelectionStyle(). Sanitisation keeps accepting only allowed properties.
 
    Highlight needs a "none" distinct from "white": clearing it removes the
    property rather than painting the background white, which would look wrong
    on any custom project background.
 
-4. Add "button text colour" to the Advanced appearance options from 11a,
-   alongside the existing button colour. Same pattern as every other setting:
-   optional, scoped custom property, falls back to the current global.
+3. Canvas undo, deferred from the original session 11 spec. Cmd/Ctrl+Z undoes
+   the last structural change (add node, delete node, connect, disconnect).
+   In-memory stack, capped around 50. Do not attempt undo for text edits --
+   contenteditable has native undo and fighting it behaves worse than leaving
+   it alone.
 
-5. Canvas undo, still outstanding from session 11. Cmd/Ctrl+Z undoes the last
-   structural change (add node, delete node, connect, disconnect). In-memory
-   stack, capped around 50. Do not attempt undo for text edits --
-   contenteditable has native undo and fighting it behaves worse.
-
-Verify: the canvas Add menu offers Simple text and Notepad and no third text
-option; an existing text widget on a homepage or canvas became a notepad with
-its content intact; highlight applies to a selection in a notepad, clears
-cleanly and survives a reload; button text colour persists; undo reverses an
-add, a delete and a connection.
+Verify: formatting a selection in a canvas text node and in a grid notepad
+produce identical markup; highlight applies, clears cleanly and survives a
+reload; undo reverses an add, a delete and a connection; no second copy of the
+text-editing logic exists anywhere.
 ````
 
-**Exit criteria:** one plain text option and one rich one, no orphaned `text` rows, highlight round-trips, undo covers canvas structure.
+**Exit criteria:** one text implementation, highlight round-trips, undo covers canvas structure.
 
 ---
 
@@ -1347,13 +1325,13 @@ against it.
 | 9 | 3D widgets | Sonnet 5 | extra | 3.5–4.5 | 280–400k | 1 |
 | 10 | Canvas core | Opus 5 | max | 4–5 | 300–500k | 1–1.5 |
 | 11 | Canvas edges + text | Sonnet 5 | high | — | — | *partly shipped in S10* |
-| 11a | Expanded project appearance | Sonnet 5 | high | — | — | *done* |
-| 11b | Text cleanup, highlight, undo | Sonnet 5 | high | 2.5–3.5 | 200–300k | 0.75 |
+| 11a | Expanded project appearance | Sonnet 5 | high | 3–4 | 250–350k | 1 |
+| 11b | Rich text everywhere + highlight | Sonnet 5 | high | 3–4 | 250–350k | 1 |
 | 11c | Connection line editing | Sonnet 5 | high | 3–4 | 250–350k | 1 |
 | 12 | Canvas + analysis widgets, preview | Sonnet 5 | high | 3–4 | 250–350k | 1 |
 | 13 | Archive roll-up | Sonnet 5 | medium | 2–3 | 150–250k | 0.6 |
 | 14 | Integrity + audit | Sonnet 5 | high | 2.5–3.5 | 200–300k | 0.75 |
-| | **Remaining (11b–14)** | | | **10.5–14 h** | **850k–1.25M** | **3.4–4** |
+| | **Remaining (11a–14)** | | | **14–18 h** | **1.1–1.6M** | **4.4–5** |
 
 **Realistic calendar:** at one window a day, a little over three weeks. At two windows a day, eight to ten days. Add roughly 20% for the debugging sessions that always appear — sessions 3, 9 and 10 are the likeliest to need a follow-up window.
 
@@ -1423,8 +1401,7 @@ Every item you specified, and where it lands.
 | Project palette: primary/secondary text, accent, button, fonts, 3D background | 11a |
 | Advanced settings drop-down when the bar fills | 11a |
 | Appearance controls hide when a widget is selected | 11a |
-| One plain text option (Simple text) and one rich (Notepad) | 11b |
-| Button text colour | 11b |
+| Text style editing in canvas widgets | 11b |
 | Highlight colour in text editing | 11b |
 | Click a connection to edit its style | 11c |
 | Per-edge colour, arrowhead, straight vs curved | 11c |

@@ -175,9 +175,11 @@ nav { display: flex; gap: 0.6rem; flex-wrap: wrap; }
      absent, this falls through to the project's own background (so a button
      still reads as "the same colour as the page" on a custom-background
      project) and finally the app default -- same fallback chain as every
-     other project override, see project/appearance.js. */
+     other project override, see project/appearance.js. --project-button-ink
+     is the matching text-colour override, independent of it -- a project can
+     set one without the other. */
   background: var(--project-button, var(--project-bg, var(--bg)));
-  color: var(--ink);
+  color: var(--project-button-ink, var(--ink));
   box-shadow: var(--raise-sm);
   text-decoration: none;
   cursor: pointer;
@@ -275,7 +277,7 @@ body.project-shell main { max-width: none; margin: 0; padding: 0.75rem; }
   gap: 0.6rem;
   font-family: var(--project-body-font, var(--sans));
   font-size: 0.82rem;
-  color: var(--ink);
+  color: var(--project-button-ink, var(--ink));
   padding: 0.5rem 1rem;
   border-radius: 999px;
   background: var(--project-button, var(--project-bg, var(--bg)));
@@ -1933,7 +1935,7 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 .widget-title-name {
   margin: 0;
   /* Now contentEditable while editing (title.js) -- no focus ring, same as
-     .widget-text, so typing into it doesn't break the flat neumorphic look. */
+     .widget-notepad, so typing into it doesn't break the flat neumorphic look. */
   outline: none;
   font-family: var(--widget-font-family, var(--project-heading-font, var(--display)));
   font-size: calc(var(--widget-font-size, 2.75rem) * var(--content-scale, 1));
@@ -1959,9 +1961,6 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   color: var(--widget-font-colour, var(--muted));
 }
 
-/* Notepad shares Text's look exactly -- the only difference between them is
-   editability (text.js: edit-mode only; notepad.js: always), not appearance. */
-.widget-text,
 .widget-notepad {
   width: 100%;
   height: 100%;
@@ -1978,10 +1977,9 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   color: var(--widget-font-colour, var(--project-ink, var(--ink)));
 }
 
-/* text.js/notepad.js keep this element's own DOM as plain text nodes (see
-   their "\n" handling on Enter), so :empty reliably means "nothing typed
-   yet" -- no leftover <br> from a browser default the widget doesn't use. */
-.widget-text:empty::before,
+/* notepad.js keeps this element's own DOM as plain text nodes (see its "\n"
+   handling on Enter), so :empty reliably means "nothing typed yet" -- no
+   leftover <br> from a browser default the widget doesn't use. */
 .widget-notepad:empty::before {
   content: attr(data-placeholder);
   color: var(--muted);
@@ -2485,8 +2483,8 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 
 .canvas-node.is-editing .canvas-node-editable { cursor: text; }
 
-/* Same empty-state treatment as .widget-text's, and the same reason it is a
-   ::before rather than a placeholder attribute the browser draws: the
+/* Same empty-state treatment as .widget-notepad's, and the same reason it is
+   a ::before rather than a placeholder attribute the browser draws: the
    element's own DOM must stay plain text nodes. */
 .canvas-node-editable:empty::before {
   content: attr(data-placeholder);

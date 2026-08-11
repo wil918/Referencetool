@@ -1,11 +1,11 @@
 /* How things get onto the canvas.
  *
  * Two ways in, because the two kinds of thing being added want different
- * gestures. A text box or a widget has no particular place it belongs, so it
- * is a button: click it and it lands in the middle of what you are looking
- * at. A reference does have a place it belongs -- next to the other three you
- * are arranging it against -- so it is dragged out of a picker and dropped
- * exactly there.
+ * gestures. A simple text node or a widget has no particular place it
+ * belongs, so it is a button: click it and it lands in the middle of what
+ * you are looking at. A reference does have a place it belongs -- next to
+ * the other three you are arranging it against -- so it is dragged out of a
+ * picker and dropped exactly there.
  *
  * The drop uses native HTML5 drag and drop rather than the pointer gestures
  * nodes.js implements, for the same reason grid.js's move handle does: the
@@ -85,10 +85,12 @@ export function createPalette({ container, viewport, references = [], addNode })
 
   const addRow = document.createElement("div");
   addRow.className = "canvas-dock-add-row";
-  // "Text box", not "Text": the widget list below contributes a Text widget
-  // too, and they are different things. A text box is the canvas's own
-  // editable note; a widget node is a live view of a homepage widget.
-  addRow.appendChild(addButton("Text box", { kind: "text" }));
+  // "Simple text", not "Notepad": the widget list below can also contribute a
+  // Notepad node, and the two are deliberately different things. Simple text
+  // takes the project's typography and has no per-selection formatting;
+  // Notepad is the rich one. Do not add rich text to Simple text -- having
+  // one plain option and one rich option is the point, not something to fix.
+  addRow.appendChild(addButton("Simple text", { kind: "text" }));
   for (const definition of allWidgetDefinitions()) {
     if (!definition.canvasEligible) continue;
     addRow.appendChild(

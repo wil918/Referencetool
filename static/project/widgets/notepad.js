@@ -1,13 +1,19 @@
-/* A sticky note -- unlike text.js and title.js, this one is never gated to
- * edit mode: it's editable and formattable right on the plain homepage,
- * exactly like text.js used to behave before Text and Title moved to
- * edit-mode-only. Notepad exists so there's still a widget type for jotting
- * things down without opening layout editing at all.
+/* A sticky note -- unlike title.js, this one is never gated to edit mode:
+ * it's editable and formattable right on the plain homepage. Notepad is the
+ * project's one rich-text widget, so it exists both for jotting things down
+ * without opening layout editing at all, and as the format toolbar's home
+ * for per-selection styling on the homepage grid.
  *
- * Formatted per-selection through rich-text.js, same as text.js -- see that
- * widget's own comment for the full rationale (sanitizeHtml, why paste/Enter
- * still force plain text, why old plain-text content needs no separate
- * migration path).
+ * Formatted per-selection, Google-Docs style, through rich-text.js: highlight
+ * a range and only that range changes; the rest of the note is untouched.
+ * contentEditable, but raw HTML is never trusted in or out: paste is
+ * intercepted down to plain text, Enter inserts a literal "\n" text node
+ * rather than letting the browser split the element into <div>s, and
+ * host.config.content is always run through rich-text.js's sanitizeHtml
+ * before it's set via innerHTML or written back -- see that module for why
+ * this is also what makes old plain-text content (saved before this widget
+ * could format per-selection) load through the exact same path with no
+ * separate migration step.
  *
  * config: { content, typography: { align }, contentScale }
  */

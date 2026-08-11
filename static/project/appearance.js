@@ -18,11 +18,12 @@
  *     existing `var(--muted)` / `var(--accent)` in style.css picks the
  *     override up with no changes there, because nothing else gives those
  *     two names a competing meaning.
- *   - --project-ink, --project-bg, --project-button, --project-heading-font,
- *     --project-body-font, --content-scale instead sit *beside* the globals
- *     they default from (--ink, --bg, --serif, --sans), and style.css reads
- *     them with the underlying global as an explicit fallback wherever it
- *     matters (e.g. color: var(--project-ink, var(--ink))). --ink/--serif/
+ *   - --project-ink, --project-bg, --project-button, --project-button-ink,
+ *     --project-heading-font, --project-body-font, --content-scale instead
+ *     sit *beside* the globals they default from (--ink, --bg, --serif,
+ *     --sans), and style.css reads them with the underlying global as an
+ *     explicit fallback wherever it matters (e.g. color: var(--project-ink,
+ *     var(--ink))). --ink/--serif/
  *     --sans are left alone because a widget can reference one of those
  *     names directly and explicitly (project/typography.js's FONT_OPTIONS) --
  *     redefining the name itself would silently move that widget's explicit
@@ -181,6 +182,12 @@ const FONT_STACK_VARS = {
     // colour instead.
     if (s.button) root.setProperty("--project-button", s.button);
     else root.removeProperty("--project-button");
+
+    // Independent of --project-button: a project can recolour its button
+    // surface without recolouring the label on it, or vice versa. Falls back
+    // to --ink, same as the text everywhere else on an unstyled button.
+    if (s.buttonInk) root.setProperty("--project-button-ink", s.buttonInk);
+    else root.removeProperty("--project-button-ink");
 
     if (s.primaryFont && FONT_STACK_VARS[s.primaryFont]) {
       root.setProperty("--project-heading-font", FONT_STACK_VARS[s.primaryFont]);

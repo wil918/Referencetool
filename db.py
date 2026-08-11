@@ -329,6 +329,40 @@ def init_db():
                 conn.execute(ddl)
             except sqlite3.OperationalError:
                 pass  # column already exists
+        _migrate_text_widget_to_notepad(conn)
+
+
+# One-off: the `text` widget type was removed in favour of `notepad`, which
+# offers the same per-selection rich text editing without the edit-mode
+# gate that made the old widget unusable outside of layout editing. Their
+# configs are the exact same shape -- { content, typography: { align },
+# contentScale } -- so the conversion is a rename with nothing to carry
+# across by hand: content, alignment and content scale all survive as-is.
+# Nothing is lost.
+#
+# Not wrapped in try/except like the ALTER TABLE migrations above -- there is
+# no operational error to guard against here, and the UPDATEs are naturally
+# idempotent: once no row has type/config.type "text", both loops below find
+# nothing and no-op, so this is safe to run on every boot rather than
+# needing a one-time flag.
+def _migrate_text_widget_to_notepad(conn):
+    conn.execute("UPDATE widgets SET type = 'notepad' WHERE type = 'text'")
+
+    rows = conn.execute(
+        "SELECT id, config FROM canvas_nodes WHERE kind = 'widget' AND config IS NOT NULL"
+    ).fetchall()
+    for row in rows:
+        try:
+            config = json.loads(row["config"])
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(config, dict) or config.get("type") != "text":
+            continue
+        config["type"] = "notepad"
+        conn.execute(
+            "UPDATE canvas_nodes SET config = ? WHERE id = ?",
+            (json.dumps(config), row["id"]),
+        )
 
 
 def insert_reference(

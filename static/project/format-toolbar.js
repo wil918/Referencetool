@@ -14,24 +14,26 @@
  * every widget -- alignment is paragraph-level and content-scale is this
  * app's own zoom control, neither is a per-character property.
  *
- * Text and Notepad additionally pass `richText` -- { getSelectionStyle,
- * applySelectionStyle, clearSelectionStyle }, built from rich-text.js
- * against the widget's own element -- opting the other six fields (family,
- * size, colour, bold, italic, underline) into per-selection formatting
- * instead: highlight a range and only that range changes; a collapsed
- * cursor sets the style new characters are typed in. See rich-text.js for
- * the mechanics. Title never passes this, so its six fields keep going
- * through get/set exactly as before -- zero change to how it behaves.
+ * Notepad (and any future rich-text widget) additionally passes `richText`
+ * -- { getSelectionStyle, applySelectionStyle, clearSelectionStyle }, built
+ * from rich-text.js against the widget's own element -- opting the other
+ * seven fields (family, size, colour, bold, italic, underline, highlight)
+ * into per-selection formatting instead: highlight a range and only that
+ * range changes; a collapsed cursor sets the style new characters are typed
+ * in. See rich-text.js for the mechanics. Title never passes this, so its
+ * fields keep going through get/set exactly as before -- zero change to how
+ * it behaves.
  *
  * One instance rather than one per widget: only one widget can be "being
- * edited" at a time, and session 11's canvas text node is meant to reuse
- * this exact module rather than growing a second toolbar.
+ * edited" at a time. The canvas's own simple text node deliberately does not
+ * opt in here -- see canvas/palette.js for why it stays plain rather than
+ * growing Notepad's per-selection formatting.
  */
 
 import { FONT_OPTIONS, remToPt, ptToRem } from "./typography.js";
 import { showSection, hideSection } from "./top-bar.js";
 
-const RICH_FIELDS = ["family", "size", "colour", "bold", "italic", "underline"];
+const RICH_FIELDS = ["family", "size", "colour", "bold", "italic", "underline", "highlight"];
 
 // Google Docs' own preset list, shown as a dropdown under the size box.
 const PRESET_SIZES = [8, 9, 10, 11, 12, 14, 18, 24, 30, 36, 48, 60, 72, 96];
@@ -60,6 +62,7 @@ export function onActiveWidgetChange(fn) {
 }
 let familySelect, sizeInput, sizeDropdown, colourInput, boldBtn, italicBtn, underlineBtn;
 let alignBtns, scaleInput, clearBtn;
+let highlightInput, highlightNoneBtn;
 
 // A rich-text widget's own selection lives in window.getSelection(), but
 // that Selection is destroyed the moment focus moves to a form control
@@ -163,6 +166,17 @@ function build() {
   colourInput.type = "color";
   colourInput.title = "Text colour";
 
+  // A colour picker alone can't express "no highlight" -- every value it can
+  // hold, including white, is a colour to paint. highlightNoneBtn is the
+  // separate control for that: it clears the property instead of setting it
+  // to white, which would otherwise paint a literal white box over any
+  // custom project background. See rich-text.js's module comment.
+  highlightInput = document.createElement("input");
+  highlightInput.type = "color";
+  highlightInput.title = "Highlight colour";
+
+  highlightNoneBtn = fieldButton("⌀", "No highlight");
+
   boldBtn = fieldButton("<b>B</b>", "Bold");
   italicBtn = fieldButton("<i>I</i>", "Italic");
   underlineBtn = fieldButton("<u>U</u>", "Underline");
@@ -195,6 +209,8 @@ function build() {
   bar.appendChild(familySelect);
   bar.appendChild(sizeWrap);
   bar.appendChild(colourInput);
+  bar.appendChild(highlightInput);
+  bar.appendChild(highlightNoneBtn);
   bar.appendChild(divider());
   bar.appendChild(boldBtn);
   bar.appendChild(italicBtn);
@@ -227,6 +243,8 @@ function build() {
     else if (event.key === "Escape") sizeDropdown.hidden = true;
   });
   colourInput.addEventListener("input", () => emit({ colour: colourInput.value }));
+  highlightInput.addEventListener("input", () => emit({ highlight: highlightInput.value }));
+  highlightNoneBtn.addEventListener("click", () => emit({ highlight: undefined }));
   boldBtn.addEventListener("click", () => emit({ bold: !activeStyle().bold || undefined }));
   italicBtn.addEventListener("click", () => emit({ italic: !activeStyle().italic || undefined }));
   underlineBtn.addEventListener("click", () => emit({ underline: !activeStyle().underline || undefined }));
@@ -257,7 +275,7 @@ function current() {
   return active ? active.get() || {} : {};
 }
 
-// The six character-level fields' current state -- from the live selection
+// The seven character-level fields' current state -- from the live selection
 // for a rich-text widget, from the whole-widget typography object
 // otherwise (Title). Used by refresh() and by the toggle buttons, which
 // need to know the current state to know which way to flip.
@@ -269,7 +287,7 @@ function activeStyle() {
   return current().typography || {};
 }
 
-// Routes a field's change to whichever channel owns it: the six
+// Routes a field's change to whichever channel owns it: the seven
 // character-level fields go to the active widget's selection when it's a
 // rich-text widget, everything else (and every field, for a non-rich-text
 // widget like Title) goes through the whole-widget get/set this module has
@@ -305,6 +323,11 @@ function refresh() {
   // own 0.9rem "Normal" default lands on 11pt too, see remToPt's comment).
   sizeInput.value = style.size ? remToPt(style.size) : DEFAULT_PT;
   colourInput.value = style.colour || inkFallback();
+  // Just the picker's idle swatch, same as colourInput's own fallback above --
+  // nothing is actually highlighted until the user opens this and picks a
+  // colour, at which point emit() writes it for real.
+  highlightInput.value = style.highlight || "#ffff00";
+  highlightNoneBtn.classList.toggle("is-active", !style.highlight);
   boldBtn.classList.toggle("is-active", Boolean(style.bold));
   italicBtn.classList.toggle("is-active", Boolean(style.italic));
   underlineBtn.classList.toggle("is-active", Boolean(style.underline));
@@ -359,9 +382,8 @@ function activate(host, get, set, richText) {
 
 /** Opt a widget into the shared toolbar. See the module comment for the
  * shape of `get`/`set`/`richText`. `enabled`, if given, is checked on every
- * mousedown -- Text and Title only allow formatting while host.editMode
- * says the grid is being edited; Notepad passes nothing and stays
- * always-on. */
+ * mousedown -- Title only allows formatting while host.editMode says the
+ * grid is being edited; Notepad passes nothing and stays always-on. */
 export function makeFormattable(host, { get, set, enabled, richText }) {
   const onMouseDown = () => {
     if (enabled && !enabled()) return;
