@@ -72,3 +72,14 @@ export function removeReferenceFromFolder(folderId, referenceId) {
     method: "DELETE",
   }).then(asJson);
 }
+
+/** Folder names rolled up across every project, each with a total reference
+ * count and which projects contribute -- backs the Archive's folder strip. */
+export function listFolderRollup() {
+  return fetch("/api/folders/rollup").then(asJson);
+}
+
+/** Every reference filed under this folder name in any project, de-duplicated. */
+export function listFolderRollupReferences(name) {
+  return fetch(`/api/folders/rollup/${encodeURIComponent(name)}/references`).then(asJson);
+}

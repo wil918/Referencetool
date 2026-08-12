@@ -176,6 +176,45 @@ def test_folder_routes_404_for_an_unknown_folder(client):
     assert client.delete("/api/folders/nope").status_code == 404
 
 
+# --- Cross-project folder roll-up --------------------------------------------
+
+
+def test_rollup_unions_same_named_folders_across_projects(client, archive):
+    project_a = make_project(client)
+    project_b = make_project(client)
+    texture_a = folder_named(client, project_a, "Texture")
+    texture_b = folder_named(client, project_b, "Texture")
+
+    shared_id = add_reference(archive, "shared")
+    only_a_id = add_reference(archive, "only-a")
+    only_b_id = add_reference(archive, "only-b")
+
+    client.post(f"/api/folders/{texture_a['id']}/references", json={"reference_ids": [shared_id, only_a_id]})
+    client.post(f"/api/folders/{texture_b['id']}/references", json={"reference_ids": [shared_id, only_b_id]})
+
+    rollup = client.get("/api/folders/rollup").get_json()
+    texture = next(f for f in rollup if f["name"] == "Texture")
+    # The shared reference counts once, not twice.
+    assert texture["reference_count"] == 3
+    project_ids = {p["id"] for p in texture["projects"]}
+    assert project_ids == {project_a, project_b}
+    counts = {p["id"]: p["count"] for p in texture["projects"]}
+    assert counts[project_a] == 2
+    assert counts[project_b] == 2
+
+    refs = client.get("/api/folders/rollup/Texture/references").get_json()
+    ref_ids = {r["id"] for r in refs}
+    assert ref_ids == {shared_id, only_a_id, only_b_id}
+
+
+def test_rollup_reference_count_ignores_a_folder_with_nothing_filed(client):
+    make_project(client)  # its default folders, including Texture, are all empty
+    rollup = client.get("/api/folders/rollup").get_json()
+    texture = next(f for f in rollup if f["name"] == "Texture")
+    assert texture["reference_count"] == 0
+    assert texture["projects"][0]["count"] == 0
+
+
 # --- Widgets: anti-stacking -------------------------------------------------
 
 

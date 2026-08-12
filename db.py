@@ -1089,6 +1089,74 @@ def _folder_to_dict(row):
     return d
 
 
+def list_folder_rollup():
+    """Folder names rolled up across every project: how many distinct
+    references sit under that name anywhere, and which projects contribute.
+
+    Computed at read time, not stored -- a folder still belongs to exactly
+    one project (see the `folders` table notes above). This is what lets a
+    "Texture" folder in three different projects aggregate here without any
+    row being shared between them, and without a global folders table.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT folders.name AS name,
+                      projects.id AS project_id, projects.title AS project_title,
+                      folder_references.reference_id AS reference_id
+               FROM folders
+               JOIN projects ON projects.id = folders.project_id
+               LEFT JOIN folder_references ON folder_references.folder_id = folders.id"""
+        ).fetchall()
+
+    by_name = {}
+    for row in rows:
+        entry = by_name.setdefault(
+            row["name"], {"name": row["name"], "ref_ids": set(), "projects": {}}
+        )
+        project = entry["projects"].setdefault(
+            row["project_id"], {"id": row["project_id"], "title": row["project_title"], "ref_ids": set()}
+        )
+        if row["reference_id"]:
+            entry["ref_ids"].add(row["reference_id"])
+            project["ref_ids"].add(row["reference_id"])
+
+    result = []
+    for entry in by_name.values():
+        projects = sorted(
+            (
+                {"id": p["id"], "title": p["title"], "count": len(p["ref_ids"])}
+                for p in entry["projects"].values()
+            ),
+            key=lambda p: p["title"].lower(),
+        )
+        result.append(
+            {
+                "name": entry["name"],
+                "reference_count": len(entry["ref_ids"]),
+                "projects": projects,
+            }
+        )
+    result.sort(key=lambda e: e["name"].lower())
+    return result
+
+
+def list_folder_rollup_references(name):
+    """Every reference filed in any folder with this name, across every
+    project, de-duplicated by reference id -- a reference in two projects'
+    "Texture" folders appears once here."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT DISTINCT reference_items.*
+               FROM reference_items
+               JOIN folder_references ON reference_items.id = folder_references.reference_id
+               JOIN folders ON folders.id = folder_references.folder_id
+               WHERE folders.name = ?
+               ORDER BY reference_items.date_added DESC""",
+            (name,),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+
 # --- Project spaces: widgets -------------------------------------------------
 
 

@@ -218,6 +218,44 @@ filterOwnWork.addEventListener("change", refreshArchive);
 typeCheckboxes.forEach((cb) => cb.addEventListener("change", refreshArchive));
 searchMethodCheckboxes.forEach((cb) => cb.addEventListener("change", refreshArchive));
 
+// --- Cross-project folder roll-up ---
+//
+// A gradual narrowing that composes with the filters above rather than
+// replacing them: refreshArchive always fetches the search/type/own-work
+// filtered list first, then -- only if a roll-up chip is selected --
+// intersects it with that folder name's references. Clearing the chip drops
+// the intersection and the full (still search/type/own-work-filtered) list
+// comes back. A folder never removes anything from the archive itself.
+
+const folderChipsEl = document.getElementById("archive-folder-chips");
+const folderNoteEl = document.getElementById("archive-folder-note");
+const folderNoteNameEl = document.getElementById("archive-folder-note-name");
+let archiveFolderFilter = null; // folder name (string) or null
+
+async function refreshFolderChips() {
+  const rollup = await folders.listFolderRollup();
+  folderChipsEl.innerHTML = "";
+  if (archiveFolderFilter && !rollup.some((f) => f.name === archiveFolderFilter)) {
+    archiveFolderFilter = null;
+  }
+  rollup.forEach((entry) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "btn folder-chip";
+    if (entry.name === archiveFolderFilter) chip.classList.add("active");
+    const projectNames = entry.projects.map((p) => p.title).join(", ");
+    chip.textContent = `${entry.name} (${entry.reference_count})`;
+    chip.title = `In: ${projectNames}`;
+    chip.addEventListener("click", () => {
+      archiveFolderFilter = archiveFolderFilter === entry.name ? null : entry.name;
+      refreshArchive();
+    });
+    folderChipsEl.appendChild(chip);
+  });
+  folderNoteEl.hidden = !archiveFolderFilter;
+  if (archiveFolderFilter) folderNoteNameEl.textContent = archiveFolderFilter;
+}
+
 async function refreshArchive() {
   const params = new URLSearchParams();
   const q = searchInput.value.trim();
@@ -228,9 +266,16 @@ async function refreshArchive() {
   if (checkedTypes.length) params.set("type", checkedTypes.join(","));
   if (checkedMethods.length) params.set("search_by", checkedMethods.join(","));
 
-  const res = await fetch(`/api/references?${params.toString()}`);
-  currentList = await res.json();
-  archiveFiltersActive = Boolean(q) || filterOwnWork.value !== "any" || checkedTypes.length > 0;
+  const [res] = await Promise.all([fetch(`/api/references?${params.toString()}`), refreshFolderChips()]);
+  let refs = await res.json();
+  if (archiveFolderFilter) {
+    const folderRefs = await folders.listFolderRollupReferences(archiveFolderFilter);
+    const ids = new Set(folderRefs.map((r) => r.id));
+    refs = refs.filter((r) => ids.has(r.id));
+  }
+  currentList = refs;
+  archiveFiltersActive =
+    Boolean(q) || filterOwnWork.value !== "any" || checkedTypes.length > 0 || Boolean(archiveFolderFilter);
   // A reference that's no longer in the list (deleted, or filtered out)
   // shouldn't stay silently selected behind the scenes.
   const visible = new Set(currentList.map((r) => r.id));

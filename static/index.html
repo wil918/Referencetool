@@ -86,6 +86,14 @@
           <label class="checkbox-label"><input type="checkbox" class="type-checkbox" value="text"> Text notes</label>
         </div>
       </div>
+      <div class="archive-folder-strip">
+        <span class="filter-label">Folders</span>
+        <div id="archive-folder-chips" class="folder-chips"></div>
+        <p id="archive-folder-note" class="muted" hidden>
+          Showing references filed in every project's "<span id="archive-folder-note-name"></span>" folder.
+          Clearing this filter restores the whole archive -- a folder shows a subset, it never hides anything.
+        </p>
+      </div>
       <div class="archive-actions">
         <button id="archive-select-btn" class="btn">Select</button>
       </div>

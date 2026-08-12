@@ -379,6 +379,21 @@ def api_create_folder(project_id):
     return jsonify(db.get_folder(folder_id))
 
 
+@app.get("/api/folders/rollup")
+def api_folder_rollup():
+    """Folder names rolled up across every project, for the Archive's
+    cross-project folder strip. A computed view, not a stored one -- see
+    db.list_folder_rollup."""
+    return jsonify(db.list_folder_rollup())
+
+
+@app.get("/api/folders/rollup/<name>/references")
+def api_folder_rollup_references(name):
+    """Every reference filed under this folder name in any project,
+    de-duplicated -- backs the Archive grid when a roll-up is selected."""
+    return jsonify([_ref_summary(r) for r in db.list_folder_rollup_references(name)])
+
+
 @app.get("/api/folders/<folder_id>")
 def api_get_folder(folder_id):
     folder = db.get_folder(folder_id)
