@@ -1,0 +1,5 @@
+# Extra dependency for the pywebview desktop spike (desktop.py). Not needed
+# by the CLI or browser entry point (app.py), so it stays out of
+# requirements.txt rather than becoming a GUI dependency for everyone.
+-r requirements.txt
+pywebview>=5.0

@@ -1302,13 +1302,20 @@ def api_get_capture(capture_id):
     return jsonify(capture.summary(row))
 
 
-if __name__ == "__main__":
+def bootstrap():
+    """Shared startup for every entry point: init the db, resume any
+    in-flight capture queue, and start the capture worker. Called by both
+    `python app.py` and desktop.py so the two never drift apart."""
     db.init_db()
     # Pick up anything a previous run left mid-flight before serving.
     resumed, lost = capture.resume_pending()
     if resumed or lost:
         print(f"captures resumed: {resumed}, unrecoverable: {lost}")
     capture.ensure_worker()
+
+
+if __name__ == "__main__":
+    bootstrap()
     url = f"http://127.0.0.1:{PORT}"
     print(f"Fashion reference library running at {url}")
     threading.Timer(1.0, lambda: webbrowser.open(url)).start()
