@@ -71,7 +71,14 @@ function wheelLines(event) {
  *     layer that moved.
  */
 export function createViewport(container, options = {}) {
-  const onChange = options.onChange || (() => {});
+  // More than one listener can care when the transform moves -- the zoom
+  // readout (the constructor's own onChange) and, independently, anything
+  // anchored to a world point on screen (the edge style panel repositioning
+  // itself to stay over its line). A Set rather than a second callback slot
+  // means a future caller doesn't have to chain its own onChange with
+  // whatever the previous one already needed.
+  const listeners = new Set();
+  if (options.onChange) listeners.add(options.onChange);
 
   container.classList.add("canvas-viewport");
 
@@ -100,7 +107,8 @@ export function createViewport(container, options = {}) {
     // re-rendered, which is the whole point of the single-transform design.
     world.style.setProperty("--canvas-scale", String(scale));
     world.style.setProperty("--canvas-inv-scale", String(1 / scale));
-    onChange(getTransform());
+    const transform = getTransform();
+    for (const fn of listeners) fn(transform);
   }
 
   const getTransform = () => ({ x: tx, y: ty, scale });
@@ -322,6 +330,15 @@ export function createViewport(container, options = {}) {
     /** True while a pan is actually moving the view -- lets a click handler
      *  tell "released after panning" from "clicked on empty space". */
     isPanning: () => Boolean(pan && pan.active),
+    /** Notify `fn` on every pan/zoom, starting with the current transform
+     *  immediately (so a caller that shows something anchored to a world
+     *  point doesn't need a separate first positioning call). Returns an
+     *  unsubscribe function. */
+    subscribe(fn) {
+      listeners.add(fn);
+      fn(getTransform());
+      return () => listeners.delete(fn);
+    },
 
     destroy() {
       container.removeEventListener("pointerdown", onCapturePointerDown, true);

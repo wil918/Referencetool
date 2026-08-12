@@ -1238,6 +1238,12 @@ CANVAS_NODE_PATCH_COLUMNS = (
     "kind", "reference_id", "x", "y", "w", "h", "locked", "content", "config", "z_index",
 )
 
+# An edge has exactly one mutable column: source_node_id/target_node_id are
+# fixed at creation (reconnecting an edge means deleting and remaking it, not
+# patching it), so this exists mainly to keep the same
+# app.py-filters-against-this-list pattern CANVAS_NODE_PATCH_COLUMNS uses.
+CANVAS_EDGE_PATCH_COLUMNS = ("style",)
+
 
 def list_canvas_nodes(project_id):
     with get_conn() as conn:
@@ -1318,6 +1324,27 @@ def delete_canvas_node(node_id):
 def create_canvas_edge(edge_id, project_id, source_node_id, target_node_id, style=None):
     with get_conn() as conn:
         _insert_canvas_edge(conn, edge_id, project_id, source_node_id, target_node_id, style)
+
+
+def update_canvas_edge(edge_id, **fields):
+    """Patch whichever of an edge's columns were actually sent -- style only,
+    today, but the shape mirrors update_canvas_node's so a future mutable
+    column doesn't need a new function."""
+    sets, params = [], []
+    for column in CANVAS_EDGE_PATCH_COLUMNS:
+        if column not in fields:
+            continue
+        value = fields[column]
+        if column == "style":
+            value = json.dumps(value) if value is not None else None
+        sets.append(f"{column} = ?")
+        params.append(value)
+    if not sets:
+        return
+    with get_conn() as conn:
+        conn.execute(
+            f"UPDATE canvas_edges SET {', '.join(sets)} WHERE id = ?", [*params, edge_id]
+        )
 
 
 def delete_canvas_edge(edge_id):

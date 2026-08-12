@@ -17,6 +17,10 @@
  *     into one body is safe in a way a bulk PUT would not be -- and the bulk
  *     PUT is deliberately never used from here: it replaces the whole canvas,
  *     so an incremental edit sent through it would race every other edit.
+ *
+ *   - An edge's style rides the same queue under an "edge:<id>" key, for a
+ *     colour picker being dragged the same reason a node drag needs one:
+ *     dozens of input events, one write once the user actually stops.
  */
 
 // Long enough to swallow a whole drag, short enough that letting go of a node
@@ -25,8 +29,9 @@
 const PATCH_DELAY = 400;
 
 export function createStore(projectId) {
-  // node id -> the fields still to be written for it. Merged rather than
-  // queued, so the last value of each field is the one that goes out.
+  // node id (or "edge:<id>") -> the fields still to be written for it.
+  // Merged rather than queued, so the last value of each field is the one
+  // that goes out.
   const pending = new Map();
   let timer = null;
   // Fired with a message when a write fails, so the page can say so rather
@@ -67,14 +72,34 @@ export function createStore(projectId) {
       body: JSON.stringify({ source_node_id: sourceNodeId, target_node_id: targetNodeId }),
     });
 
-  const deleteEdge = (edgeId) => request(`/api/canvas/edges/${edgeId}`, { method: "DELETE" });
+  function deleteEdge(edgeId) {
+    // Same reasoning as deleteNode above.
+    pending.delete(`edge:${edgeId}`);
+    return request(`/api/canvas/edges/${edgeId}`, { method: "DELETE" });
+  }
 
   // --- the debounced patch queue -------------------------------------------
+  //
+  // One queue serves both nodes and edges: an edge-style key is prefixed
+  // ("edge:<id>") so flush() can tell which URL a given entry belongs to,
+  // rather than running two copies of the same timer/batch machinery for
+  // what is otherwise identical debounce logic.
 
   /** Queue a partial update for one node. Fields merge with anything already
    *  waiting for that node; the write goes out once the user pauses. */
   function patchNode(nodeId, fields) {
     pending.set(nodeId, { ...(pending.get(nodeId) || {}), ...fields });
+    clearTimeout(timer);
+    timer = setTimeout(flush, PATCH_DELAY);
+  }
+
+  /** Queue a full replacement of one edge's style. Unlike patchNode, `style`
+   *  is not merged field-by-field with whatever is already pending -- the
+   *  caller (edges.js's setStyle) already holds the merged object, and the
+   *  canvas_edges.style column is written wholesale, so the last call before
+   *  the pause wins outright. */
+  function patchEdgeStyle(edgeId, style) {
+    pending.set(`edge:${edgeId}`, { style });
     clearTimeout(timer);
     timer = setTimeout(flush, PATCH_DELAY);
   }
@@ -94,14 +119,18 @@ export function createStore(projectId) {
     pending.clear();
 
     return Promise.all(
-      batch.map(([nodeId, fields]) =>
-        request(`/api/canvas/nodes/${nodeId}`, {
+      batch.map(([key, fields]) => {
+        const isEdge = key.startsWith("edge:");
+        const url = isEdge
+          ? `/api/canvas/edges/${key.slice(5)}`
+          : `/api/canvas/nodes/${key}`;
+        return request(url, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(fields),
           keepalive,
-        }).catch((err) => onError(err.message))
-      )
+        }).catch((err) => onError(err.message));
+      })
     );
   }
 
@@ -118,6 +147,7 @@ export function createStore(projectId) {
     createEdge,
     deleteEdge,
     patchNode,
+    patchEdgeStyle,
     flush,
     setErrorHandler(fn) {
       onError = fn || (() => {});

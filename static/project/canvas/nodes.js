@@ -29,6 +29,7 @@ import * as carousel from "../../shared/carousel.js";
 import { definitionFor, mountWidget } from "../registry.js";
 import { insertPlainText } from "../text-utils.js";
 import { createEdgeLayer } from "./edges.js";
+import { createEdgeStylePanel } from "./edge-style-panel.js";
 
 // How big a node is when nothing says otherwise. Sizes are world units, which
 // at scale 1 are CSS pixels -- so these are simply "how big it looks when you
@@ -89,6 +90,44 @@ const CANVAS_EDIT_MODE = {
 
 const centreOf = (node) => ({ x: node.x + node.w / 2, y: node.y + node.h / 2 });
 
+/* Where a ray from `node`'s centre toward (towardX, towardY) exits its box --
+ * i.e. the point on the box's own edge, not its middle. Every node is opaque
+ * over its whole footprint and sits above the edge layer in z-order
+ * (style.css: "under every node"), so a connection drawn centre-to-centre is
+ * invisible for its entire length inside either box -- harmless for a plain
+ * line, since the same amount is hidden either way and what's left over is
+ * identical to what a boundary-trimmed line would show. It stops being
+ * harmless for an arrowhead: a marker sits at one exact vertex, and centred
+ * there it would always be buried under the box, never on screen. Trimming
+ * both ends to the boxes they actually touch is what makes an arrowhead
+ * visible at all, and costs the plain-line case nothing. */
+function boxExitPoint(node, towardX, towardY) {
+  const cx = node.x + node.w / 2;
+  const cy = node.y + node.h / 2;
+  const dx = towardX - cx;
+  const dy = towardY - cy;
+  if (!dx && !dy) return { x: cx, y: cy };
+  const hw = node.w / 2;
+  const hh = node.h / 2;
+  const scale = 1 / Math.max(Math.abs(dx) / hw, Math.abs(dy) / hh);
+  return { x: cx + dx * scale, y: cy + dy * scale };
+}
+
+/** Both ends of a connection, each trimmed to the box it leaves -- see
+ *  boxExitPoint above. The direction each is trimmed toward is the other
+ *  node's centre regardless of the edge's own shape (straight or curved):
+ *  the curve then bows between these two boundary points exactly as
+ *  edges.js already draws it between any other pair of points, so a curved
+ *  shape needs no separate case here. */
+function edgeEndpoints(nodeA, nodeB) {
+  const centreA = centreOf(nodeA);
+  const centreB = centreOf(nodeB);
+  return {
+    from: boxExitPoint(nodeA, centreB.x, centreB.y),
+    to: boxExitPoint(nodeB, centreA.x, centreA.y),
+  };
+}
+
 function isTypingTarget(target) {
   if (!(target instanceof Element)) return false;
   return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
@@ -114,14 +153,33 @@ export function createNodes({
   onCountChange = () => {},
 }) {
   const world = viewport.el;
+  // Declared ahead of the viewport subscription below, which reads
+  // selectedEdgeId synchronously on the spot (subscribe() fires its listener
+  // immediately) -- a `let` read before this point would be the temporal
+  // dead zone, not just an undefined value.
+  let selectedNodeId = null;
+  let selectedEdgeId = null;
   const edges = createEdgeLayer(world, { onSelect: selectEdge });
+  // Screen-space chrome, not world content -- mounted as a sibling of the
+  // world layer (viewport.container, not viewport.el) so panning and zooming
+  // the world never drags it around; it repositions itself instead, via the
+  // viewport subscription set up below.
+  const stylePanel = createEdgeStylePanel({
+    container: viewport.container,
+    onChange: (edgeId, patch) => {
+      const style = edges.setStyle(edgeId, patch);
+      if (style) store.patchEdgeStyle(edgeId, style);
+    },
+  });
+  const unsubscribeViewport = viewport.subscribe(() => {
+    if (!selectedEdgeId) return;
+    stylePanel.reposition(edgeAnchor(selectedEdgeId));
+  });
 
   const entries = new Map(); // node id -> { node, el, body, mounted, text }
   const edgesByNode = new Map(); // node id -> Set of edge ids touching it
   const referencesById = new Map(references.map((ref) => [ref.id, ref]));
 
-  let selectedNodeId = null;
-  let selectedEdgeId = null;
   // The highest z_index in play, and who holds it -- so bringing a node to
   // the front is one comparison rather than a scan, and re-grabbing the node
   // that is already on top writes nothing.
@@ -179,8 +237,27 @@ export function createNodes({
       const edge = edges.get(edgeId);
       const source = entries.get(edge.source_node_id);
       const target = entries.get(edge.target_node_id);
-      if (source && target) edges.update(edgeId, centreOf(source.node), centreOf(target.node));
+      if (source && target) {
+        const { from, to } = edgeEndpoints(source.node, target.node);
+        edges.update(edgeId, from, to);
+      }
     }
+  }
+
+  /** Where the style panel anchors: the screen position of the edge's own
+   *  midpoint, recomputed from its current endpoints rather than cached, so
+   *  it is correct immediately after a reload and after either node moves.
+   *  Node drags deselect the edge before this is ever asked for mid-drag
+   *  (see selectNode below), so "current" here only ever means "at select
+   *  time" or "after a pan/zoom". */
+  function edgeAnchor(edgeId) {
+    const edge = edges.get(edgeId);
+    if (!edge) return null;
+    const source = entries.get(edge.source_node_id);
+    const target = entries.get(edge.target_node_id);
+    if (!source || !target) return null;
+    const { from, to } = edgeEndpoints(source.node, target.node);
+    return viewport.worldToScreen((from.x + to.x) / 2, (from.y + to.y) / 2);
   }
 
   // --- selection and z-order -----------------------------------------------
@@ -189,6 +266,7 @@ export function createNodes({
     if (selectedEdgeId) {
       edges.select(null);
       selectedEdgeId = null;
+      stylePanel.hide();
     }
     if (selectedNodeId === nodeId) return;
     entries.get(selectedNodeId)?.el.classList.remove("is-selected");
@@ -200,6 +278,7 @@ export function createNodes({
     selectNode(null);
     selectedEdgeId = edgeId;
     edges.select(edgeId);
+    stylePanel.show(edgeId, edges.get(edgeId)?.style, edgeAnchor(edgeId));
   }
 
   function clearSelection() {
@@ -687,7 +766,8 @@ export function createNodes({
     const source = entries.get(edge.source_node_id);
     const target = entries.get(edge.target_node_id);
     if (!source || !target) return;
-    edges.add(edge, centreOf(source.node), centreOf(target.node));
+    const { from, to } = edgeEndpoints(source.node, target.node);
+    edges.add(edge, from, to);
     indexEdge(edge);
   }
 
@@ -727,7 +807,10 @@ export function createNodes({
     // entry needs has to be captured first.
     const edge = edges.get(edgeId);
     dropEdge(edgeId);
-    if (selectedEdgeId === edgeId) selectedEdgeId = null;
+    if (selectedEdgeId === edgeId) {
+      selectedEdgeId = null;
+      stylePanel.hide();
+    }
     if (record && edge) {
       pushUndo({
         type: "disconnect",
@@ -860,6 +943,14 @@ export function createNodes({
   }
 
   function onKeyDown(event) {
+    if (event.key === "Escape") {
+      // A text node's own keydown handler (buildTextBody) already blurs
+      // itself on Escape without stopping propagation, so this still runs
+      // afterward -- harmless, since a node mid-text-edit is never the
+      // selected edge.
+      if (selectedNodeId || selectedEdgeId) clearSelection();
+      return;
+    }
     if (isUndoChord(event)) {
       // Inside a contenteditable, this chord belongs to the browser's own
       // undo for the text just typed -- intercepting it here would fight
@@ -942,6 +1033,8 @@ export function createNodes({
       entries.clear();
       edgesByNode.clear();
       edges.destroy();
+      unsubscribeViewport();
+      stylePanel.destroy();
     },
   };
 }

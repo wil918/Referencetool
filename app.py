@@ -739,6 +739,18 @@ def api_create_canvas_edge(project_id):
     return jsonify(db.get_canvas_edge(edge_id))
 
 
+@app.patch("/api/canvas/edges/<edge_id>")
+def api_update_canvas_edge(edge_id):
+    """Update an edge's style -- the connections panel's colour, arrowhead
+    and shape controls. Mirrors api_update_canvas_node."""
+    if not db.get_canvas_edge(edge_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    fields = {k: v for k, v in body.items() if k in db.CANVAS_EDGE_PATCH_COLUMNS}
+    db.update_canvas_edge(edge_id, **fields)
+    return jsonify(db.get_canvas_edge(edge_id))
+
+
 @app.delete("/api/canvas/edges/<edge_id>")
 def api_delete_canvas_edge(edge_id):
     if not db.get_canvas_edge(edge_id):

@@ -2591,8 +2591,14 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   pointer-events: none;
 }
 
+/* An edge that has never been explicitly coloured has no inline stroke
+   (canvas/edges.js's applyColour leaves it empty), so it resolves right here
+   -- which is what makes it track the project accent live, with no listener
+   of our own, including when the accent changes underneath it. An explicitly
+   coloured edge sets stroke as an inline style, which wins over this by CSS
+   precedence and stops following. */
 .canvas-edge-line {
-  stroke: var(--edge);
+  stroke: var(--accent);
   stroke-width: 1.5;
   fill: none;
 }
@@ -2606,8 +2612,14 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   cursor: pointer;
 }
 
-.canvas-edge:hover .canvas-edge-line { stroke: var(--slate); }
-.canvas-edge.is-selected .canvas-edge-line { stroke: var(--accent); stroke-width: 2; }
+/* Width and glow only, never colour -- an edge's own colour (accent-following
+   or explicit) has to stay legible while hovered or selected, or picking a
+   colour would be pointless feedback. */
+.canvas-edge:hover .canvas-edge-line { stroke-width: 2.5; }
+.canvas-edge.is-selected .canvas-edge-line {
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 3px var(--accent-soft));
+}
 
 /* The connection being drawn. Dashed, because it is not a connection yet. */
 .canvas-edge-draft {
@@ -2617,6 +2629,77 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   fill: none;
   pointer-events: none;
 }
+
+/* --- the per-edge style editor ---
+   Screen-space chrome anchored to a world point (canvas/edge-style-panel.js
+   repositions it in client coordinates via viewport.worldToScreen), so it is
+   position: fixed rather than living inside .canvas-world where the pan/zoom
+   transform would carry it off in the wrong direction relative to its own
+   left/top. Same raised-pill treatment as .canvas-view-controls -- it's the
+   same kind of floating control. */
+.edge-style-panel {
+  position: fixed;
+  transform: translate(-50%, calc(-100% - 14px));
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 999px;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-md);
+  z-index: 2;
+}
+
+/* An unconditional `display: flex` above would otherwise outrank the
+   [hidden] attribute's own display:none -- same specificity tier, but author
+   CSS always wins over the user-agent stylesheet regardless of source order.
+   This selector is more specific than either on its own, so hide-via-attribute
+   (edge-style-panel.js's show()/hide()) actually works. */
+.edge-style-panel[hidden] { display: none; }
+
+.edge-style-row { display: flex; align-items: center; gap: 0.3rem; }
+
+.edge-style-colour-row .edge-style-colour {
+  width: 28px;
+  height: 26px;
+  padding: 2px;
+}
+
+.edge-style-group {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding-left: 0.35rem;
+  border-left: 1px solid var(--edge);
+}
+
+/* Same pressed-in "on" state as .format-toolbar-btn.is-active -- one system,
+   one convention for what a selected option looks like. */
+.edge-style-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--project-ink, var(--ink));
+  cursor: pointer;
+  transition: var(--press);
+}
+
+.edge-style-btn:hover { color: var(--ink-strong); }
+.edge-style-btn.is-active { box-shadow: var(--press-sm); color: var(--accent); }
+.edge-style-btn svg { width: 15px; height: 15px; display: block; }
+
+/* The reset-to-accent control sits with the colour swatch, not the segmented
+   groups -- it isn't a mutually-exclusive option among choices, it clears
+   one. Dimmed rather than hidden when there's nothing to clear, so its
+   position never shifts the swatch beside it. */
+.edge-style-reset:disabled { opacity: 0.35; cursor: default; }
+.edge-style-reset:disabled:hover { color: var(--project-ink, var(--ink)); }
 
 /* --- canvas chrome: status, hint, zoom cluster, add dock --- */
 
