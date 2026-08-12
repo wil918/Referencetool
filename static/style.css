@@ -2831,19 +2831,217 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 .canvas-dock-ref:hover .bar-thumb { box-shadow: var(--raise-md); }
 
 /* --- Project widget: canvas (project/widgets/canvas.js) ---
-   The door into the page above, styled the same compact-button-filling-the-
-   tile way as .widget-grid-button and .widget-exit. */
-.widget-canvas {
-  display: flex;
+   The door into the page above -- now a miniature of the canvas's own
+   contents rather than a small centred button, but still exactly one link:
+   the anchor fills the tile, the SVG inside it takes no pointer events of
+   its own, and nothing here gets a background or border of its own (rule 6)
+   -- the drawing sits directly on the widget's own flat surface. */
+.widget-canvas-preview-link {
+  display: block;
+  position: relative;
+  width: 100%;
   height: 100%;
-  align-items: center;
-  justify-content: center;
+  color: inherit;
 }
 
-.widget-canvas .btn {
-  max-width: 100%;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+.widget-canvas-preview {
+  width: 100%;
+  height: 100%;
+}
+
+.widget-canvas-preview svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* No click target of its own -- the anchor around it is the whole widget's
+     one interactive surface (module comment in canvas.js). */
+  pointer-events: none;
+}
+
+.widget-canvas-preview-edge {
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  stroke-opacity: 0.6;
+}
+
+.widget-canvas-preview-block {
+  fill: var(--muted);
+  fill-opacity: 0.35;
+}
+
+.widget-canvas-preview-thumb {
+  /* SVG <image> ignores border-radius, so corners are cut with a matching
+     clip path instead -- a fixed, small rounding, rather than trying to
+     mirror each node's own rx at this scale, where the difference is
+     invisible anyway. */
+  clip-path: inset(0 round 4px);
+}
+
+.widget-canvas-preview-empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 1rem;
+  margin: 0;
+}
+
+.widget-canvas-preview-caption {
+  position: absolute;
+  left: calc(0.9rem * var(--content-scale, 1));
+  bottom: calc(0.7rem * var(--content-scale, 1));
+  font-family: var(--serif);
+  font-size: calc(0.78rem * var(--content-scale, 1));
+  color: var(--muted);
+  pointer-events: none;
+}
+
+/* --- Project widget: colour-palette (project/widgets/colour-palette.js) ---
+   The combined palette of a chosen set of references. Chrome (the Edit pill)
+   follows the widget's shadow state for free -- it's a plain .btn, covered
+   by the existing .widget .btn / .widget.has-shadow .btn rules. */
+.widget-colour-palette {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.colour-palette-view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.colour-palette-view[hidden] { display: none; }
+
+.colour-palette-refs {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.colour-palette-refs .bar-thumb { width: 40px; height: 40px; }
+
+.colour-palette-strip { flex: 0 0 auto; }
+
+.colour-palette-picker {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.colour-palette-picker[hidden] { display: none; }
+
+.colour-palette-picker-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
+  gap: 0.4rem;
+  align-content: start;
+}
+
+.colour-palette-picker-item { cursor: pointer; }
+.colour-palette-picker-item .bar-thumb { width: 100%; height: auto; aspect-ratio: 1 / 1; }
+
+/* Selected reads as pressed-in rather than a checkbox overlay -- the same
+   raise/press vocabulary as everywhere else, just applied to a pick instead
+   of a drag. */
+.colour-palette-picker-item:hover .bar-thumb { box-shadow: var(--raise-sm); }
+.colour-palette-picker-item.is-selected .bar-thumb { box-shadow: var(--press-sm); }
+
+.colour-palette-done { align-self: flex-end; }
+
+/* --- Project widget: analysis (project/widgets/analysis.js) ---
+   A saved analysis's date, references and transcript -- reads like the
+   Previous Analysis sidebar's own detail view because it's built from the
+   same renderTranscript()/buildAnalysisRefMap() helpers (pages/analysis-panel.js). */
+.widget-analysis {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.widget-analysis-view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.widget-analysis-view[hidden] { display: none; }
+
+.widget-analysis-date { margin: 0; }
+
+.widget-analysis-refs.grid.small {
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  flex: 0 0 auto;
+}
+
+/* The transcript itself, and its per-turn editable bubbles -- var(--bg)'s
+   plain rules (.analyze-turn, further up this file) are for the page-level
+   Analyze modal and sidebar, which never sit inside a project's own
+   background; reused here, they need the project-background-aware fallback
+   chain (CLAUDE.md's rule 6) so the shadow still reads as depth against a
+   custom project colour instead of a stale global one. */
+.widget-analysis-transcript {
+  flex: 0 0 auto;
+  gap: 0.75rem;
+}
+
+.widget-analysis-transcript .analyze-turn {
+  background: var(--project-bg, var(--bg));
+  outline: none;
+  cursor: text;
+}
+
+.widget-analysis-transcript .analyze-writeup,
+.widget-analysis-transcript .analyze-reply {
+  box-shadow: var(--raise-sm);
+}
+
+.widget-analysis-transcript .analyze-question {
+  box-shadow: var(--press-sm);
+}
+
+.widget-analysis-picker {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  overflow-y: auto;
+}
+
+.widget-analysis-picker[hidden] { display: none; }
+
+.widget-analysis-picker-item { background: var(--project-button, var(--project-bg, var(--bg))); }
+
+.widget-analysis-picker-cancel { align-self: flex-end; }
+
+/* Shared chrome for the small pill controls the widgets above float over
+   their own content (Edit, Choose/Change) -- positioned the same corner as
+   .widget-scene-chrome's own toggle. Shadow-following is already free: these
+   are plain .btn elements, covered by .widget .btn / .widget.has-shadow .btn
+   / edit mode's own forced-raise rule. */
+.widget-chrome-btn {
+  position: absolute;
+  top: calc(0.6rem * var(--content-scale, 1));
+  right: calc(0.6rem * var(--content-scale, 1));
+  font-size: calc(0.78rem * var(--content-scale, 1));
+  padding: calc(0.35rem * var(--content-scale, 1)) calc(0.8rem * var(--content-scale, 1));
+  z-index: 1;
 }

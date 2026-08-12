@@ -43,6 +43,8 @@ import folderWidget from "./widgets/folder.js";
 import colourspaceWidget from "./widgets/colourspace.js";
 import similarityWidget from "./widgets/similarity.js";
 import canvasWidget from "./widgets/canvas.js";
+import colourPaletteWidget from "./widgets/colour-palette.js";
+import analysisWidget from "./widgets/analysis.js";
 
 const MODULES = [
   titleWidget,
@@ -56,6 +58,8 @@ const MODULES = [
   colourspaceWidget,
   similarityWidget,
   canvasWidget,
+  colourPaletteWidget,
+  analysisWidget,
 ];
 
 // How long a widget's config sits before it is written. Config saves are the

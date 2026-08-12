@@ -12,40 +12,66 @@
 import { makeCard } from "../../shared/cards.js";
 import * as carousel from "../../shared/carousel.js";
 
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+/** Wraps every mention of a known reference title in `text` with a hyperlink
+ *  back to that reference (`map`: title -> reference id). Longest titles are
+ *  matched first so a short title that happens to be a substring of a longer
+ *  one doesn't steal the match. Module-level (not just this panel's own
+ *  concern) so a saved analysis can be rendered the same way anywhere it's
+ *  shown -- see widgets/analysis.js. */
+export function linkifyReferences(text, map) {
+  const titles = Object.keys(map || {})
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  if (!titles.length) return escapeHtml(text);
+
+  const pattern = new RegExp(titles.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
+
+  let html = "";
+  let lastIndex = 0;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    html += escapeHtml(text.slice(lastIndex, match.index));
+    html += `<a href="#" class="ref-link" data-ref-id="${map[match[0]]}">${escapeHtml(match[0])}</a>`;
+    lastIndex = match.index + match[0].length;
+  }
+  html += escapeHtml(text.slice(lastIndex));
+  return html;
+}
+
+/** title -> id, the shape linkifyReferences and renderTranscript both want,
+ *  built from a saved analysis's own reference list. */
+export function buildAnalysisRefMap(references) {
+  const map = {};
+  for (const ref of references || []) map[ref.title] = ref.id;
+  return map;
+}
+
+/** Fill `container` with one .analyze-turn div per transcript entry, ref
+ *  mentions linkified against `refMap`. The read-only rendering both this
+ *  panel's saved-analysis detail view and widgets/analysis.js's canvas/grid
+ *  widget are built from -- the widget then upgrades individual turns to be
+ *  editable, but starts from exactly this markup. */
+export function renderTranscript(container, transcript, refMap) {
+  container.innerHTML = "";
+  for (const turn of transcript || []) {
+    const div = document.createElement("div");
+    div.className = `analyze-turn analyze-${turn.kind}`;
+    div.innerHTML = linkifyReferences(turn.text, refMap);
+    container.appendChild(div);
+  }
+}
+
 export function createAnalysisPanel({ project, getReferences }) {
   let sessionId = null;
   let referenceIds = [];
   let turns = []; // {kind, text}, mirrors the transcript for saving -- "status" turns excluded
   let refMap = {}; // title -> reference id, for linkifying mentions in Claude's replies
-
-  function escapeHtml(str) {
-    const div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
-  }
-
-  // Wraps every mention of a known reference title in `text` with a hyperlink
-  // back to that reference. Longest titles are matched first so a short title
-  // that happens to be a substring of a longer one doesn't steal the match.
-  function linkifyReferences(text, map = refMap) {
-    const titles = Object.keys(map)
-      .filter(Boolean)
-      .sort((a, b) => b.length - a.length);
-    if (!titles.length) return escapeHtml(text);
-
-    const pattern = new RegExp(titles.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
-
-    let html = "";
-    let lastIndex = 0;
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      html += escapeHtml(text.slice(lastIndex, match.index));
-      html += `<a href="#" class="ref-link" data-ref-id="${map[match[0]]}">${escapeHtml(match[0])}</a>`;
-      lastIndex = match.index + match[0].length;
-    }
-    html += escapeHtml(text.slice(lastIndex));
-    return html;
-  }
 
   // --- Previous Analysis sidebar ---------------------------------------
 
@@ -149,18 +175,7 @@ export function createAnalysisPanel({ project, getReferences }) {
       );
     });
 
-    const detailRefMap = {};
-    data.references.forEach((r) => {
-      detailRefMap[r.title] = r.id;
-    });
-
-    detailTranscript.innerHTML = "";
-    data.transcript.forEach((turn) => {
-      const div = document.createElement("div");
-      div.className = `analyze-turn analyze-${turn.kind}`;
-      div.innerHTML = linkifyReferences(turn.text, detailRefMap);
-      detailTranscript.appendChild(div);
-    });
+    renderTranscript(detailTranscript, data.transcript, buildAnalysisRefMap(data.references));
   }
 
   // --- Analyze: mode choice --------------------------------------------
@@ -224,7 +239,7 @@ export function createAnalysisPanel({ project, getReferences }) {
     const div = document.createElement("div");
     div.className = `analyze-turn analyze-${kind}`;
     if (kind === "writeup" || kind === "reply") {
-      div.innerHTML = linkifyReferences(text);
+      div.innerHTML = linkifyReferences(text, refMap);
     } else {
       div.textContent = text;
     }
