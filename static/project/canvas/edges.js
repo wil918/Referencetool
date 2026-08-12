@@ -33,23 +33,32 @@
  * writing an explicit colour breaks that link, which is exactly the
  * "explicitly coloured edges keep their own value" rule.
  *
- * Arrowheads are one shared <marker>, referenced by every edge that wants
- * one, whose arrowhead path has fill="context-stroke" -- an SVG2 keyword
- * that paints the marker with whatever the referencing path's own used
- * stroke colour is. That means the marker never needs recolouring by hand
- * either: it inherits the same accent-or-explicit colour the line just
- * resolved, automatically, including when the accent changes under an
- * unstyled edge.
+ * Arrowheads are an SVG <marker> per edge, whose arrowhead path has
+ * fill="currentColor" and whose colour is set on the marker element itself
+ * (applyColour below) -- not fill="context-stroke", the more obvious SVG2
+ * tool for "paint this with whatever colour the referencing line resolved
+ * to". context-stroke reads support unevenly enough across shipping browsers
+ * that it silently fell back to a plain black fill in real testing, so it's
+ * avoided here. currentColor has been universally supported forever, and
+ * because the value handed to it can itself be `var(--accent)`, an
+ * unstyled edge's arrowhead still follows a changing accent live, same as
+ * its line -- it's just this module doing the following explicitly instead
+ * of getting it for free from a browser feature that isn't reliably there
+ * yet. One marker per edge, rather than one shared marker, because
+ * currentColor resolves against the *marker's own* computed style (markers
+ * render as a disconnected tree rooted at themselves, unlike context-stroke's
+ * whole point of reaching back to the referencing element) -- two edges with
+ * different colours cannot share one marker's `color`.
  */
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 // Unique per layer instance so two canvases on one page (unlikely today, but
-// nothing stops it) don't reference each other's marker.
+// nothing stops it) don't reference each other's markers.
 let layerCount = 0;
 
 export function createEdgeLayer(world, { onSelect } = {}) {
-  const markerId = `canvas-edge-arrow-${++layerCount}`;
+  const layerId = ++layerCount;
 
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("class", "canvas-edges");
@@ -57,29 +66,34 @@ export function createEdgeLayer(world, { onSelect } = {}) {
   svg.setAttribute("height", "1");
   world.appendChild(svg);
 
+  const defs = document.createElementNS(SVG_NS, "defs");
+  svg.appendChild(defs);
+
   // Sized in world units (markerUnits="userSpaceOnUse"), so the arrowhead
   // scales with the world exactly like everything else drawn into it, rather
   // than staying a fixed screen size the way the non-scaling stroke does.
-  const defs = document.createElementNS(SVG_NS, "defs");
-  const marker = document.createElementNS(SVG_NS, "marker");
-  marker.setAttribute("id", markerId);
-  marker.setAttribute("viewBox", "0 0 10 10");
-  marker.setAttribute("refX", "9");
-  marker.setAttribute("refY", "5");
-  marker.setAttribute("markerWidth", "10");
-  marker.setAttribute("markerHeight", "10");
-  marker.setAttribute("markerUnits", "userSpaceOnUse");
-  // auto-start-reverse only affects marker-start (rotating it 180deg from
-  // auto); marker-end is unaffected. That is exactly what a shared marker
-  // needs to look right whichever end it is placed on: pointing away from
-  // the path's own direction of travel at the start, and along it at the end.
-  marker.setAttribute("orient", "auto-start-reverse");
-  const arrowhead = document.createElementNS(SVG_NS, "path");
-  arrowhead.setAttribute("d", "M0,0 L10,5 L0,10 z");
-  arrowhead.setAttribute("fill", "context-stroke");
-  marker.appendChild(arrowhead);
-  defs.appendChild(marker);
-  svg.appendChild(defs);
+  function createMarker(edgeId) {
+    const marker = document.createElementNS(SVG_NS, "marker");
+    marker.setAttribute("id", `canvas-edge-arrow-${layerId}-${edgeId}`);
+    marker.setAttribute("viewBox", "0 0 10 10");
+    marker.setAttribute("refX", "9");
+    marker.setAttribute("refY", "5");
+    marker.setAttribute("markerWidth", "10");
+    marker.setAttribute("markerHeight", "10");
+    marker.setAttribute("markerUnits", "userSpaceOnUse");
+    // auto-start-reverse only affects marker-start (rotating it 180deg from
+    // auto); marker-end is unaffected. That is what makes the same marker
+    // definition look right whichever end it is placed on: pointing away
+    // from the path's own direction of travel at the start, and along it at
+    // the end.
+    marker.setAttribute("orient", "auto-start-reverse");
+    const arrowhead = document.createElementNS(SVG_NS, "path");
+    arrowhead.setAttribute("d", "M0,0 L10,5 L0,10 z");
+    arrowhead.setAttribute("fill", "currentColor");
+    marker.appendChild(arrowhead);
+    defs.appendChild(marker);
+    return marker;
+  }
 
   // The line that follows the pointer while a connection is being drawn. It
   // belongs to no edge and is never persisted -- it exists between pointerdown
@@ -129,15 +143,23 @@ export function createEdgeLayer(world, { onSelect } = {}) {
   // through to the CSS class's var(--accent), which is the whole "follow the
   // accent" mechanism described above.
   function applyColour(entry) {
-    entry.line.style.stroke = styleOf(entry.edge).colour || "";
+    const colour = styleOf(entry.edge).colour;
+    entry.line.style.stroke = colour || "";
+    // The marker has no equivalent stylesheet rule to fall through to (its id
+    // is unique per edge), so the "follow the accent" default is spelled out
+    // here explicitly rather than left empty -- var(--accent) as a literal
+    // string is still a live custom-property reference, so this still
+    // updates on its own when the accent changes.
+    entry.marker.style.color = colour || "var(--accent)";
   }
 
   function applyArrowhead(entry) {
     const mode = styleOf(entry.edge).arrowhead || "none";
     entry.line.removeAttribute("marker-start");
     entry.line.removeAttribute("marker-end");
-    if (mode === "target") entry.line.setAttribute("marker-end", `url(#${markerId})`);
-    else if (mode === "source") entry.line.setAttribute("marker-start", `url(#${markerId})`);
+    const ref = `url(#${entry.marker.id})`;
+    if (mode === "target") entry.line.setAttribute("marker-end", ref);
+    else if (mode === "source") entry.line.setAttribute("marker-start", ref);
   }
 
   function add(edge, from, to) {
@@ -169,7 +191,7 @@ export function createEdgeLayer(world, { onSelect } = {}) {
       onSelect?.(edge.id);
     });
 
-    const entry = { edge, group, hit, line, from, to };
+    const entry = { edge, group, hit, line, marker: createMarker(edge.id), from, to };
     entries.set(edge.id, entry);
     redraw(entry);
     applyColour(entry);
@@ -205,6 +227,7 @@ export function createEdgeLayer(world, { onSelect } = {}) {
     const entry = entries.get(edgeId);
     if (!entry) return;
     entry.group.remove();
+    entry.marker.remove();
     entries.delete(edgeId);
     if (selectedId === edgeId) selectedId = null;
   }
