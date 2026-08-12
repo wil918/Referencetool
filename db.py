@@ -1038,14 +1038,37 @@ def move_folder(folder_id, position):
 
 
 def delete_folder(folder_id):
-    """Delete a folder and unfile everything in it.
+    """Delete a folder, unfile everything in it, and remove any folder widget
+    that pointed at it.
 
-    Only the filing goes. The references stay in the project and in the
-    archive, exactly as when one is removed from a folder individually.
+    A folder widget (widgets/folder.js) is a shortcut seeded with this
+    folder's id at creation time; once the folder is gone the shortcut has
+    nowhere to point, so it goes too rather than sitting on the grid as a
+    dead "Folder deleted" tile forever.
+
+    Only the filing and the shortcut go. The references stay in the project
+    and in the archive, exactly as when one is removed from a folder
+    individually.
     """
     with get_conn() as conn:
+        row = conn.execute(
+            "SELECT project_id FROM folders WHERE id = ?", (folder_id,)
+        ).fetchone()
         conn.execute("DELETE FROM folder_references WHERE folder_id = ?", (folder_id,))
         conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+        if row:
+            candidates = conn.execute(
+                "SELECT id, config FROM widgets WHERE project_id = ? AND type = 'folder'",
+                (row["project_id"],),
+            ).fetchall()
+            stale_ids = [
+                w["id"]
+                for w in candidates
+                if w["config"] and json.loads(w["config"]).get("folder_id") == folder_id
+            ]
+            conn.executemany(
+                "DELETE FROM widgets WHERE id = ?", [(wid,) for wid in stale_ids]
+            )
 
 
 def list_folder_references(folder_id):

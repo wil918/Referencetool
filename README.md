@@ -155,7 +155,27 @@ fashion-reference-tool/
 ## What's next
 
 Phase 1 (ingest, auto-tag, embed, search) and phase 2 (`analyze`, for
-cross-reference write-ups) are both done.
-# Referencetool
-# Referencetool
-# Referencetool
+cross-reference write-ups) are both done — and so is phase 3, project spaces.
+
+Each project now has its own home (`project.html`, reached from the Projects
+tab) instead of just a flat reference grid:
+
+- **Folders** group a project's references under a name — Texture, Colour,
+  Form, Vibe, Fashion and Narrative by default, freely renamed, added to, or
+  deleted. A reference can sit in several folders at once, and a folder never
+  filters the project's own grid — it only adds a view onto it. The Archive
+  tab rolls folders up across every project by name, so "Texture" folders in
+  three different projects show their combined, de-duplicated contents.
+- **A widget-based homepage grid** — title, notepad, settings, canvas-entry
+  and per-folder shortcut widgets, plus two 3D widgets (a colour space and a
+  similarity graph) scoped to just that project's own references. Layout is
+  free-placed with no compaction, and changes commit with an explicit Save.
+- **An infinite canvas** — pan/zoom, reference/text/widget nodes, drag-to-
+  connect edges with per-edge colour/arrowhead/shape styling, and colour-
+  palette/analysis widgets you can drop onto it. Every change persists
+  immediately; there's no save step.
+
+What's left is desktop packaging. The app is already built desktop-ready —
+no `localStorage` for anything the user creates, no absolute URLs or
+hard-coded ports, relative fetches only — but it isn't yet wrapped in a
+native shell.

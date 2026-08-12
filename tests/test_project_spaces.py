@@ -642,3 +642,97 @@ def test_deleting_a_reference_unfiles_it_and_clears_its_canvas_nodes(client, arc
     assert canvas["edges"] == []
     # The folder itself survives -- deleting a reference isn't deleting a folder.
     assert folder_named(client, project_id, "Texture")["reference_count"] == 0
+
+
+def test_deleting_a_folder_removes_the_folder_widget_that_pointed_at_it(client):
+    """A folder widget (widgets/folder.js) is seeded with config.folder_id at
+    creation time. Deleting the folder it points at must remove the widget
+    too, rather than leaving a permanent "Folder deleted" tile on the grid."""
+    project_id = make_project(client)
+    texture = folder_named(client, project_id, "Texture")
+    narrative = folder_named(client, project_id, "Narrative")
+
+    texture_widget = client.post(
+        f"/api/projects/{project_id}/widgets",
+        json={"type": "folder", "config": {"folder_id": texture["id"]}},
+    ).get_json()
+    narrative_widget = client.post(
+        f"/api/projects/{project_id}/widgets",
+        json={"type": "folder", "config": {"folder_id": narrative["id"]}},
+    ).get_json()
+
+    assert client.delete(f"/api/folders/{texture['id']}").status_code == 200
+
+    widget_ids = {w["id"] for w in client.get(f"/api/projects/{project_id}/widgets").get_json()}
+    assert texture_widget["id"] not in widget_ids
+    # A folder widget for a different, still-live folder is untouched.
+    assert narrative_widget["id"] in widget_ids
+
+
+def orphan_rows():
+    """Rows in each project-space table whose parent no longer exists --
+    proof a cascade fired all the way through rather than stopping partway.
+    """
+    with db.get_conn() as conn:
+        queries = {
+            "folders": """
+                SELECT id FROM folders
+                WHERE project_id NOT IN (SELECT id FROM projects)
+            """,
+            "folder_references": """
+                SELECT folder_id, reference_id FROM folder_references
+                WHERE folder_id NOT IN (SELECT id FROM folders)
+                   OR reference_id NOT IN (SELECT id FROM reference_items)
+            """,
+            "widgets": """
+                SELECT id FROM widgets
+                WHERE project_id NOT IN (SELECT id FROM projects)
+                   OR (parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM widgets))
+            """,
+            "project_settings": """
+                SELECT project_id FROM project_settings
+                WHERE project_id NOT IN (SELECT id FROM projects)
+            """,
+            "canvas_nodes": """
+                SELECT id FROM canvas_nodes
+                WHERE project_id NOT IN (SELECT id FROM projects)
+                   OR (reference_id IS NOT NULL
+                       AND reference_id NOT IN (SELECT id FROM reference_items))
+            """,
+            "canvas_edges": """
+                SELECT id FROM canvas_edges
+                WHERE project_id NOT IN (SELECT id FROM projects)
+                   OR source_node_id NOT IN (SELECT id FROM canvas_nodes)
+                   OR target_node_id NOT IN (SELECT id FROM canvas_nodes)
+            """,
+        }
+        return {table: conn.execute(query).fetchall() for table, query in queries.items()}
+
+
+def test_no_orphan_rows_survive_project_reference_and_folder_deletes(client, archive):
+    """The general sweep behind the three targeted cascade tests above: after
+    deleting a project, a reference and a folder -- each from a project with
+    a sibling project left untouched -- no table anywhere in the database
+    holds a row whose parent is gone."""
+    kept_project = make_project(client, "Kept")
+    populate(client, archive, kept_project)
+
+    doomed_project = make_project(client, "Doomed")
+    populate(client, archive, doomed_project)
+
+    survivor_project = make_project(client, "Survivor")
+    doomed_ref = populate(client, archive, survivor_project)
+    doomed_folder = folder_named(client, survivor_project, "Vibe")
+    client.post(
+        f"/api/projects/{survivor_project}/widgets",
+        json={"type": "folder", "config": {"folder_id": doomed_folder["id"]}},
+    )
+
+    assert client.delete(f"/api/projects/{doomed_project}").status_code == 200
+    assert client.delete(f"/api/references/{doomed_ref}").status_code == 200
+    assert client.delete(f"/api/folders/{doomed_folder['id']}").status_code == 200
+
+    orphans = orphan_rows()
+    assert all(len(rows) == 0 for rows in orphans.values()), orphans
+    # The untouched project's own space is still intact.
+    assert all(count > 0 for count in project_space_row_counts(kept_project).values())
