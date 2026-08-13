@@ -49,6 +49,17 @@ const CASCADE_WRAP = 6;
 // click -- same threshold and same reasoning as nodes.js's own gesture code.
 const DRAG_THRESHOLD = 4;
 
+// The drag ghost previews roughly the size a reference node actually gets
+// once dropped (nodes.js's own DEFAULT_SIZE.reference.w), not the palette's
+// small grid-cell thumbnail. Left unconstrained, the cloned thumbnail's own
+// `width: 100%` (sized for a ~90px grid cell) resolves against the ghost's
+// unconstrained fixed-position box instead of the cell it came from and
+// blows up to whatever the browser's shrink-to-fit fallback happens to be --
+// this pins it down explicitly. Height is left to the thumbnail's own 1:1
+// aspect-ratio rather than also forcing nodes.js's mismatched card height
+// (200x236), which would leave dead space under a square image.
+const REFERENCE_GHOST_WIDTH = 200;
+
 export function createPalette({ container, viewport, references = [], addNode }) {
   let cascade = 0;
 
@@ -96,10 +107,25 @@ export function createPalette({ container, viewport, references = [], addNode })
     return Boolean(el && viewport.container.contains(el));
   }
 
-  function makeGhost(sourceEl) {
+  function makeGhost(sourceEl, width) {
     const ghost = document.createElement("div");
     ghost.className = "canvas-drag-ghost";
-    ghost.appendChild(sourceEl.cloneNode(true));
+    const clone = sourceEl.cloneNode(true);
+    // Explicit, not left to the clone's own CSS -- see REFERENCE_GHOST_WIDTH.
+    // Set on the clone itself, not just the ghost wrapper: a cloned <button>
+    // turns out not to reliably fill a block-level parent's width the way a
+    // <div> would, even with this codebase's own `display: block` reset on
+    // it (confirmed by hand -- the wrapper measured a correct 200px while
+    // the button clone inside it collapsed to 1px, and setting the button's
+    // own width directly is what actually fixed it). Left unset for a widget
+    // button: its content is a text label, which sizes itself to fit and has
+    // no percentage-width child to collapse in the first place.
+    if (width) {
+      ghost.style.width = `${width}px`;
+      clone.style.width = `${width}px`;
+      clone.style.boxSizing = "border-box";
+    }
+    ghost.appendChild(clone);
     document.body.appendChild(ghost);
     return ghost;
   }
@@ -120,7 +146,7 @@ export function createPalette({ container, viewport, references = [], addNode })
    *  one of the two ever fires for a given press: a click listener would
    *  double up with the "didn't move" branch below, so there is no separate
    *  click listener at all -- this owns the whole gesture. */
-  function makeDraggable(el, { onClick, onDrop }) {
+  function makeDraggable(el, { onClick, onDrop, ghostWidth }) {
     // A reference thumbnail is mostly an <img>, and browsers make images
     // (and links) natively draggable by default -- left alone, pressing down
     // and moving over one starts the browser's own drag-the-image gesture at
@@ -145,7 +171,7 @@ export function createPalette({ container, viewport, references = [], addNode })
             Math.abs(moveEvent.clientY - startY) >= DRAG_THRESHOLD;
           if (!moved) return;
           active = true;
-          ghost = makeGhost(el);
+          ghost = makeGhost(el, ghostWidth);
           el.classList.add("is-dragging");
         }
         moveGhost(ghost, moveEvent.clientX, moveEvent.clientY);
@@ -215,14 +241,27 @@ export function createPalette({ container, viewport, references = [], addNode })
     return btn;
   }
 
-  // Same button, but also a drag source landing at the exact drop point.
-  // Text stays click-only below: a simple text node has no particular place
-  // it belongs on the canvas the way a widget or a reference does, so a
-  // precise drop point buys it nothing. Do not add rich text to Simple text
-  // either -- see the addRow comment below, a separate rule this one isn't.
+  // A drag source landing at the exact drop point, click-to-add as the
+  // fallback -- NOT addButton() plus makeDraggable() layered on top: that
+  // used to add a native "click" listener (addButton's own) *and*
+  // makeDraggable's pointer-driven click-equivalent to the same button, and
+  // both fired. For a plain click that meant two nodes every time; for a
+  // real drag it meant the browser's own trailing "click" event still landed
+  // on the button afterward and fired the stale listener a second time,
+  // dropping a second widget at nextPoint() while the first sat correctly
+  // wherever the drag ended. One button, one gesture-owning listener, same
+  // as the reference picker below.
+  //
+  // Text stays plain addButton() (click-only, no drag): a simple text node
+  // has no particular place it belongs on the canvas the way a widget or a
+  // reference does, so a precise drop point buys it nothing. Do not add rich
+  // text to Simple text either -- see the addRow comment below, a separate
+  // rule this one isn't.
   function addDraggableButton(label, fields) {
-    const btn = addButton(label, fields);
-    btn.classList.add("canvas-dock-draggable");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn canvas-dock-add canvas-dock-draggable";
+    btn.textContent = label;
     makeDraggable(btn, {
       onClick: () => addNode({ ...fields, ...nextPoint() }),
       onDrop: (point) => addNode({ ...fields, ...point }),
@@ -303,6 +342,7 @@ export function createPalette({ container, viewport, references = [], addNode })
       makeDraggable(item, {
         onClick: () => addNode({ ...fields, ...nextPoint() }),
         onDrop: (point) => addNode({ ...fields, ...point }),
+        ghostWidth: REFERENCE_GHOST_WIDTH,
       });
       refList.appendChild(item);
     }
