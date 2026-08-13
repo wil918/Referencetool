@@ -1463,6 +1463,19 @@ S20  all-references widget + text reference rendering
 
 ---
 
+### Desktop packaging prerequisites
+
+The pywebview spike (`DESKTOP_SPIKE.md`) resolved the big unknown favourably: WebGL2 and the ES module import map both work in the system WebKit with no shimming, multiple 3D widgets coexist, and `scene-widget.js`'s dispose discipline holds under repeated add/remove. **pywebview is viable.**
+
+Two items must be handled before real packaging. Neither is a session; both are small enough to fold into whichever session touches that area.
+
+1. **`private_mode=False` plus a real `storage_path` on `webview.start()`.** pywebview defaults to `private_mode=True`, which on the Cocoa backend wipes the WebKit data store at every launch. Everything works within a run, so this is easy to ship without noticing — but the theme preference (and anything else client-side persisted) silently resets every time the app opens. `desktop.py` does not currently pass these.
+2. **A human must click through the native folder picker and drag a real Finder folder onto the dropzone, once.** Feature detection says both should work; nothing has exercised the actual `NSOpenPanel` or an OS-level drag. Until someone does, treat hard rule 5 as still binding.
+
+Also unverified, but low risk: PDF thumbnails, which are rendered server-side by PyMuPDF and served as an ordinary image — there is no client-side PDF API for a webview to break.
+
+---
+
 ### Session 15 — Grid editing bugs
 
 **Delivers:** the move handle works; adding a widget stops discarding unsaved layout edits.
