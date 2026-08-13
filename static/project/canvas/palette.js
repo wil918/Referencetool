@@ -131,12 +131,18 @@ export function createPalette({ container, viewport, references = [], addNode })
   }
 
   function moveGhost(ghost, clientX, clientY) {
-    // The offset and scale live here, in the same inline transform, rather
-    // than the stylesheet: an element's own inline style always wins over a
-    // CSS rule for the same property outright rather than merging with it,
-    // so a `transform` set on every pointermove would otherwise silently
-    // erase the CSS one that shrinks and drops a shadow under the ghost.
-    ghost.style.transform = `translate3d(${clientX + 14}px, ${clientY + 14}px, 0) scale(0.92)`;
+    // No offset: the ghost's top-left corner sits exactly under the
+    // pointer, matching where the reference's own top-left corner will
+    // land once dropped (nodes.js positions a node by its top-left, not its
+    // centre). The scale lives in the same inline transform rather than the
+    // stylesheet -- an element's own inline style always wins over a CSS
+    // rule for the same property outright rather than merging with it, so a
+    // `transform` set on every pointermove would otherwise silently erase a
+    // stylesheet one. Scaling still shrinks from that same top-left corner
+    // rather than the centre (style.css's transform-origin: 0 0 on this
+    // class), or the corner this translate3d places at the pointer would
+    // immediately drift as soon as the scale applied.
+    ghost.style.transform = `translate3d(${clientX}px, ${clientY}px, 0) scale(0.92)`;
   }
 
   /** Wire `el` so a plain click adds via `onClick` and a real drag past the

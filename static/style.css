@@ -2927,6 +2927,12 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   pointer-events: none;
   opacity: 0.85;
   filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.25));
+  /* The pointer sits at this element's own (0,0) via translate3d
+     (palette.js's moveGhost), with no offset -- scaling from the default
+     50% 50% origin would shrink the box symmetrically and drag that corner
+     away from the pointer again. Anchoring the scale at the same corner is
+     what keeps it pinned there as the ghost shrinks. */
+  transform-origin: 0 0;
 }
 
 /* --- Project widget: canvas (project/widgets/canvas.js) ---
