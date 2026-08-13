@@ -185,8 +185,14 @@ export function createEdgeLayer(world, { onSelect } = {}) {
     svg.insertBefore(group, draft);
 
     group.addEventListener("pointerdown", (event) => {
-      // Otherwise the press falls through to the viewport, which would read a
-      // click on a thread as a click on empty space and start a pan.
+      // A middle-click or Shift+click is a box-selection gesture (nodes.js's
+      // marquee), not a request to select this one edge -- left alone, the
+      // stopPropagation below would swallow it before viewport.js ever saw
+      // it qualified for that. A plain primary click still selects the edge
+      // and stops there, same as always: otherwise the press falls through
+      // to the viewport, which would read it as a click on empty space and
+      // start a pan.
+      if (event.button !== 0 || event.shiftKey) return;
       event.stopPropagation();
       onSelect?.(edge.id);
     });

@@ -1,16 +1,31 @@
 /* How things get onto the canvas.
  *
- * Two ways in, because the two kinds of thing being added want different
- * gestures. A simple text node or a widget has no particular place it
- * belongs, so it is a button: click it and it lands in the middle of what
- * you are looking at. A reference does have a place it belongs -- next to
- * the other three you are arranging it against -- so it is dragged out of a
- * picker and dropped exactly there.
+ * Everything offered here is both a click target (lands centred on the
+ * current view, stepping diagonally on repeat so successive adds don't
+ * stack) and a drag source (lands exactly where it's dropped). Click is the
+ * one path guaranteed to work everywhere -- keyboard activation of a
+ * focused button, a screen reader's "activate", a touch device with no real
+ * drag gesture -- so it is never removed in favour of the drag, only
+ * layered under it.
  *
- * The drop uses native HTML5 drag and drop rather than the pointer gestures
- * nodes.js implements, for the same reason grid.js's move handle does: the
- * drag starts inside a floating panel and ends on the canvas behind it, and a
- * native drag is the one mechanism that keeps firing across that boundary.
+ * The drag itself is pointer events (pointerdown/move/up with
+ * setPointerCapture), the same mechanism nodes.js already uses to move a
+ * node once it's on the canvas -- not native HTML5 drag-and-drop. This
+ * panel floats over the canvas and a drag has to start inside it and end on
+ * the canvas behind it, which used to be the argument *for* native drag
+ * (grid.js's move handle used to reason the same way, before it hit the
+ * problem below). It's now the argument against: native drag-and-drop's
+ * dragstart only fires if the browser's own gesture recogniser decides a
+ * given mousedown-then-move is a drag, and confirmed against the pywebview
+ * desktop wrapper (WKWebView), a real mouse-driven press-move-release
+ * sequence on a `draggable` element never promotes to a `dragstart` there --
+ * the element just doesn't move. Dispatching a `DragEvent` by hand works
+ * fine (that only proves the drop/dataTransfer handling is correct, which it
+ * is), but that isn't what a real drag does, and the app has no way to tell
+ * a real user gesture from a synthetic one. Pointer events carry no such
+ * promotion step -- a pointerdown is a pointerdown -- and behave identically
+ * in Chrome and WKWebView, which is exactly why nodes.js was already built
+ * on them for moving things once they're on the canvas.
  *
  * Which widgets are offered is registry.js's canvasEligible and nothing else
  * -- the same container/permanent flags the homepage grid reads, so a widget
@@ -19,8 +34,6 @@
 
 import { makeBarThumb } from "../../shared/cards.js";
 import { all as allWidgetDefinitions } from "../registry.js";
-
-const DRAG_TYPE = "application/x-reference-id";
 
 // Roughly half a default node, so a click-to-add lands centred on the view
 // rather than with its corner at the middle of the screen. Approximate on
@@ -31,6 +44,10 @@ const CENTRE_NUDGE = { x: 110, y: 80 };
 // landing on top of each other.
 const CASCADE_STEP = 26;
 const CASCADE_WRAP = 6;
+
+// A press has to travel this far before it counts as a drag rather than a
+// click -- same threshold and same reasoning as nodes.js's own gesture code.
+const DRAG_THRESHOLD = 4;
 
 export function createPalette({ container, viewport, references = [], addNode }) {
   let cascade = 0;
@@ -51,7 +68,7 @@ export function createPalette({ container, viewport, references = [], addNode })
     fab.classList.toggle("is-open", !panel.hidden);
   });
 
-  // --- add buttons ---------------------------------------------------------
+  // --- shared drag machinery -------------------------------------------------
 
   function nextPoint() {
     const rect = viewport.container.getBoundingClientRect();
@@ -67,12 +84,149 @@ export function createPalette({ container, viewport, references = [], addNode })
     };
   }
 
+  /** Whether `clientX,clientY` lands on the canvas itself, as opposed to
+   *  back on this floating panel (or its own FAB) -- releasing over the
+   *  panel is how a drag is cancelled, the same as dragging a file back onto
+   *  its own folder to abort a move. elementFromPoint, not a bounding-box
+   *  check: the panel floats *over* the canvas at a fixed screen position,
+   *  so the canvas's own rect covers that same area and can't tell the two
+   *  apart on its own. */
+  function isOverCanvas(clientX, clientY) {
+    const el = document.elementFromPoint(clientX, clientY);
+    return Boolean(el && viewport.container.contains(el));
+  }
+
+  function makeGhost(sourceEl) {
+    const ghost = document.createElement("div");
+    ghost.className = "canvas-drag-ghost";
+    ghost.appendChild(sourceEl.cloneNode(true));
+    document.body.appendChild(ghost);
+    return ghost;
+  }
+
+  function moveGhost(ghost, clientX, clientY) {
+    // The offset and scale live here, in the same inline transform, rather
+    // than the stylesheet: an element's own inline style always wins over a
+    // CSS rule for the same property outright rather than merging with it,
+    // so a `transform` set on every pointermove would otherwise silently
+    // erase the CSS one that shrinks and drops a shadow under the ghost.
+    ghost.style.transform = `translate3d(${clientX + 14}px, ${clientY + 14}px, 0) scale(0.92)`;
+  }
+
+  /** Wire `el` so a plain click adds via `onClick` and a real drag past the
+   *  threshold adds via `onDrop(worldPoint)` at the exact release point --
+   *  but only when the release lands on the canvas; releasing back over the
+   *  panel cancels with no effect, same as any other drag-to-cancel. Only
+   *  one of the two ever fires for a given press: a click listener would
+   *  double up with the "didn't move" branch below, so there is no separate
+   *  click listener at all -- this owns the whole gesture. */
+  function makeDraggable(el, { onClick, onDrop }) {
+    // A reference thumbnail is mostly an <img>, and browsers make images
+    // (and links) natively draggable by default -- left alone, pressing down
+    // and moving over one starts the browser's own drag-the-image gesture at
+    // the same time as the pointer gesture below, and the two fight: the
+    // native one wins, and what should have been a clean pointerup becomes a
+    // pointercancel with neither onDrop nor onClick ever called. Squashed at
+    // the source rather than hunting down which descendant is draggable.
+    el.addEventListener("dragstart", (event) => event.preventDefault());
+
+    el.addEventListener("pointerdown", (event) => {
+      if (!event.isPrimary || event.button !== 0) return;
+
+      const startX = event.clientX;
+      const startY = event.clientY;
+      let active = false;
+      let ghost = null;
+
+      function onMove(moveEvent) {
+        if (!active) {
+          const moved =
+            Math.abs(moveEvent.clientX - startX) >= DRAG_THRESHOLD ||
+            Math.abs(moveEvent.clientY - startY) >= DRAG_THRESHOLD;
+          if (!moved) return;
+          active = true;
+          ghost = makeGhost(el);
+          el.classList.add("is-dragging");
+        }
+        moveGhost(ghost, moveEvent.clientX, moveEvent.clientY);
+        viewport.container.classList.toggle(
+          "is-drop-target",
+          isOverCanvas(moveEvent.clientX, moveEvent.clientY)
+        );
+      }
+
+      function onUp(upEvent) {
+        cleanup();
+        if (active) {
+          if (isOverCanvas(upEvent.clientX, upEvent.clientY)) {
+            onDrop(viewport.screenToWorld(upEvent.clientX, upEvent.clientY));
+          }
+        } else {
+          onClick();
+        }
+      }
+
+      function onCancel() {
+        cleanup();
+      }
+
+      function cleanup() {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onCancel);
+        if (el.hasPointerCapture(event.pointerId)) el.releasePointerCapture(event.pointerId);
+        ghost?.remove();
+        el.classList.remove("is-dragging");
+        viewport.container.classList.remove("is-drop-target");
+      }
+
+      // Listeners first, capture second -- not the other order. Confirmed
+      // against the pywebview wrapper: WKWebView can throw NotFoundError out
+      // of setPointerCapture (nodes.js's own gesture code happens to survive
+      // this because its window listeners are already registered once at
+      // module load, before any gesture starts; this one registers them
+      // per-gesture, so getting the order backwards here left the drag
+      // permanently dead on arrival there -- the throw skipped every line
+      // after it, and the three addEventListener calls never ran). Wrapped
+      // in try/catch too, on top of the reorder, since a capture that fails
+      // is still fine to proceed without: cleanup()'s own release is already
+      // guarded by hasPointerCapture, so a no-op capture just means this
+      // gesture rides on bubbling instead of capture, same as it would if
+      // the pointer never leaves `el` at all.
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
+      try {
+        el.setPointerCapture(event.pointerId);
+      } catch {
+        // Ignored -- see above.
+      }
+    });
+  }
+
+  // --- add buttons -----------------------------------------------------------
+
   function addButton(label, fields) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn canvas-dock-add";
     btn.textContent = label;
     btn.addEventListener("click", () => addNode({ ...fields, ...nextPoint() }));
+    return btn;
+  }
+
+  // Same button, but also a drag source landing at the exact drop point.
+  // Text stays click-only below: a simple text node has no particular place
+  // it belongs on the canvas the way a widget or a reference does, so a
+  // precise drop point buys it nothing. Do not add rich text to Simple text
+  // either -- see the addRow comment below, a separate rule this one isn't.
+  function addDraggableButton(label, fields) {
+    const btn = addButton(label, fields);
+    btn.classList.add("canvas-dock-draggable");
+    makeDraggable(btn, {
+      onClick: () => addNode({ ...fields, ...nextPoint() }),
+      onDrop: (point) => addNode({ ...fields, ...point }),
+    });
     return btn;
   }
 
@@ -94,19 +248,19 @@ export function createPalette({ container, viewport, references = [], addNode })
   for (const definition of allWidgetDefinitions()) {
     if (!definition.canvasEligible) continue;
     addRow.appendChild(
-      addButton(definition.label, { kind: "widget", config: { type: definition.type } })
+      addDraggableButton(definition.label, { kind: "widget", config: { type: definition.type } })
     );
   }
   addSection.appendChild(addRow);
   panel.appendChild(addSection);
 
-  // --- the reference picker ------------------------------------------------
+  // --- the reference picker ----------------------------------------------
 
   const refSection = document.createElement("div");
   refSection.className = "canvas-dock-section";
   const refHeading = document.createElement("p");
   refHeading.className = "muted canvas-dock-heading";
-  refHeading.textContent = "Drag a reference onto the canvas";
+  refHeading.textContent = "Drag a reference onto the canvas, or click to add it centred";
   refSection.appendChild(refHeading);
 
   const search = document.createElement("input");
@@ -137,15 +291,18 @@ export function createPalette({ container, viewport, references = [], addNode })
 
     refList.innerHTML = "";
     for (const ref of matches) {
-      const item = document.createElement("div");
+      // A button, not a bare div: click-to-add is this item's keyboard and
+      // screen-reader path, and only a real control can be focused and
+      // activated without a pointer.
+      const item = document.createElement("button");
+      item.type = "button";
       item.className = "canvas-dock-ref";
       item.title = ref.title;
-      item.draggable = true;
       item.appendChild(makeBarThumb(ref));
-      item.addEventListener("dragstart", (event) => {
-        event.dataTransfer.effectAllowed = "copy";
-        event.dataTransfer.setData(DRAG_TYPE, ref.id);
-        event.dataTransfer.setData("text/plain", ref.id);
+      const fields = { kind: "reference", reference_id: ref.id };
+      makeDraggable(item, {
+        onClick: () => addNode({ ...fields, ...nextPoint() }),
+        onDrop: (point) => addNode({ ...fields, ...point }),
       });
       refList.appendChild(item);
     }
@@ -156,47 +313,11 @@ export function createPalette({ container, viewport, references = [], addNode })
   search.addEventListener("input", () => renderReferences(search.value));
   renderReferences();
 
-  // --- the drop target -----------------------------------------------------
-
-  function onDragOver(event) {
-    if (!event.dataTransfer.types.includes(DRAG_TYPE)) return;
-    // Without this the drop never fires: the default action for dragover is
-    // "this is not a drop target".
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
-    viewport.container.classList.add("is-drop-target");
-  }
-
-  function onDragLeave(event) {
-    // relatedTarget is where the pointer went; still inside the canvas means
-    // this is just a crossing between children, not a real leave.
-    if (event.relatedTarget && viewport.container.contains(event.relatedTarget)) return;
-    viewport.container.classList.remove("is-drop-target");
-  }
-
-  function onDrop(event) {
-    const referenceId = event.dataTransfer.getData(DRAG_TYPE);
-    viewport.container.classList.remove("is-drop-target");
-    if (!referenceId) return;
-    event.preventDefault();
-    // Where it was dropped, in world coordinates -- so it stays there when
-    // the view moves, which is the only position worth storing.
-    const point = viewport.screenToWorld(event.clientX, event.clientY);
-    addNode({ kind: "reference", reference_id: referenceId, x: point.x, y: point.y });
-  }
-
-  viewport.container.addEventListener("dragover", onDragOver);
-  viewport.container.addEventListener("dragleave", onDragLeave);
-  viewport.container.addEventListener("drop", onDrop);
-
   container.appendChild(panel);
   container.appendChild(fab);
 
   return {
     destroy() {
-      viewport.container.removeEventListener("dragover", onDragOver);
-      viewport.container.removeEventListener("dragleave", onDragLeave);
-      viewport.container.removeEventListener("drop", onDrop);
       panel.remove();
       fab.remove();
     },

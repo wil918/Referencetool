@@ -2432,6 +2432,21 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   pointer-events: none;
 }
 
+/* The box-selection outline (nodes.js's beginMarquee), drawn in screen space
+   directly against the pixel rect trackGesture computes every move -- a
+   faint accent tint plus a hairline ring, not a hard-edged fill, so it reads
+   as "in progress" the way the drop-target ring above reads as "will take
+   it". Never intercepts the pointer: elementFromPoint has to see through it
+   to whatever node is actually underneath. */
+.canvas-marquee {
+  position: absolute;
+  border-radius: 3px;
+  background: var(--accent-soft);
+  opacity: 0.15;
+  box-shadow: 0 0 0 1px var(--accent-soft);
+  pointer-events: none;
+}
+
 /* The one element every pan and zoom moves. It has no size of its own: nodes
    are absolutely positioned inside it at world coordinates, which are
    routinely negative, so there is nothing here for a width to mean. */
@@ -2879,10 +2894,40 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 
 .canvas-dock-refs[hidden] { display: none; }
 
-.canvas-dock-ref { cursor: grab; }
+/* A <button> now (palette.js needs a real, focusable control for the
+   click-to-add fallback), reset back to how the plain div used to look. */
+.canvas-dock-ref {
+  all: unset;
+  display: block;
+  cursor: grab;
+  /* No panel scroll fighting a touch drag for the gesture. */
+  touch-action: none;
+}
 .canvas-dock-ref:active { cursor: grabbing; }
 .canvas-dock-ref .bar-thumb { width: 100%; height: auto; aspect-ratio: 1 / 1; }
 .canvas-dock-ref:hover .bar-thumb { box-shadow: var(--raise-md); }
+/* The real item while its drag is in flight -- the ghost (below) is doing
+   the following now, so this fades rather than disappears. */
+.canvas-dock-ref.is-dragging, .canvas-dock-add.is-dragging { opacity: 0.35; }
+
+/* Widgets dragged from the Add panel (palette.js's addDraggableButton) need
+   the same no-scroll treatment as a reference thumb. */
+.canvas-dock-draggable { touch-action: none; }
+
+/* The floating preview that follows the pointer during a palette drag
+   (palette.js's makeDraggable) -- a lightweight echo of whatever is being
+   dragged. The real item stays put in the panel; only this clone moves, and
+   it never intercepts the pointer, which is what lets the drag logic see
+   what's really underneath it via elementFromPoint. */
+.canvas-drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 1000;
+  pointer-events: none;
+  opacity: 0.85;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.25));
+}
 
 /* --- Project widget: canvas (project/widgets/canvas.js) ---
    The door into the page above -- now a miniature of the canvas's own

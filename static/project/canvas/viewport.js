@@ -98,6 +98,16 @@ export function createViewport(container, options = {}) {
   // top of a node.
   let panKeyDown = false;
 
+  // Set by nodes.js's setMarqueeHandler once it exists. This module already
+  // owns deciding whether a press starts a pan -- box-selection is the same
+  // kind of decision (which gesture does this press mean?), so it belongs
+  // here too, even though drawing the box and testing it against node boxes
+  // is nodes.js's job, not this one's. A plain settable slot rather than a
+  // constructor option: createViewport() runs before createNodes() in
+  // canvas-page.js (nodes.js needs the viewport to already exist), so there
+  // is nothing to pass in yet at construction time.
+  let marqueeHandler = null;
+
   function applyTransform() {
     world.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
     // Read by the nodes' own chrome (style.css) to cancel the world scale out
@@ -196,6 +206,20 @@ export function createViewport(container, options = {}) {
 
   function onPointerDown(event) {
     if (!event.isPrimary || pan) return;
+
+    // The middle mouse button, or Shift held with the primary button -- the
+    // second form exists because not every mouse has a middle button and no
+    // trackpad does, so box-selection needs a reachable alternative. Checked
+    // before the pan decision below: middle-click used to pan (still does
+    // when nothing has claimed marqueeHandler), and Shift+drag would
+    // otherwise fall into "left-click on empty space pans".
+    const wantsMarquee = event.button === 1 || (event.button === 0 && event.shiftKey);
+    if (wantsMarquee && marqueeHandler) {
+      event.preventDefault();
+      marqueeHandler(event);
+      return;
+    }
+
     // Middle-click pans in every canvas tool there has ever been; left-click
     // only pans on empty space, or with the pan key held.
     const wantsPan =
@@ -330,6 +354,11 @@ export function createViewport(container, options = {}) {
     /** True while a pan is actually moving the view -- lets a click handler
      *  tell "released after panning" from "clicked on empty space". */
     isPanning: () => Boolean(pan && pan.active),
+    /** Claim (or release, with null) first refusal on a middle-click or
+     *  Shift+primary press, ahead of this module's own pan logic. */
+    setMarqueeHandler(fn) {
+      marqueeHandler = fn || null;
+    },
     /** Notify `fn` on every pan/zoom, starting with the current transform
      *  immediately (so a caller that shows something anchored to a world
      *  point doesn't need a separate first positioning call). Returns an
@@ -341,6 +370,7 @@ export function createViewport(container, options = {}) {
     },
 
     destroy() {
+      marqueeHandler = null;
       container.removeEventListener("pointerdown", onCapturePointerDown, true);
       container.removeEventListener("pointerdown", onPointerDown);
       container.removeEventListener("pointermove", onPointerMove);

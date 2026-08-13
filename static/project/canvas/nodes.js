@@ -157,7 +157,12 @@ export function createNodes({
   // selectedEdgeId synchronously on the spot (subscribe() fires its listener
   // immediately) -- a `let` read before this point would be the temporal
   // dead zone, not just an undefined value.
-  let selectedNodeId = null;
+  //
+  // A Set, not a single id: the marquee (below) can select several nodes at
+  // once, and a drag started on any one of them then has to move all of
+  // them together. A plain click still collapses this down to one entry --
+  // it is only ever *more* than one after a marquee.
+  let selectedNodeIds = new Set();
   let selectedEdgeId = null;
   const edges = createEdgeLayer(world, { onSelect: selectEdge });
   // Screen-space chrome, not world content -- mounted as a sibling of the
@@ -191,13 +196,16 @@ export function createNodes({
   // captures the pointer.
   let gesture = null;
 
-  /* Undo, for structural changes only: add node, delete node, connect,
-   * disconnect. Not a drag, a resize, a lock, or a text edit -- a drag or
-   * resize is a continuous gesture with no single "before" to jump back to
-   * (and grid.js/this module already treat moves and sizes as fire-and-forget
-   * writes, never something to step backward through), and contenteditable
-   * already has its own native undo for text, which fighting over would
-   * behave worse than doing nothing (see onKeyDown below).
+  /* Undo: add node, delete node, connect, disconnect, and move (a single
+   * node's drag, or a marquee-selected group's). Not a resize, a lock, or a
+   * text edit -- contenteditable already has its own native undo for text,
+   * which fighting over would behave worse than doing nothing (see
+   * onKeyDown below), and a resize has no equivalent group case forcing the
+   * question the way a move now does. A move has a well-defined "before"
+   * once one is captured: the node's (or every selected node's) position at
+   * the moment the drag gesture began, recorded in onNodePointerDown/
+   * beginMarquee's drag branch and compared against where it ended up in
+   * onPointerUp -- a drag that doesn't actually move anything pushes nothing.
    *
    * In-memory only, capped so a long session doesn't grow this unboundedly --
    * an undo stack is a convenience for the last few actions, not a durable
@@ -262,16 +270,32 @@ export function createNodes({
 
   // --- selection and z-order -----------------------------------------------
 
+  /** Replace the node selection outright with exactly this set of ids --
+   *  the one place that touches the `.is-selected` class, so a marquee that
+   *  shrinks mid-drag correctly un-highlights whatever fell back out of it
+   *  along with adding whatever it newly covers. Node selection is not the
+   *  same state as `.canvas-node.is-selected`'s own visual rule needing a
+   *  border or fill: this only ever toggles that one class (style.css's
+   *  accent ring), never adds a background -- multi-select stays as
+   *  border/fill-free as the single-node case already was. */
+  function setNodeSelection(ids) {
+    const next = new Set(ids);
+    for (const id of selectedNodeIds) {
+      if (!next.has(id)) entries.get(id)?.el.classList.remove("is-selected");
+    }
+    for (const id of next) {
+      if (!selectedNodeIds.has(id)) entries.get(id)?.el.classList.add("is-selected");
+    }
+    selectedNodeIds = next;
+  }
+
   function selectNode(nodeId) {
     if (selectedEdgeId) {
       edges.select(null);
       selectedEdgeId = null;
       stylePanel.hide();
     }
-    if (selectedNodeId === nodeId) return;
-    entries.get(selectedNodeId)?.el.classList.remove("is-selected");
-    selectedNodeId = nodeId;
-    entries.get(selectedNodeId)?.el.classList.add("is-selected");
+    setNodeSelection(nodeId ? [nodeId] : []);
   }
 
   function selectEdge(edgeId) {
@@ -283,10 +307,6 @@ export function createNodes({
 
   function clearSelection() {
     selectNode(null);
-    if (selectedEdgeId) {
-      edges.select(null);
-      selectedEdgeId = null;
-    }
   }
 
   /* Whatever is grabbed comes to the front and stays there.
@@ -593,38 +613,163 @@ export function createNodes({
     return true;
   }
 
+  // --- box selection ---------------------------------------------------------
+
+  /** The rectangle between the gesture's start point and `event`, in the
+   *  viewport's own screen space -- what the marquee's own outline is drawn
+   *  from. Purely visual: nothing here is stored, only ever recomputed from
+   *  the two client points that are already sitting in `gesture` and the
+   *  live pointer event. */
+  function updateMarqueeRect(event) {
+    const rect = viewport.container.getBoundingClientRect();
+    const x1 = gesture.startX - rect.left;
+    const y1 = gesture.startY - rect.top;
+    const x2 = event.clientX - rect.left;
+    const y2 = event.clientY - rect.top;
+    gesture.rectEl.style.left = `${Math.min(x1, x2)}px`;
+    gesture.rectEl.style.top = `${Math.min(y1, y2)}px`;
+    gesture.rectEl.style.width = `${Math.abs(x2 - x1)}px`;
+    gesture.rectEl.style.height = `${Math.abs(y2 - y1)}px`;
+  }
+
+  /** The same rectangle, converted corner-by-corner to world space -- what
+   *  selection is actually tested against, since node boxes only exist in
+   *  world coordinates. */
+  function marqueeWorldBox(event) {
+    const a = viewport.screenToWorld(gesture.startX, gesture.startY);
+    const b = viewport.screenToWorld(event.clientX, event.clientY);
+    return {
+      minX: Math.min(a.x, b.x),
+      minY: Math.min(a.y, b.y),
+      maxX: Math.max(a.x, b.x),
+      maxY: Math.max(a.y, b.y),
+    };
+  }
+
+  /** Every node (locked ones included -- a marquee selects them, it just
+   *  can't move them) whose box intersects `box`, standard axis-aligned
+   *  overlap on both dimensions. */
+  function nodesInMarquee(box) {
+    const ids = [];
+    for (const { node } of entries.values()) {
+      if (
+        node.x < box.maxX &&
+        node.x + node.w > box.minX &&
+        node.y < box.maxY &&
+        node.y + node.h > box.minY
+      ) {
+        ids.push(node.id);
+      }
+    }
+    return ids;
+  }
+
+  /** viewport.js's marqueeHandler: a middle-click or Shift+primary press has
+   *  already been claimed there in preference to a pan, and control lands
+   *  here because testing node boxes is this module's job, not the
+   *  viewport's. The outline element starts hidden (and the previous
+   *  selection untouched) until the drag threshold is crossed in
+   *  activateGesture -- a middle-click that never moves shouldn't clear
+   *  whatever was already selected. */
+  function beginMarquee(event) {
+    if (gesture) return;
+
+    const rectEl = document.createElement("div");
+    rectEl.className = "canvas-marquee";
+    rectEl.hidden = true;
+    viewport.container.appendChild(rectEl);
+
+    gesture = {
+      kind: "marquee",
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      rectEl,
+      active: false,
+      captureEl: viewport.container,
+    };
+    viewport.container.setPointerCapture(event.pointerId);
+  }
+
   function onNodePointerDown(event, entry) {
-    if (!event.isPrimary || event.button !== 0 || gesture) return;
+    // Shift+primary is the marquee's keyboard-free alternative to a middle
+    // click (see viewport.js's setMarqueeHandler) -- left un-guarded here, a
+    // Shift+drag starting on top of a node would both select just that node
+    // below and, once it bubbled to the container, try to start a marquee
+    // that never gets the pointer because this handler already captured it.
+    // Bailing out entirely lets the press fall through untouched.
+    if (!event.isPrimary || event.button !== 0 || gesture || event.shiftKey) return;
     // These have their own handlers; capturing the pointer here would swallow
     // the click before it ever fires.
     if (event.target.closest(".canvas-node-btn, .canvas-node-resize")) return;
 
-    selectNode(entry.node.id);
+    // Pressing a node that is already part of a multi-selection keeps the
+    // whole group selected and, if this turns into a drag, moves all of it --
+    // that is the only way "drag any selected node moves them together" can
+    // work, since the press has to land on exactly one of them. Pressing
+    // anything else (an unselected node, or one that's the only thing
+    // selected) collapses back down to just this node, same as always.
+    const isGroupPress = selectedNodeIds.has(entry.node.id) && selectedNodeIds.size > 1;
+    if (!isGroupPress) selectNode(entry.node.id);
     bringToFront(entry);
 
     if (!pressStartsDrag(entry.node, event.target)) return;
 
     const pointer = viewport.screenToWorld(event.clientX, event.clientY);
-    gesture = {
-      kind: "drag",
-      entry,
-      pointerId: event.pointerId,
-      // Where the pointer sits relative to the node, in world units. Every
-      // move re-derives the node's position from the pointer and this offset
-      // rather than accumulating deltas, so nothing drifts over a long drag
-      // and a zoom mid-drag keeps the node under the same part of the cursor.
-      offsetX: entry.node.x - pointer.x,
-      offsetY: entry.node.y - pointer.y,
-      startX: event.clientX,
-      startY: event.clientY,
-      active: false,
-      captureEl: entry.el,
-    };
+
+    if (isGroupPress) {
+      // Locked members of the selection stay selected but don't move -- they
+      // are simply left out of the set of things this gesture drags.
+      const movers = [...selectedNodeIds]
+        .map((id) => entries.get(id))
+        .filter((e) => e && !e.node.locked);
+      const offsets = new Map();
+      const origins = new Map();
+      for (const mover of movers) {
+        // Same offset/origin split as the single-node case below, kept per
+        // node so each one tracks the pointer at its own original distance
+        // rather than snapping to a shared one.
+        offsets.set(mover.node.id, { x: mover.node.x - pointer.x, y: mover.node.y - pointer.y });
+        origins.set(mover.node.id, { x: mover.node.x, y: mover.node.y });
+      }
+      gesture = {
+        kind: "multi-drag",
+        movers,
+        offsets,
+        origins,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        active: false,
+        captureEl: entry.el,
+      };
+    } else {
+      gesture = {
+        kind: "drag",
+        entry,
+        pointerId: event.pointerId,
+        // Where the pointer sits relative to the node, in world units. Every
+        // move re-derives the node's position from the pointer and this offset
+        // rather than accumulating deltas, so nothing drifts over a long drag
+        // and a zoom mid-drag keeps the node under the same part of the cursor.
+        offsetX: entry.node.x - pointer.x,
+        offsetY: entry.node.y - pointer.y,
+        // Where the drag started, kept separately from the offset above --
+        // onPointerUp compares the node's final position against this to
+        // decide whether anything worth undoing actually happened.
+        originX: entry.node.x,
+        originY: entry.node.y,
+        startX: event.clientX,
+        startY: event.clientY,
+        active: false,
+        captureEl: entry.el,
+      };
+    }
     entry.el.setPointerCapture(event.pointerId);
   }
 
   function beginResize(event, entry) {
-    if (!event.isPrimary || event.button !== 0 || gesture || entry.node.locked) return;
+    if (!event.isPrimary || event.button !== 0 || gesture || entry.node.locked || event.shiftKey) return;
     event.stopPropagation();
     selectNode(entry.node.id);
     bringToFront(entry);
@@ -647,7 +792,7 @@ export function createNodes({
   }
 
   function beginConnect(event, entry) {
-    if (!event.isPrimary || event.button !== 0 || gesture) return;
+    if (!event.isPrimary || event.button !== 0 || gesture || event.shiftKey) return;
     event.stopPropagation();
     selectNode(entry.node.id);
 
@@ -664,6 +809,21 @@ export function createNodes({
     world.classList.add("is-connecting");
   }
 
+  /** What "this gesture just became real" means, per kind -- called once,
+   *  the moment the drag threshold is first crossed. */
+  function activateGesture() {
+    if (gesture.kind === "multi-drag") {
+      for (const mover of gesture.movers) mover.el.classList.add("is-active");
+    } else if (gesture.kind === "marquee") {
+      // Deferred to here rather than beginMarquee: a middle-click that never
+      // turns into a drag shouldn't blow away whatever was already selected.
+      clearSelection();
+      gesture.rectEl.hidden = false;
+    } else {
+      gesture.entry.el.classList.add("is-active");
+    }
+  }
+
   function onPointerMove(event) {
     if (!gesture || event.pointerId !== gesture.pointerId) return;
 
@@ -673,12 +833,13 @@ export function createNodes({
         Math.abs(event.clientY - gesture.startY) >= DRAG_THRESHOLD;
       if (!moved) return;
       gesture.active = true;
-      gesture.entry.el.classList.add("is-active");
+      activateGesture();
     }
     trackGesture(event);
   }
 
-  /* Put the node wherever the pointer is now.
+  /* Put the node (or nodes, or selection outline) wherever the pointer is
+   * now.
    *
    * Called on every move and once more at the release point, which is not
    * always where the last move left off -- a quick flick can end between
@@ -688,9 +849,9 @@ export function createNodes({
    */
   function trackGesture(event) {
     const pointer = viewport.screenToWorld(event.clientX, event.clientY);
-    const { entry } = gesture;
 
     if (gesture.kind === "drag") {
+      const { entry } = gesture;
       // No snapping, no grid, no gravity: the node goes exactly where the
       // pointer puts it. This is the canvas's whole character, and the reason
       // it reads as looser than the homepage.
@@ -698,45 +859,104 @@ export function createNodes({
       entry.node.y = pointer.y + gesture.offsetY;
       place(entry);
       refreshEdges(entry.node.id);
+    } else if (gesture.kind === "multi-drag") {
+      // Every mover keeps its own offset from the pointer (captured in
+      // onNodePointerDown), which is what preserves relative spacing --
+      // the group translates as one rigid shape rather than collapsing onto
+      // the pointer.
+      for (const mover of gesture.movers) {
+        const offset = gesture.offsets.get(mover.node.id);
+        mover.node.x = pointer.x + offset.x;
+        mover.node.y = pointer.y + offset.y;
+        place(mover);
+        refreshEdges(mover.node.id);
+      }
     } else if (gesture.kind === "resize") {
+      const { entry } = gesture;
       entry.node.w = Math.max(MIN_W, pointer.x - entry.node.x + gesture.offsetW);
       entry.node.h = Math.max(MIN_H, pointer.y - entry.node.y + gesture.offsetH);
       size(entry);
       refreshEdges(entry.node.id);
       entry.mounted?.notifyResize(entry.node.w, entry.node.h);
+    } else if (gesture.kind === "marquee") {
+      updateMarqueeRect(event);
+      setNodeSelection(nodesInMarquee(marqueeWorldBox(event)));
     } else {
+      const { entry } = gesture;
       edges.showDraft(centreOf(entry.node), pointer);
     }
   }
 
   function onPointerUp(event) {
     if (!gesture || event.pointerId !== gesture.pointerId) return;
-    const { kind, entry, active } = gesture;
+    const { kind, active } = gesture;
     const target = kind === "connect" ? nodeUnder(event.clientX, event.clientY) : null;
     if (active && kind !== "connect") trackGesture(event);
+
+    // Captured before endGesture() clears `gesture` -- a moved node (or
+    // group) becomes one "move" undo entry, but only if it actually ended up
+    // somewhere different from where the drag started; letting go without
+    // moving pushes nothing to undo.
+    let moveAction = null;
+    if (active && kind === "drag") {
+      const { entry, originX, originY } = gesture;
+      if (entry.node.x !== originX || entry.node.y !== originY) {
+        moveAction = {
+          type: "move",
+          moves: [{ id: entry.node.id, from: { x: originX, y: originY }, to: { x: entry.node.x, y: entry.node.y } }],
+        };
+      }
+    } else if (active && kind === "multi-drag") {
+      const moves = [];
+      for (const mover of gesture.movers) {
+        const origin = gesture.origins.get(mover.node.id);
+        if (mover.node.x !== origin.x || mover.node.y !== origin.y) {
+          moves.push({ id: mover.node.id, from: origin, to: { x: mover.node.x, y: mover.node.y } });
+        }
+      }
+      if (moves.length) moveAction = { type: "move", moves };
+    }
+
+    const singleEntry = kind === "drag" || kind === "resize" || kind === "connect" ? gesture.entry : null;
+    const movers = kind === "multi-drag" ? gesture.movers : null;
 
     endGesture();
 
     if (!active) return;
     if (kind === "drag") {
-      store.patchNode(entry.node.id, { x: entry.node.x, y: entry.node.y });
+      store.patchNode(singleEntry.node.id, { x: singleEntry.node.x, y: singleEntry.node.y });
+    } else if (kind === "multi-drag") {
+      // One PATCH per moved node, same debounced route a single-node drag
+      // already uses -- a marquee move is not a new kind of write, just
+      // several of the existing kind at once.
+      for (const mover of movers) store.patchNode(mover.node.id, { x: mover.node.x, y: mover.node.y });
     } else if (kind === "resize") {
-      store.patchNode(entry.node.id, { w: entry.node.w, h: entry.node.h });
-    } else if (target && target !== entry.node.id) {
-      connect(entry.node.id, target);
+      store.patchNode(singleEntry.node.id, { w: singleEntry.node.w, h: singleEntry.node.h });
+    } else if (kind === "connect" && target && target !== singleEntry.node.id) {
+      connect(singleEntry.node.id, target);
     }
+    // marquee: selection was already applied live in trackGesture, and it
+    // isn't persisted anywhere -- nothing left to do on release.
+    if (moveAction) pushUndo(moveAction);
   }
 
   function endGesture() {
     if (!gesture) return;
-    const { entry, pointerId, captureEl } = gesture;
-    entry.el.classList.remove("is-active");
+    const { pointerId, captureEl } = gesture;
+    if (gesture.kind === "multi-drag") {
+      for (const mover of gesture.movers) mover.el.classList.remove("is-active");
+    } else if (gesture.kind === "marquee") {
+      gesture.rectEl.remove();
+    } else {
+      gesture.entry.el.classList.remove("is-active");
+    }
     world.classList.remove("is-connecting");
     edges.hideDraft();
     gesture = null;
     // The capture sits on whichever element started the gesture -- the node
-    // for a drag, the nub for a resize, the connector button for a connection
-    // -- so it is released by the one that took it, not by guessing.
+    // for a drag, the nub for a resize, the connector button for a
+    // connection, the viewport itself for a marquee -- so it is released by
+    // the one that took it, not by guessing.
     if (captureEl.hasPointerCapture(pointerId)) captureEl.releasePointerCapture(pointerId);
   }
 
@@ -882,7 +1102,7 @@ export function createNodes({
     entry.mounted?.destroy();
     entry.el.remove();
     entries.delete(nodeId);
-    if (selectedNodeId === nodeId) selectedNodeId = null;
+    selectedNodeIds.delete(nodeId);
     if (topNodeId === nodeId) topNodeId = null;
     onCountChange(entries.size);
 
@@ -930,6 +1150,20 @@ export function createNodes({
       if (entries.has(sourceId) && entries.has(targetId)) {
         await connect(sourceId, targetId, { record: false });
       }
+    } else if (action.type === "move") {
+      // Every node this move touched goes back to its recorded starting
+      // point, one by one -- there is no bulk position route (store.js's own
+      // rule), so this is the same per-node PATCH a live drag would have
+      // made, just walked backward instead of forward.
+      for (const { id, from } of action.moves) {
+        const entry = entries.get(id);
+        if (!entry) continue;
+        entry.node.x = from.x;
+        entry.node.y = from.y;
+        place(entry);
+        refreshEdges(id);
+        store.patchNode(id, { x: from.x, y: from.y });
+      }
     }
   }
 
@@ -948,7 +1182,7 @@ export function createNodes({
       // itself on Escape without stopping propagation, so this still runs
       // afterward -- harmless, since a node mid-text-edit is never the
       // selected edge.
-      if (selectedNodeId || selectedEdgeId) clearSelection();
+      if (selectedNodeIds.size > 0 || selectedEdgeId) clearSelection();
       return;
     }
     if (isUndoChord(event)) {
@@ -968,9 +1202,13 @@ export function createNodes({
     if (selectedEdgeId) {
       event.preventDefault();
       removeEdge(selectedEdgeId);
-    } else if (selectedNodeId) {
+    } else if (selectedNodeIds.size > 0) {
       event.preventDefault();
-      removeNode(selectedNodeId);
+      // Each removal is its own undo entry (removeNode already pushes one),
+      // same as deleting several nodes one at a time would be -- there is no
+      // bulk delete route to make this atomic, matching store.js's per-node
+      // rule for everything else here.
+      for (const id of [...selectedNodeIds]) removeNode(id);
     }
   }
 
@@ -985,6 +1223,10 @@ export function createNodes({
   window.addEventListener("pointercancel", onPointerCancel);
   window.addEventListener("keydown", onKeyDown);
   viewport.container.addEventListener("pointerdown", onWorldPointerDown);
+  // First refusal on a middle-click or Shift+primary press, ahead of
+  // viewport.js's own pan decision -- see beginMarquee and viewport.js's
+  // setMarqueeHandler for why this can't be wired the other way around.
+  viewport.setMarqueeHandler(beginMarquee);
 
   // --- public --------------------------------------------------------------
 
@@ -1023,6 +1265,7 @@ export function createNodes({
       window.removeEventListener("pointercancel", onPointerCancel);
       window.removeEventListener("keydown", onKeyDown);
       viewport.container.removeEventListener("pointerdown", onWorldPointerDown);
+      viewport.setMarqueeHandler(null);
       // Widget nodes hold Three.js contexts; a canvas left without disposing
       // them takes the page down after a handful of visits (registry.js's
       // destroy contract spells this out).
