@@ -1,6 +1,6 @@
 # Development Plan — Project Spaces, Widgets & Infinite Canvas
 
-**Status: sessions 1–11b complete. Remaining: 11c → 12 → 13 → 14.**
+**Status: sessions 1–14 complete — the original plan is finished. Phase 8 (sessions 15–20, Part 9) covers post-completion bugs and changes.**
 
 | Session | State |
 |---|---|
@@ -1445,3 +1445,380 @@ Every item you specified, and where it lands.
 **Canvas coordinate drift (S10).** Mixing screen and world coordinates produces slow drift that is very hard to trace later. Mitigation: the prompt mandates world coordinates in storage and a single transform, and the exit criteria test for drift specifically.
 
 **Scope creep in the widget palette.** Each new widget is cheap once the kernel exists, which is exactly why the plan should be finished before more are added. Build the eight specified widgets, complete session 14, then add more.
+
+---
+
+## Part 9 — Phase 8: post-completion work
+
+Sessions 1–14 are done. This phase covers three bugs and eight changes raised after the app went into real use. Order is by dependency and by how much each is blocking day-to-day use: the editing bugs first because they break the core loop, then canvas interaction, then the style system, which is the largest single addition.
+
+```
+S15  grid editing bugs
+S16  canvas selection, widget drag-in, webview drag fix
+S17  colour analysis at ingest + default layout template
+S18  style presets
+S19  generate a style from a palette
+S20  all-references widget + text reference rendering
+```
+
+---
+
+### Session 15 — Grid editing bugs
+
+**Delivers:** the move handle works; adding a widget stops discarding unsaved layout edits.
+
+**Model:** Sonnet 5, `medium`
+**Estimate:** 1.5–2.5 h · 120–200k tokens · ~0.5 window
+
+````
+Read static/project/grid.js (particularly onPointerDown and the move-handle
+creation around line 236), main.js's addWidget path, and widget-dock.js first.
+
+Two bugs in homepage edit mode.
+
+1. The six-dot move handle does nothing. grid.js's onPointerDown returns early
+   when the event target is inside `.widget-move-handle` -- it sits in the same
+   ignore list as `.widget-remove` and `.widget-shadow-toggle`, which are click
+   targets that must not start a drag. But the move handle is the opposite: it
+   is the one element that SHOULD start a drag.
+
+   Take it out of that list and make a pointerdown on it begin a move gesture
+   for its widget. Leave the genuine click targets ignored. Add a comment
+   distinguishing the two kinds of inner control, since the list will grow
+   again and the next person will make the same mistake.
+
+   While you are there: check whether dragging from the widget body still
+   starts a move, and decide deliberately whether the handle is the only way to
+   move a widget or merely one way. Say which in a comment.
+
+2. Adding a widget sometimes reverts unsaved changes to other widgets. The
+   likely cause is that adding re-reads the layout from the server (or from a
+   stale snapshot) and overwrites the in-memory positions the user has just
+   dragged but not yet saved. Find the actual path before changing anything.
+
+   The rule: adding a widget must splice the new widget into the CURRENT
+   in-memory layout and leave every other widget's unsaved position untouched.
+   Nothing in edit mode should re-fetch layout from the server -- edit mode owns
+   the layout until Save or Cancel.
+
+Verify: enter edit mode, drag three widgets without saving, add a fourth from
+the dock, and confirm the first three are still where you dropped them; save
+and reload and confirm all four persist; the move handle drags from its first
+pixel with no lag.
+````
+
+**Exit criteria:** the handle moves widgets, and no add operation can lose an unsaved drag.
+
+---
+
+### Session 16 — Canvas selection, widget drag-in, and the webview drag bug
+
+**Delivers:** box-select and multi-drag, widgets dragged onto the canvas like references, and reference-adding fixed in the desktop wrapper.
+
+**Why together:** all three live in `canvas/palette.js` and `canvas/nodes.js` and all three are about the same pointer machinery. Doing them separately means touching the same two files three times.
+
+**Model:** Sonnet 5, `high`
+**Estimate:** 3–4 h · 250–350k tokens · ~1 window
+
+````
+Read static/project/canvas/nodes.js, palette.js, viewport.js and edges.js
+first.
+
+1. Adding a non-text reference to the canvas fails in the desktop webview.
+   palette.js drags references in using native HTML5 drag and drop
+   (dataTransfer.setData), which WKWebView supports inconsistently. Reproduce
+   in the wrapper before changing anything, and check whether the failure is
+   the dragstart, the drop, or the dataTransfer payload.
+
+   Replace the native HTML5 drag with the same pointer-event gesture nodes.js
+   already uses for moving nodes (pointerdown/move/up with setPointerCapture).
+   Pointer events behave identically in Chrome and WKWebView, and the canvas
+   already depends on them working. Keep a click-to-add fallback for every
+   item, so nothing is drag-only -- that is also the keyboard and touch path.
+
+2. Widgets should drop onto the canvas the way references do. palette.js
+   currently adds a widget on click, landing it in the middle of the view,
+   with a comment reasoning that a widget "has no particular place it belongs".
+   That reasoning no longer holds -- make widgets draggable from the palette to
+   an exact drop point, using the same pointer gesture as item 1. Click-to-add
+   stays as the fallback.
+
+3. Box selection and multi-drag. Dragging on empty canvas currently pans.
+   Add a marquee: hold the middle mouse button (or a modifier with the primary
+   button, since not every mouse or trackpad has a middle click -- support both
+   and say so in a comment) and drag to draw a selection rectangle. Every node
+   whose box intersects it becomes selected.
+     - selected nodes get a visible state that does not rely on a border or
+       fill, per the neumorphic rule
+     - dragging any selected node moves all of them together, preserving
+       relative positions
+     - Delete removes all selected; Escape and a click on empty canvas clear
+       the selection
+     - locked nodes inside the marquee are selected but do not move
+     - persistence is per node through the existing PATCH route, one request
+       per moved node, debounced as now -- do not add a bulk endpoint
+   The marquee is drawn in screen space but selection is tested in world
+   coordinates. Do not store screen coordinates anywhere.
+
+Verify in BOTH Chrome and the pywebview wrapper: dragging an image reference
+onto the canvas works in both; dragging a widget lands it where dropped;
+marquee-selecting five nodes and dragging moves all five with relative spacing
+intact; undo (from 11b) reverses a multi-node move.
+````
+
+**Exit criteria:** references and widgets both drag in, in both runtimes; multi-select moves as one.
+
+---
+
+### Session 17 — Colour analysis at ingest, and a default layout template
+
+**Delivers:** colour profiles computed when a reference is added, a settings button to fill gaps, and new projects seeded from a template project.
+
+**Model:** Sonnet 5, `medium`
+**Estimate:** 2–3 h · 150–250k tokens · ~0.6 window
+
+````
+Read ingest.py's add_reference, colour.py (analyse_image, backfill, coverage),
+the /api/colour/* routes in app.py, db.py's DEFAULT_WIDGETS and the project
+creation path, and the Settings tab in static/index.html first.
+
+1. Analyse colour at ingest. Image references currently get a colour profile
+   only via the backfill; nothing computes one when a reference is added, so a
+   fresh library has no colour data until someone runs a backfill. Call the
+   analysis from ingest.add_reference for image references, storing through the
+   existing colour_analysis table.
+
+   It must not make adding a reference fail: analysis is derived data, so a
+   failure logs and moves on, exactly as a missing profile does today. It is
+   local computation (~40ms an image, no network), so it does not need the
+   capture queue.
+
+2. Add a "Colour analysis" section to the Settings tab in index.html, beside
+   the existing similarity-scores section and following its pattern exactly:
+   a status line from /api/colour/coverage showing how many images have a
+   current-version profile, and a button that runs /api/colour/backfill until
+   coverage is complete.
+
+   Be accurate in the copy about what this does. Positions in the colourspace
+   graph are DERIVED from stored profiles at query time by colour.colour_map()
+   -- there is no stored position to recompute. So the button's real job is to
+   fill in references that have no current profile: ones added before item 1
+   existed, ones whose file changed, and ones analysed under an older
+   ANALYSIS_VERSION. Say that plainly rather than implying it recomputes the
+   graph.
+
+3. Seed new projects from a template project instead of the hard-coded
+   DEFAULT_WIDGETS tuple. The user maintains a project called "Default Project
+   Layout"; creating a project should copy that project's widgets (types,
+   positions, sizes, config, and any parent_id nesting) rather than the four
+   hard-coded rows.
+     - fall back to the existing DEFAULT_WIDGETS if no such project exists, so
+       a fresh install still works
+     - copy widgets and project_settings (the appearance). Do not copy its
+       references, folders or canvas.
+     - make the template project's name a constant in db.py, not a literal
+       scattered around
+
+   NOTE A REAL BUG WHILE YOU ARE HERE: DEFAULT_WIDGETS holds 12-column
+   coordinates -- ("title", 0, 0, 12, 2) -- but the grid has been 24 columns
+   since the free-placement change. Every seeded layout is currently half
+   width. Fix the fallback values to 24-column coordinates.
+
+Verify: a newly added image has a colour profile immediately; the settings
+button reports accurate coverage and completes; a new project matches "Default
+Project Layout" including appearance; deleting the template project still
+leaves project creation working, at full width.
+````
+
+**Exit criteria:** colour data exists from ingest onward, and new projects inherit the template.
+
+---
+
+### Session 18 — Style presets
+
+**Delivers:** named styles saved from the appearance controls and loadable into any project, plus a Default entry that hands control back to light/dark mode.
+
+**Model:** Sonnet 5, `high`
+**Estimate:** 3–4 h · 250–350k tokens · ~1 window
+
+````
+Read static/project/appearance.js, appearance-panel.js, top-bar.js, db.py's
+schema constants and project_settings handling, and the settings routes in
+app.py first.
+
+1. New table, following the existing conventions exactly (constant at the top
+   of db.py, registered in init_db()):
+
+     styles   id TEXT PK, name TEXT NOT NULL, settings TEXT NOT NULL,
+              date_created TEXT NOT NULL
+
+   Styles are GLOBAL, not per project -- the whole point is reusing one across
+   projects. `settings` is the same JSON shape project_settings already stores,
+   so saving a style is a copy of the current appearance and loading one is a
+   copy back. Do not invent a second shape.
+
+   Routes: GET /api/styles, POST /api/styles {name, settings},
+   PUT /api/styles/<id>, DELETE /api/styles/<id>.
+
+2. In the page-wide appearance section of the top bar, add:
+   - "Save current style" -- prompts for a name and stores the project's
+     current appearance. Saving over an existing name updates it, after
+     confirming.
+   - a dropdown of saved styles. Selecting one applies it to the current
+     project immediately, through the existing appearance apply path, and
+     persists to that project's project_settings. It must go through
+     appearance.js's apply() -- do not write a second application path.
+
+3. A permanent "Default" entry at the top of the dropdown, which is not a row
+   in the table. Selecting it CLEARS the project's appearance overrides
+   entirely, so the page falls back to style.css's globals and therefore
+   follows the light/dark toggle again. This is the only entry whose appearance
+   changes when the theme changes; every saved style is a fixed set of colours
+   and stays put.
+
+   Make that distinction explicit in the UI copy and in a comment -- "Default"
+   meaning "follow the theme" rather than "a style called Default" is exactly
+   the sort of thing a later session will misread.
+
+4. Deleting a style must not alter any project that was using it: a project
+   stores its own resolved settings, not a reference to a style id. Confirm
+   that is true of your implementation and say so in a comment.
+
+Verify: save a style in one project and apply it in another; the theme toggle
+moves a Default-styled project and leaves a styled one alone; deleting a style
+leaves projects untouched; everything survives a reload.
+````
+
+**Exit criteria:** styles round-trip across projects, and Default genuinely restores theme-following.
+
+---
+
+### Session 19 — Generate a style from a colour palette
+
+The most speculative session in the plan. The output is a *suggestion* the user previews and accepts, so err toward legible and dull over clever.
+
+**Model:** Sonnet 5, `extra`
+**Estimate:** 3.5–4.5 h · 300–400k tokens · ~1 window
+
+````
+Read colour.py (profile shape, palette entries with rgb and weight,
+rgb_to_lab, lab_to_rgb), static/project/widgets/colour-palette.js, the
+/api/colour/search combined-profile path, session 18's styles table, and
+appearance.js first.
+
+1. Saved palettes. A palette generated on the all-references page or a folder
+   page can currently be seen but not kept. Add:
+
+     palettes  id TEXT PK, name TEXT NOT NULL, profile TEXT NOT NULL,
+               source TEXT, date_created TEXT NOT NULL
+
+   `profile` is the combined colour profile colour.py already produces --
+   store it whole, not just the swatches, because generation needs the weights.
+   `source` records where it came from (archive-wide, or a folder id) for the
+   user's benefit only. Routes: GET/POST /api/palettes, DELETE /api/palettes/<id>.
+   Add a save control wherever a palette is currently displayed.
+
+2. Style generation, in a new module `style_gen.py`. Input: a stored palette.
+   Output: the same settings JSON shape project_settings and styles use.
+
+   Map by PROPORTION -- a palette entry's `weight` is the fraction of the image
+   it covers, so the heaviest colour should occupy the largest area of the page:
+     - heaviest      -> background
+     - next          -> button surface
+     - a mid weight  -> accent
+     - text colours are NOT taken from the palette by proportion; they are
+       chosen for contrast (see below)
+
+   Then enforce contrast, which overrides proportion every time:
+     - primary text against background: aim for WCAG AA on body text (4.5:1);
+       never go below 4.5:1
+     - secondary text against background: at least 3:1
+     - button text against the button surface: at least 4.5:1
+     - accent against background: at least 3:1, since it is used for focus and
+       small marks
+   Compute contrast with the standard WCAG relative-luminance ratio. When a
+   palette colour cannot meet a threshold, do not fail -- walk its lightness in
+   CIELAB toward black or white until it does, keeping hue and chroma. That
+   keeps the generated style recognisably from the palette rather than
+   collapsing to black on white. colour.py already has rgb_to_lab/lab_to_rgb;
+   use them rather than adding a second colour space.
+
+   Fonts are NOT derived from a palette. Leave them unset so the project's own
+   or the global defaults apply.
+
+3. UI: choose a saved palette, generate, and PREVIEW the result live on the
+   current project before committing -- apply through appearance.js's existing
+   path with an explicit Cancel that restores what was there before. Accepting
+   saves it as a named style through session 18's styles table, so generated
+   and hand-made styles are the same kind of thing afterwards.
+
+4. Show the computed contrast ratios in the preview. If a value had to be
+   adjusted to meet a threshold, say so. The user should be able to see why a
+   colour is not exactly the one in the palette.
+
+Add tests in tests/test_style_gen.py: a palette of near-identical mid greys
+still produces a readable style; every generated style meets every threshold;
+the same palette always produces the same style.
+
+Verify by eye on three real palettes -- a dark moody one, a pale neutral one,
+and a high-chroma one -- that the result is legible in every case.
+````
+
+**Exit criteria:** generation is deterministic, always meets its contrast floors, and previews before it commits.
+
+---
+
+### Session 20 — All-references widget and text reference rendering
+
+**Delivers:** the reference grid embedded as a homepage widget, and text references shown as readable text rather than a placeholder.
+
+**Model:** Sonnet 5, `high`
+**Estimate:** 2.5–3.5 h · 200–300k tokens · ~0.75 window
+
+````
+Read static/project/pages/grid-page.js, widgets/grid-button.js,
+shared/cards.js (makeCard and textCard), canvas/nodes.js's
+buildReferenceBody, and widgets/notepad.js first.
+
+1. static/project/widgets/all-references.js -- the project's reference grid as
+   a widget rather than a page. grid-button.js navigates to the grid page;
+   this embeds the same thing.
+     - reuse pages/grid-page.js. If it is too coupled to being a full page,
+       extract the grid and its selection toolbar into something both can
+       mount, rather than writing a second copy.
+     - selection, delete, analyse, colour similarity and move-to-folder all
+       behave as they do on the page
+     - defaultSize should be large -- this is meant to dominate a homepage.
+       Something like 16x8 on the 24-column grid.
+     - canvasEligible: false. This is a homepage widget; the canvas has its own
+       ways of holding references and an embedded scrolling grid there would
+       fight the viewport transform.
+     - it scrolls internally; it must never resize the widget or push the grid
+
+2. Text references currently render as a placeholder card -- an icon plus a
+   description snippet -- because /media/<id>/thumb 404s for a .txt. Show the
+   actual text instead, styled like a notepad: the file's contents in a
+   scrollable body, with the reference TITLE pinned at the BOTTOM so it stays
+   visible while the text scrolls.
+
+   Apply this wherever a text reference is rendered as a card or node:
+   shared/cards.js's textCard, and the canvas's reference nodes.
+
+   - serve the text through the existing /media/<id> route; do not add a new
+     one, and do not put file contents in the reference list payload, which
+     would bloat every grid load
+   - fetch lazily, only when a text card is actually rendered
+   - long files clip rather than growing the card; there is no expand control
+   - it is READ ONLY. It looks like a notepad; it is not one. Editing a
+     reference's text would rewrite an archive file, which nothing else in the
+     app does. Say so in a comment.
+   - PDFs keep their rendered first-page thumbnail and are unaffected
+
+Verify: the all-references widget on a homepage supports the same selection
+and actions as the page; a text reference shows its text with the title pinned
+at the bottom in both the grid and on the canvas; a very long text file clips
+without changing the card size; PDFs are unchanged.
+````
+
+**Exit criteria:** the widget matches the page's capabilities, and text references read as text.
+
