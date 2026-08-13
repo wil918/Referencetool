@@ -1541,6 +1541,7 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 .widget-grid.is-editing .widget:not(.is-locked) .widget-resize { display: block; }
 .widget-grid.is-editing .widget.is-removable .widget-remove { display: flex; }
 .widget-grid.is-editing .widget.is-removable .widget-move-handle { display: flex; }
+.widget-grid.is-editing .widget.is-removable .widget-sidebar-move { display: flex; }
 .widget-grid.is-editing .widget-shadow-toggle { display: flex; }
 .widget-grid.is-gesturing { user-select: none; }
 .widget-grid.is-gesturing .widget { cursor: grabbing; }
@@ -1603,10 +1604,10 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 .widget-shadow-toggle:active { box-shadow: var(--press-sm); transform: scale(0.95); }
 .widget.is-shadow-on .widget-shadow-toggle { color: var(--accent); }
 
-/* The drag-out-of-the-grid handle, bottom-left -- opposite the resize nub,
-   under the shadow toggle. A native HTML5 drag source (grid.js), not the
-   pointer gesture the other three corners take part in, so it can be dropped
-   on a sidebar's panel outside .widget-grid entirely. */
+/* The move handle, bottom-left -- opposite the resize nub. A plain grab
+   affordance for the same pointer gesture the widget's body already starts
+   (grid.js's onPointerDown); it exists so a widget whose body is filled
+   edge-to-edge by its own content still has an obvious place to grab. */
 .widget-move-handle {
   display: none;
   position: absolute;
@@ -1631,6 +1632,34 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 
 .widget-move-handle:hover { box-shadow: var(--raise-md); }
 .widget-move-handle:active { cursor: grabbing; }
+
+/* Stacked under the shadow toggle, top-left. A click, not a drag source --
+   see grid.js's onMoveToSidebar comment for why reparenting into a sidebar
+   moved off the move handle and onto its own button. */
+.widget-sidebar-move {
+  display: none;
+  position: absolute;
+  top: clamp(22px, 66cqmin, 36px);
+  left: clamp(4px, 18cqmin, 10px);
+  width: clamp(14px, 44cqmin, 22px);
+  height: clamp(14px, 44cqmin, 22px);
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-sm);
+  color: var(--muted);
+  font-size: clamp(0.55rem, 16cqmin, 0.85rem);
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  touch-action: none;
+  transition: var(--press);
+}
+
+.widget-sidebar-move:hover { box-shadow: var(--raise-md); }
+.widget-sidebar-move:active { box-shadow: var(--press-sm); transform: scale(0.95); }
 
 /* Floating Save/Cancel for the grid's edit mode -- pinned to a corner so it
    never covers the widgets being arranged, but above them in z-index so it's

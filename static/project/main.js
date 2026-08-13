@@ -186,12 +186,32 @@ function containerHost(containerId) {
       };
       const result = await putWidgets([entry]);
       if (result.ok) {
-        grid.setItems(gridRows().map(toItem));
+        // Only this one widget leaves the grid -- removeItem, never setItems,
+        // so nobody else's unsaved drag position gets pulled back to what the
+        // server last knew about it.
+        grid.removeItem(widgetId);
         notifyStructureChange();
       }
       return result;
     },
   };
+}
+
+/* Where grid.js's move-to-sidebar button (onMoveToSidebar below) actually
+ * sends a widget. grid.js only reports the click; it has no notion of what a
+ * sidebar is, so that decision lives here.
+ *
+ * Picks the first sidebar in reading order and moves straight in, with no
+ * picker -- today's projects have at most one or two sidebars, and a click
+ * that goes to the "wrong" one still leaves the widget one drag away inside
+ * containerHost.reorder/moveIn's normal editing flow. A project with no
+ * sidebar at all is a silent no-op, same as the old native drag was when
+ * dropped with no panel open to catch it.
+ */
+function moveToSidebar(item) {
+  const target = gridRows().find((row) => row.type === "sidebar" && row.id !== item.id);
+  if (!target) return;
+  containerHost(target.id).moveIn(item.id);
 }
 
 function buildGrid() {
@@ -235,6 +255,10 @@ function buildGrid() {
 
     onRemove(item) {
       removeWidget(item.id);
+    },
+
+    onMoveToSidebar(item) {
+      moveToSidebar(item);
     },
 
     onToggleShadow(item, shadow) {
@@ -341,7 +365,14 @@ async function addWidget(type, position = null, parentId = null, config = null) 
   const data = await res.json().catch(() => null);
   if (!res.ok) return { ok: false, error: data?.error || "Couldn't add the widget." };
   rows.set(data.id, data);
-  if (!parentId) grid.setItems(gridRows().map(toItem));
+  // addItem, never setItems: setItems rebuilds every item from `rows`, which
+  // only ever holds the server's last-known x/y/w/h -- during an edit that's
+  // stale the instant the user drags something, since a drag only ever
+  // touches the grid's own in-memory item, not this map (only Save writes it
+  // back here). Rebuilding from `rows` mid-edit would silently snap every
+  // other widget back to its last-saved position. Edit mode owns the layout
+  // until Save or Cancel; adding a widget must not reach past that.
+  if (!parentId) grid.addItem(toItem(data));
   notifyStructureChange();
   return { ok: true, row: data };
 }
@@ -356,7 +387,9 @@ async function removeWidget(id) {
   // inert in memory (harmless, since nothing renders a row with a dead
   // parent_id) until the next reload fetched the server's actual state.
   for (const row of childRows(id)) rows.delete(row.id);
-  grid.setItems(gridRows().map(toItem));
+  // removeItem, not setItems -- see addWidget's comment above; the same
+  // staleness would clobber unsaved positions here too.
+  grid.removeItem(id);
   notifyStructureChange();
   return { ok: true };
 }

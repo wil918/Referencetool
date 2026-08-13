@@ -377,22 +377,9 @@ export default {
       if (!editing) addList.hidden = true;
     });
 
-    // --- receiving a widget dragged out of the grid (grid.js's move handle) -
-
-    panel.addEventListener("dragover", (event) => {
-      if (!host.editMode.isEditing()) return;
-      if (!event.dataTransfer.types.includes("application/x-widget-id")) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-    });
-
-    panel.addEventListener("drop", async (event) => {
-      const widgetId = event.dataTransfer.getData("application/x-widget-id");
-      if (!widgetId) return;
-      event.preventDefault();
-      const result = await host.children.moveIn(widgetId);
-      if (!result.ok) showError(result.error);
-    });
+    // A widget lands here via main.js's moveToSidebar (grid.js's move-to-
+    // sidebar button, not a drop on this panel) -- host.children.moveIn does
+    // the actual reparenting; this widget doesn't need to listen for it.
 
     host.onDestroy(() => {
       unsubscribeChildren();

@@ -54,6 +54,9 @@ function collides(box, others, ignoreId) {
  *   unmount(item, el)  -- tear them down again
  *   resized(item, el)  -- el's box changed size (also fires once on mount)
  *   onLayoutChange(rows) -- a gesture finished and the layout is now unsaved
+ *   onRemove(item)          -- the remove button was clicked
+ *   onToggleShadow(item, on)-- the shadow toggle was clicked
+ *   onMoveToSidebar(item)   -- the move-to-sidebar button was clicked
  */
 export function createGrid(container, options = {}) {
   const mount = options.mount || (() => {});
@@ -68,6 +71,11 @@ export function createGrid(container, options = {}) {
   // state, not part of the layout snapshot Cancel can revert, so a toggle is
   // written as soon as it happens rather than staged behind Save.
   const onToggleShadow = options.onToggleShadow || (() => {});
+  // Also immediate, and also opaque to this file -- reparenting into a
+  // sidebar isn't part of the layout snapshot Cancel can revert, and grid.js
+  // has no idea what a sidebar is. It only reports the click; the caller
+  // decides what "move to sidebar" means and does it.
+  const onMoveToSidebar = options.onMoveToSidebar || (() => {});
 
   container.classList.add("widget-grid");
 
@@ -222,28 +230,50 @@ export function createGrid(container, options = {}) {
     el.appendChild(shadowToggle);
     el.classList.toggle("is-shadow-on", item.shadow);
 
-    // A native HTML5 drag source, deliberately separate from the pointer-based
-    // gesture the rest of this file implements -- that gesture only ever
-    // moves a widget within this one container, and has no way to know when
-    // the pointer is over a sidebar's slide-in panel, which lives outside
-    // .widget-grid entirely (see widgets/sidebar.js for why). A native drag
-    // still fires dragover/drop on whatever element the pointer is over
-    // regardless of container boundaries, so it's the one mechanism that can
-    // carry a widget out of the grid. Only offered on removable widgets --
-    // the permanent controls (settings/exit/canvas) stay on the homepage.
+    // A plain pointer-gesture affordance, not a click target -- grabbing it
+    // starts exactly the same drag as grabbing the widget's body does (see
+    // the exclusion list in onPointerDown). It exists for discoverability:
+    // a widget whose body is filled edge-to-edge by its own content (a
+    // notepad, a canvas) offers no obvious place to grab, so this is a
+    // dedicated one that always works. It is not the *only* way to move a
+    // widget -- the body remains draggable everywhere it isn't otherwise a
+    // click target -- so treat this as one entry point among several, not
+    // the thing that owns the gesture.
+    //
+    // This used to *also* be a native HTML5 drag source, for carrying a
+    // widget out to a sidebar's slide-in panel (which lives outside
+    // .widget-grid, so only a native drag's dragover/drop -- which ignores
+    // container boundaries -- could reach it). That's gone: a `draggable`
+    // element fires its own dragstart on essentially any drag gesture in
+    // Chromium, which would preempt this file's pointer-event state machine
+    // (onPointerMove would stop receiving events mid-gesture, and neither
+    // pointerup nor pointercancel reliably follows a completed native drag),
+    // leaving `gesture` stuck and the grid unresponsive until reload. Moving
+    // to a sidebar is now the dedicated button below instead.
     const moveHandle = document.createElement("button");
     moveHandle.type = "button";
     moveHandle.className = "widget-move-handle";
-    moveHandle.setAttribute("aria-label", "Drag into a sidebar");
-    moveHandle.title = "Drag into a sidebar";
+    moveHandle.setAttribute("aria-label", "Move widget");
+    moveHandle.title = "Move";
     moveHandle.textContent = "⠿";
-    moveHandle.draggable = true;
-    moveHandle.addEventListener("dragstart", (event) => {
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("application/x-widget-id", item.id);
-      event.dataTransfer.setData("text/plain", item.id);
-    });
     el.appendChild(moveHandle);
+
+    // Only offered on removable widgets -- the permanent controls
+    // (settings/exit/canvas) stay on the homepage and have nowhere to go.
+    // grid.js doesn't know whether a sidebar exists to receive this widget;
+    // onMoveToSidebar's caller decides that and no-ops if there's nowhere
+    // to put it.
+    const sidebarMove = document.createElement("button");
+    sidebarMove.type = "button";
+    sidebarMove.className = "widget-sidebar-move";
+    sidebarMove.setAttribute("aria-label", "Move to sidebar");
+    sidebarMove.title = "Move to sidebar";
+    sidebarMove.textContent = "⇥";
+    sidebarMove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onMoveToSidebar(entries.get(item.id)?.item || item);
+    });
+    el.appendChild(sidebarMove);
 
     container.appendChild(el);
     entries.set(item.id, { item, el, body });
@@ -349,19 +379,30 @@ export function createGrid(container, options = {}) {
 
   function onPointerDown(event) {
     if (!editing || gesture || !event.isPrimary || event.button !== 0) return;
-    // The remove and shadow-toggle buttons are click targets, not drag
-    // handles -- capturing the pointer here would swallow their click before
-    // it fires. The move handle is its own native drag source (see
-    // createEntry) and must never also start this pointer gesture. Text/
-    // Title/Notepad's own editable content joins them: it stays hit-testable
-    // while editing (style.css's :has(.widget-editable-text) exemption) so it
-    // can be clicked into and typed in, and needs the same exclusion so that
-    // placing a cursor or drag-selecting text isn't instead read as the start
-    // of a widget-move gesture. The sidebar's own open/close button needs the
-    // same treatment -- unlike settings/exit, a sidebar is meant to be usable
-    // *while* editing (that's how its contents get arranged at all), so its
-    // click can't be swallowed by pointer capture either.
-    if (event.target.closest(".widget-remove, .widget-shadow-toggle, .widget-editable-text, .widget-move-handle, .widget-sidebar-btn")) return;
+    // Two different kinds of inner control here, easy to conflate -- the
+    // list below is only ever the first kind, and the move handle is
+    // deliberately *not* on it.
+    //
+    // 1. Click targets that must not start a drag: capturing the pointer on
+    //    pointerdown would swallow their click before it fires. Remove and
+    //    shadow-toggle are buttons. Text/Title/Notepad's own editable
+    //    content joins them: it stays hit-testable while editing (style.css's
+    //    :has(.widget-editable-text) exemption) so it can be clicked into and
+    //    typed in, and needs the same exclusion so that placing a cursor or
+    //    drag-selecting text isn't instead read as the start of a
+    //    widget-move gesture. The sidebar's own open/close button needs the
+    //    same treatment -- unlike settings/exit, a sidebar is meant to be
+    //    usable *while* editing (that's how its contents get arranged at
+    //    all), so its click can't be swallowed by pointer capture either.
+    //    The new move-to-sidebar button is the same case: a click, not a
+    //    drag start.
+    //
+    // 2. The move handle is the opposite of all of those -- it exists
+    //    specifically to start this gesture, the same as grabbing the
+    //    widget's body does. It must stay OUT of this list, or pointerdown
+    //    on it does nothing (see createEntry's comment on this element for
+    //    why it used to be excluded, and why that's no longer true).
+    if (event.target.closest(".widget-remove, .widget-shadow-toggle, .widget-editable-text, .widget-sidebar-move, .widget-sidebar-btn")) return;
 
     const el = event.target.closest(".widget");
     if (!el) return;
@@ -485,6 +526,29 @@ export function createGrid(container, options = {}) {
     render();
   }
 
+  /* Splice one new widget into the CURRENT layout, in place -- never through
+   * setItems, which rebuilds every item from the caller's raw rows and would
+   * stomp the in-memory position of anything the user has dragged but not
+   * yet saved. Editing owns the layout until Save or Cancel; nothing that
+   * happens while editing is allowed to pull positions from anywhere else. */
+  function addItem(row) {
+    const item = normalise(row);
+    createEntry(item);
+    items.push(item);
+    items.sort(readingOrder);
+    render();
+  }
+
+  /* The other half of addItem: drop one widget out of the layout -- a
+   * removal, or a reparent into a container -- without touching anyone
+   * else's unsaved position. */
+  function removeItem(id) {
+    if (!entries.has(id)) return;
+    removeEntry(id);
+    items = items.filter((item) => item.id !== id);
+    render();
+  }
+
   /* Where a widget dropped from the Add Widget dock at this viewport point
    * would land, in cells -- the same pointer-to-cell math onPointerMove uses
    * for a drag, just computed from a single point instead of a delta. */
@@ -528,6 +592,8 @@ export function createGrid(container, options = {}) {
 
   return {
     setItems,
+    addItem,
+    removeItem,
     getLayout,
     setLayout,
     setEditing,
