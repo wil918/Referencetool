@@ -19,7 +19,10 @@ function activateTab(name) {
 
   if (name === "archive") refreshArchive();
   if (name === "projects") showProjectsList();
-  if (name === "settings") refreshSimilarityStatus();
+  if (name === "settings") {
+    refreshSimilarityStatus();
+    refreshColourCoverageStatus();
+  }
   return true;
 }
 
@@ -812,6 +815,51 @@ document.getElementById("similarity-estimate-cancel").addEventListener("click", 
 
 similarityEstimateOverlay.addEventListener("click", (e) => {
   if (e.target === similarityEstimateOverlay) similarityEstimateOverlay.hidden = true;
+});
+
+// --- Settings: colour analysis ---
+
+const colourCoverageStatus = document.getElementById("colour-coverage-status");
+const colourBackfillBtn = document.getElementById("colour-backfill-btn");
+
+function describeColourCoverage(data) {
+  if (data.images === 0) return "No images in the library yet.";
+  if (data.pending === 0) return `All ${data.images} image${data.images === 1 ? "" : "s"} have a current colour profile.`;
+  return `${data.analysed} of ${data.images} images have a current colour profile (${data.pending} pending).`;
+}
+
+async function refreshColourCoverageStatus() {
+  const res = await fetch("/api/colour/coverage");
+  const data = await res.json();
+  colourCoverageStatus.textContent = describeColourCoverage(data);
+  return data;
+}
+
+colourBackfillBtn.addEventListener("click", async () => {
+  colourBackfillBtn.disabled = true;
+  colourCoverageStatus.textContent = "Analysing...";
+  try {
+    let data;
+    let previousPending = null;
+    do {
+      const res = await fetch("/api/colour/backfill", { method: "POST" });
+      data = await res.json();
+      if (!res.ok) {
+        colourCoverageStatus.textContent = `Error: ${data.error}`;
+        return;
+      }
+      // A run that made no progress (every remaining image failed to
+      // analyse) would otherwise loop forever chasing a pending count that
+      // never drops.
+      if (data.pending === previousPending) break;
+      previousPending = data.pending;
+    } while (data.pending > 0);
+    colourCoverageStatus.textContent = describeColourCoverage(data);
+  } catch (err) {
+    colourCoverageStatus.textContent = `Error: ${err}`;
+  } finally {
+    colourBackfillBtn.disabled = false;
+  }
 });
 
 // --- Init ---

@@ -253,18 +253,25 @@ PROJECT_SPACE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_canvas_edges_project ON canvas_edges(project_id)",
 )
 
-# What a brand new project starts with. The folder names are the six lenses the
-# tool thinks in; the widgets are the minimum for a usable homepage -- a title,
-# the two permanent controls, and the way into the canvas. Positions are grid
-# cells in the 12-column homepage grid.
+# What a brand new project starts with, when there is no template project to
+# copy (see TEMPLATE_PROJECT_TITLE below). The folder names are the six
+# lenses the tool thinks in; the widgets are the minimum for a usable
+# homepage -- a title, the two permanent controls, and the way into the
+# canvas. Positions are grid cells in the 24-column homepage grid.
 DEFAULT_FOLDER_NAMES = ("Texture", "Colour", "Form", "Vibe", "Fashion", "Narrative")
 DEFAULT_WIDGETS = (
     # type, x, y, w, h
-    ("title", 0, 0, 12, 2),
-    ("canvas", 0, 2, 6, 4),
-    ("settings", 6, 2, 3, 2),
-    ("exit", 9, 2, 3, 2),
+    ("title", 0, 0, 24, 2),
+    ("canvas", 0, 2, 12, 4),
+    ("settings", 12, 2, 6, 2),
+    ("exit", 18, 2, 6, 2),
 )
+
+# A project with this title, if one exists, is the template new projects seed
+# their widget layout and appearance from -- see seed_project_defaults(). Not
+# a special project in any other way: it's renameable and deletable like any
+# other, and losing it just means new projects fall back to DEFAULT_WIDGETS.
+TEMPLATE_PROJECT_TITLE = "Default Project Layout"
 
 COLOUR_ANALYSIS_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_colour_version ON colour_analysis(version)",
@@ -908,12 +915,21 @@ def count_image_references():
 
 
 def seed_project_defaults(project_id):
-    """Give a brand new project its starting folders and widgets.
+    """Give a brand new project its starting folders, widgets and appearance.
 
-    One transaction rather than ten calls to create_folder/create_widget, so a
-    project is never briefly visible with half a project space. Ids are minted
-    here for the same reason -- there are ten of them, and the caller has no
-    use for any of them.
+    The six folders are always the same starting lenses. Widgets and
+    appearance come from the TEMPLATE_PROJECT_TITLE project when one exists --
+    a user-maintained project the app treats as no more than a source to copy
+    from, not a protected special case -- so its layout, sizes and config
+    (including any container/child nesting) become the starting point for
+    every new project instead of the bare DEFAULT_WIDGETS tuple. Its
+    references, folders and canvas are deliberately not copied: those are
+    per-project content, not layout. Falls back to DEFAULT_WIDGETS untouched
+    when no template project exists, so a fresh install still works.
+
+    One transaction rather than many separate calls, so a project is never
+    briefly visible with half a project space. Ids are minted here for the
+    same reason -- the caller has no use for any of them.
     """
     now = datetime.now(timezone.utc).isoformat()
     with get_conn() as conn:
@@ -925,16 +941,68 @@ def seed_project_defaults(project_id):
                 for position, name in enumerate(DEFAULT_FOLDER_NAMES)
             ],
         )
-        conn.executemany(
-            """INSERT INTO widgets
-                   (id, project_id, type, parent_id, x, y, w, h, locked, config,
-                    position, date_created)
-               VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 0, NULL, ?, ?)""",
-            [
-                (str(uuid.uuid4()), project_id, type_, x, y, w, h, position, now)
-                for position, (type_, x, y, w, h) in enumerate(DEFAULT_WIDGETS)
-            ],
-        )
+
+        template = conn.execute(
+            "SELECT id FROM projects WHERE title = ? ORDER BY date_created LIMIT 1",
+            (TEMPLATE_PROJECT_TITLE,),
+        ).fetchone()
+
+        if template:
+            _copy_widgets(conn, template["id"], project_id, now)
+            settings_row = conn.execute(
+                "SELECT settings FROM project_settings WHERE project_id = ?",
+                (template["id"],),
+            ).fetchone()
+            if settings_row:
+                conn.execute(
+                    """INSERT INTO project_settings (project_id, settings) VALUES (?, ?)
+                       ON CONFLICT(project_id) DO UPDATE SET settings = excluded.settings""",
+                    (project_id, settings_row["settings"]),
+                )
+        else:
+            conn.executemany(
+                """INSERT INTO widgets
+                       (id, project_id, type, parent_id, x, y, w, h, locked, config,
+                        position, date_created)
+                   VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 0, NULL, ?, ?)""",
+                [
+                    (str(uuid.uuid4()), project_id, type_, x, y, w, h, position, now)
+                    for position, (type_, x, y, w, h) in enumerate(DEFAULT_WIDGETS)
+                ],
+            )
+
+
+def _copy_widgets(conn, source_project_id, dest_project_id, now):
+    """Copy every widget from one project to another, preserving parent_id
+    nesting by remapping the source ids to freshly minted ones."""
+    rows = conn.execute(
+        "SELECT * FROM widgets WHERE project_id = ? ORDER BY position, date_created",
+        (source_project_id,),
+    ).fetchall()
+    id_map = {row["id"]: str(uuid.uuid4()) for row in rows}
+    conn.executemany(
+        """INSERT INTO widgets
+               (id, project_id, type, parent_id, x, y, w, h, locked, config,
+                position, date_created)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        [
+            (
+                id_map[row["id"]],
+                dest_project_id,
+                row["type"],
+                id_map.get(row["parent_id"]),
+                row["x"],
+                row["y"],
+                row["w"],
+                row["h"],
+                row["locked"],
+                row["config"],
+                row["position"],
+                now,
+            )
+            for row in rows
+        ],
+    )
 
 
 # --- Project spaces: folders -------------------------------------------------

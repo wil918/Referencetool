@@ -160,6 +160,19 @@
         <p id="similarity-status" class="muted"></p>
         <button id="similarity-calculate-btn" class="btn primary">Calculate Similarity Scores</button>
       </div>
+
+      <div class="settings-section">
+        <h3>Colour analysis</h3>
+        <p class="muted">
+          New images are analysed for colour automatically as they're added. This doesn't recompute
+          the colourspace graph -- positions there are derived from stored profiles each time it's
+          opened, so there's nothing to rebuild. It fills in profiles for images that don't have a
+          current one: ones added before colour analysis existed, ones whose file has changed since,
+          and ones analysed under an older version of the algorithm.
+        </p>
+        <p id="colour-coverage-status" class="muted"></p>
+        <button id="colour-backfill-btn" class="btn primary">Fill In Missing Colour Profiles</button>
+      </div>
     </section>
   </main>
 

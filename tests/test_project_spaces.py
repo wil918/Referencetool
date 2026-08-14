@@ -65,6 +65,57 @@ def test_new_project_gets_the_default_widget_set_and_nothing_else(client):
     assert all(w["parent_id"] is None for w in widgets)
 
 
+def test_new_project_copies_widgets_and_appearance_from_the_template_project(client):
+    """When a project named db.TEMPLATE_PROJECT_TITLE exists, new projects
+    copy its widget layout and appearance instead of the hard-coded default
+    set."""
+    template_id = make_project(client, db.TEMPLATE_PROJECT_TITLE)
+    sidebar = client.post(
+        f"/api/projects/{template_id}/widgets",
+        json={"type": "sidebar", "x": 0, "y": 6, "w": 4, "h": 4},
+    ).get_json()
+    client.post(
+        f"/api/projects/{template_id}/widgets",
+        json={"type": "colourspace", "parent_id": sidebar["id"], "x": 0, "y": 0, "w": 2, "h": 2},
+    )
+    template_widgets = client.get(f"/api/projects/{template_id}/widgets").get_json()
+    client.put(
+        f"/api/projects/{template_id}/settings",
+        json={"settings": {"appearance": {"background": "#123456"}}},
+    )
+
+    project_id = make_project(client, "A fresh project")
+    widgets = client.get(f"/api/projects/{project_id}/widgets").get_json()
+    settings = client.get(f"/api/projects/{project_id}/settings").get_json()["settings"]
+
+    assert {w["type"] for w in widgets} == {w["type"] for w in template_widgets}
+    nested = next(w for w in widgets if w["type"] == "colourspace")
+    new_sidebar = next(w for w in widgets if w["type"] == "sidebar")
+    # Nesting survives the copy, remapped to the new project's own widget ids
+    # -- not the template's.
+    assert nested["parent_id"] == new_sidebar["id"]
+    assert nested["id"] != sidebar["id"]
+    assert settings["appearance"]["background"] == "#123456"
+
+    # Only the layout was copied -- not the template's references, folders or
+    # canvas.
+    assert db.count_project_references(project_id) == 0
+
+
+def test_new_project_falls_back_to_defaults_if_the_template_project_is_deleted(client):
+    template_id = make_project(client, db.TEMPLATE_PROJECT_TITLE)
+    client.delete(f"/api/projects/{template_id}")
+
+    project_id = make_project(client, "Still works")
+    widgets = client.get(f"/api/projects/{project_id}/widgets").get_json()
+
+    assert {w["type"] for w in widgets} == {"title", "canvas", "settings", "exit"}
+    title_widget = widget_of_type(client, project_id, "title")
+    # 24-column grid: the title spans the full width, not the stale
+    # 12-column half-width.
+    assert title_widget["w"] == 24
+
+
 def test_a_default_folder_can_be_renamed_and_deleted(client):
     """is_default records origin, not protection."""
     project_id = make_project(client)

@@ -9,6 +9,7 @@ from pathlib import Path
 import fitz  # PyMuPDF
 
 from config import IMAGES_DIR, TEXTS_DIR
+import colour
 import db
 import embeddings
 import tagging
@@ -250,6 +251,21 @@ def add_reference(source_path, title=None, source=None, notes=None, force=False,
             "tags": ", ".join(tags),
         },
     )
+
+    if ref_type == "image":
+        # Derived data, not part of what "adding a reference" means to
+        # succeed at -- a failure here shouldn't undo the copy/tag/embed
+        # that already happened, so it's logged and moved past exactly like
+        # a reference that's missing a profile is already handled elsewhere
+        # (colour.profile_for_reference computes it lazily on demand).
+        try:
+            profile = colour.analyse_image(dest)
+            db.save_colour_analysis(
+                ref_id, colour.ANALYSIS_VERSION, content_hash, colour.profile_to_json(profile)
+            )
+        except Exception as e:
+            print(f"  colour analysis failed: {e}")
+
     return {
         "id": ref_id,
         "title": title,

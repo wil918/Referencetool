@@ -46,9 +46,26 @@ def add_image(archive, name, bands):
 # --- Storage and caching ----------------------------------------------------
 
 
-def test_profile_is_computed_on_demand_and_stored(archive):
+def test_ingest_analyses_colour_immediately(archive):
+    """Requirement: an image reference has a colour profile as soon as it's
+    added, not only after a backfill has run."""
     ref_id = add_image(archive, "dark", [(BLACK, 0.7), (CREAM, 0.3)])
-    assert db.get_colour_analysis(ref_id) is None
+
+    stored = db.get_colour_analysis(ref_id, version=colour.ANALYSIS_VERSION)
+    assert stored is not None
+    assert stored["version"] == colour.ANALYSIS_VERSION
+    assert colour.profile_from_json(stored["profile"]) is not None
+
+
+def test_profile_is_computed_on_demand_and_stored(archive):
+    """profile_for_reference() still computes and stores a profile on demand
+    -- needed for a reference whose stored analysis has gone stale or missing,
+    not just a freshly ingested one."""
+    ref_id = add_image(archive, "dark", [(BLACK, 0.7), (CREAM, 0.3)])
+    # Simulate a stale row -- e.g. one written by an older algorithm version
+    # -- so profile_for_reference() has to recompute rather than reuse it.
+    db.save_colour_analysis(ref_id, colour.ANALYSIS_VERSION - 1, "irrelevant", "{}")
+    assert db.get_colour_analysis(ref_id, version=colour.ANALYSIS_VERSION) is None
 
     profile = colour.profile_for_reference(ref_id)
     assert profile is not None
@@ -96,10 +113,21 @@ def test_backfill_analyses_pending_images_and_is_idempotent(archive):
     # Proportions varied per image so the files differ: identical bytes are
     # correctly rejected by the archive's own duplicate detection, which
     # would make this a test of that instead.
-    for i in range(3):
+    ids = [
         add_image(archive, f"img{i}", [(BLACK, 0.6 - i * 0.1), (CREAM, 0.4 + i * 0.1)])
+        for i in range(3)
+    ]
 
+    # Ingest already analysed every one of these -- nothing pending yet.
+    assert colour.coverage() == {"version": colour.ANALYSIS_VERSION, "images": 3, "analysed": 3, "pending": 0}
+
+    # Simulate the situations the backfill queue exists for now that ingest
+    # analyses on its own: references added before colour analysis existed,
+    # or analysed under an older algorithm version.
+    for ref_id in ids:
+        db.save_colour_analysis(ref_id, colour.ANALYSIS_VERSION - 1, "irrelevant", "{}")
     assert colour.coverage()["pending"] == 3
+
     analysed, failed = colour.backfill()
     assert (analysed, failed) == (3, 0)
     assert colour.coverage() == {"version": colour.ANALYSIS_VERSION, "images": 3, "analysed": 3, "pending": 0}
@@ -293,9 +321,13 @@ def test_an_empty_project_maps_to_an_empty_cylinder(client, archive):
 
 
 def test_coverage_endpoint(client, archive):
-    add_image(archive, "one", [(BLACK, 1.0)])
+    ref_id = add_image(archive, "one", [(BLACK, 1.0)])
     body = client.get("/api/colour/coverage").get_json()
-    assert body["images"] == 1 and body["pending"] == 1
+    assert body["images"] == 1 and body["pending"] == 0
+
+    # Simulate a reference that predates automatic ingest-time analysis.
+    db.save_colour_analysis(ref_id, colour.ANALYSIS_VERSION - 1, "irrelevant", "{}")
+    assert client.get("/api/colour/coverage").get_json()["pending"] == 1
 
     client.post("/api/colour/backfill", json={})
     assert client.get("/api/colour/coverage").get_json()["pending"] == 0
