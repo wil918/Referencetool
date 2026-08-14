@@ -1457,6 +1457,7 @@ S15  grid editing bugs
 S16  canvas selection, widget drag-in, webview drag fix
 S17  colour analysis at ingest + default layout template
 S18  style presets
+S18b layout presets + baked-in default
 S19  generate a style from a palette
 S20  all-references widget + text reference rendering
 ```
@@ -1703,6 +1704,93 @@ leaves projects untouched; everything survives a reload.
 ````
 
 **Exit criteria:** styles round-trip across projects, and Default genuinely restores theme-following.
+
+---
+
+### Session 18b — Layout presets and a baked-in default
+
+**Added after session 17 shipped.** S17 seeds new projects by copying a live "Default Project Layout" project at creation time. That makes the default depend on a project continuing to exist. The default should instead be *baked in*, with the template project reduced to a one-time source for capturing it — and layouts should be saveable and reusable in their own right, exactly as styles are.
+
+**Runs after session 18**, and deliberately mirrors it: a layout preset is the same kind of object as a style preset, so it should copy that pattern rather than invent a second one.
+
+**Model:** Sonnet 5, `high`
+**Estimate:** 3–4 h · 250–350k tokens · ~1 window
+
+````
+Read db.py's DEFAULT_WIDGETS, TEMPLATE_PROJECT_TITLE and
+seed_project_defaults(), session 18's styles table and its save/load controls
+in appearance-panel.js, top-bar.js, and the widget config shapes in
+widgets/folder.js, analysis.js, colour-palette.js and sidebar.js first.
+
+1. Bake in the default. Read the current "Default Project Layout" project's
+   widget rows and hard-code them as DEFAULT_WIDGETS -- types, positions,
+   sizes, config and any parent_id nesting. Then remove the live lookup:
+   seed_project_defaults() should no longer query TEMPLATE_PROJECT_TITLE at
+   creation time.
+
+   The point is that deleting that project must not change what a new project
+   looks like. It exists only as a convenient way to SHOW what the default
+   should be; once captured, it is an ordinary project.
+
+   Keep the referencing idea, though -- it becomes item 2's "save this
+   project's layout", which is the same operation performed on demand rather
+   than at every project creation.
+
+2. New table, following session 18's styles table exactly:
+
+     layouts  id TEXT PK, name TEXT NOT NULL, widgets TEXT NOT NULL,
+              date_created TEXT NOT NULL
+
+   `widgets` is the serialised widget list. A layout is INDEPENDENT of the
+   project it came from: deleting that project must leave the layout usable.
+   Store the widget data itself, never project or widget ids pointing back.
+
+   Routes mirroring the styles ones: GET /api/layouts,
+   POST /api/layouts {name, project_id}, PUT /api/layouts/<id>,
+   DELETE /api/layouts/<id>.
+
+3. What a layout captures, and what it must not:
+     captures  -- widget types, x/y/w/h, config, locked, position, parent_id
+                  nesting
+     excludes  -- references, folders, canvas nodes and edges, and appearance
+   Appearance is session 18's job and stays separate. A project should be able
+   to take a layout from one source and a style from another.
+
+4. Save and load controls beside session 18's style controls in the top bar:
+   "Save current layout" (prompts for a name) and a dropdown of saved layouts.
+   A permanent "Default" entry at the top loads the baked-in DEFAULT_WIDGETS --
+   it is not a row in the table, exactly as "Default" is not a row in styles.
+   Default remains what a newly created project gets.
+
+5. Two things loading a layout must get right:
+
+   PERMANENT WIDGETS. settings, exit and canvas cannot be deleted, and a
+   project must never end up without them. Loading a layout replaces the
+   arrangement, so decide deliberately: reposition the existing permanent
+   widgets to match the layout's entries for those types, and if the layout
+   has no entry for one, leave it where it is rather than dropping it. Do not
+   delete and recreate them -- the API refuses, and it would break the
+   canvas's only door.
+
+   PROJECT-SCOPED CONFIG. Several widget configs carry ids that mean nothing
+   in another project: folder.js's folder_id, analysis.js's analysis_id,
+   colour-palette.js's reference_ids. Carrying them across would produce
+   widgets pointing at another project's data. Strip these on load, leaving
+   the widget in its unconfigured state, and say in a comment which fields are
+   project-scoped so a new widget type gets added to that list rather than
+   quietly breaking. Consider whether saving should strip them instead --
+   pick one, and be consistent.
+
+Verify: capture the default, delete the "Default Project Layout" project, and
+confirm a new project still gets the right layout at full width; save a layout
+from one project and load it in another; delete the source project and confirm
+the layout still loads; a loaded layout leaves settings/exit/canvas present;
+a folder widget arriving via a layout does not point at the source project's
+folder; loading a layout does not change appearance, and loading a style does
+not change layout.
+````
+
+**Exit criteria:** the default survives deleting its source project, layouts round-trip independently, and layout and appearance stay separable.
 
 ---
 
