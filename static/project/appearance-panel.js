@@ -54,6 +54,14 @@ function colourRow(id, label) {
 // picking one never moves when the theme changes, only Default does.
 const DEFAULT_STYLE_VALUE = "";
 
+// A hidden, unselectable third option -- shown only when the project's
+// current settings match neither {} nor any saved style (e.g. a colour was
+// hand-tweaked after applying one). Without it the select would have to fall
+// back to displaying "Default" for a state that isn't actually Default, and
+// a later click on the real Default option -- already the displayed value as
+// far as the <select> is concerned -- wouldn't fire a change event at all.
+const CUSTOM_STYLE_VALUE = "__custom__";
+
 function styleRow() {
   const wrap = document.createElement("div");
   wrap.className = "colour-control";
@@ -234,6 +242,10 @@ export function createAppearancePanel({ projectId }) {
     if (!res.ok) return;
     const body = await res.json();
     window.projectAppearance?.set(body.settings);
+    // Whatever just got written might now match a different style (or none,
+    // or Default) than the picker was showing -- e.g. a colour tweaked by
+    // hand after a style was applied no longer matches that style exactly.
+    syncStyleSelect();
   }
 
   async function persist() {
@@ -293,7 +305,19 @@ export function createAppearancePanel({ projectId }) {
 
   let styles = []; // [{ id, name, settings, date_created }, ...]
 
-  function populateStyleSelect() {
+  // There is no project_settings column recording which style (if any) is
+  // "active" -- a project only ever stores the resolved settings a style
+  // left behind (see putSettings). So the select's value is derived fresh,
+  // by comparing those settings against every loaded style rather than
+  // remembered, each time either side could have changed.
+  function settingsEqual(a, b) {
+    const aKeys = Object.keys(a || {});
+    const bKeys = Object.keys(b || {});
+    if (aKeys.length !== bKeys.length) return false;
+    return aKeys.every((key) => (a || {})[key] === (b || {})[key]);
+  }
+
+  function buildStyleOptions() {
     styleRowEls.select.innerHTML = "";
     const defaultOption = document.createElement("option");
     defaultOption.value = DEFAULT_STYLE_VALUE;
@@ -305,17 +329,34 @@ export function createAppearancePanel({ projectId }) {
       option.textContent = style.name;
       styleRowEls.select.appendChild(option);
     }
-    // The select is a picker, not a display of current state -- a project
-    // never records which style (if any) it was last set from, only the
-    // resolved settings that came out of it (see putSettings/persist). It
-    // always resets to "Default" rather than trying to guess a match.
-    styleRowEls.select.value = DEFAULT_STYLE_VALUE;
+    // Never offered as a real choice -- hidden from the open dropdown and
+    // disabled so a user can't select it directly -- it only exists so the
+    // closed select has a label for "none of the above" instead of falling
+    // back to Default's own value, which would make Default's box misreport
+    // custom settings as itself. See CUSTOM_STYLE_VALUE.
+    const customOption = document.createElement("option");
+    customOption.value = CUSTOM_STYLE_VALUE;
+    customOption.textContent = "Custom";
+    customOption.hidden = true;
+    customOption.disabled = true;
+    styleRowEls.select.appendChild(customOption);
+  }
+
+  function syncStyleSelect() {
+    const current = saved();
+    if (Object.keys(current).length === 0) {
+      styleRowEls.select.value = DEFAULT_STYLE_VALUE;
+      return;
+    }
+    const match = styles.find((s) => settingsEqual(s.settings, current));
+    styleRowEls.select.value = match ? match.id : CUSTOM_STYLE_VALUE;
   }
 
   async function loadStyles() {
     const res = await fetch("/api/styles");
     styles = res.ok ? await res.json() : [];
-    populateStyleSelect();
+    buildStyleOptions();
+    syncStyleSelect();
   }
 
   styleRowEls.select.addEventListener("change", async () => {
@@ -328,7 +369,7 @@ export function createAppearancePanel({ projectId }) {
     const next = value === DEFAULT_STYLE_VALUE ? {} : styles.find((s) => s.id === value)?.settings;
     if (next === undefined) return;
     window.projectAppearance?.apply(next); // immediate preview, same path every input uses
-    await putSettings(next);
+    await putSettings(next); // also resyncs the select once the write lands
     fillForm();
   });
 
