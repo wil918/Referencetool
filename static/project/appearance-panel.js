@@ -46,6 +46,30 @@ function colourRow(id, label) {
   return { wrap, input };
 }
 
+// The style picker's own value space, kept separate from a real style's id:
+// "" always means "Default", i.e. no saved row at all but the instruction to
+// clear every appearance override so the project falls back to style.css's
+// globals and starts following the light/dark toggle again. A saved style,
+// by contrast, is a fixed set of colours copied out of project_settings --
+// picking one never moves when the theme changes, only Default does.
+const DEFAULT_STYLE_VALUE = "";
+
+function styleRow() {
+  const wrap = document.createElement("div");
+  wrap.className = "colour-control";
+  const label = document.createElement("label");
+  label.setAttribute("for", "appearance-style-select");
+  label.textContent = "Style";
+  const select = document.createElement("select");
+  select.id = "appearance-style-select";
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "btn";
+  saveBtn.textContent = "Save current style";
+  wrap.append(label, select, saveBtn);
+  return { wrap, select, saveBtn };
+}
+
 function fontRow(id, label) {
   const wrap = document.createElement("div");
   wrap.className = "colour-control";
@@ -118,7 +142,9 @@ export function createAppearancePanel({ projectId }) {
   );
   advancedWrap.append(advancedToggle, dropdown);
 
-  el.append(bg.wrap, ink.wrap, accent.wrap, scaleWrap, advancedWrap);
+  const styleRowEls = styleRow();
+
+  el.append(styleRowEls.wrap, bg.wrap, ink.wrap, accent.wrap, scaleWrap, advancedWrap);
 
   // style.css's colour custom properties are plain #rrggbb, so they drop
   // straight into <input type="color"> with no conversion.
@@ -195,8 +221,11 @@ export function createAppearancePanel({ projectId }) {
 
   let saveTimer = null;
 
-  async function persist() {
-    const next = { ...saved(), ...formValue() };
+  // The one place that writes a project's settings wholesale -- both the
+  // per-field autosave below and the style picker (applying a style or
+  // "Default") funnel through this, so there is only ever one path from "new
+  // settings object" to "persisted and applied".
+  async function putSettings(next) {
     const res = await fetch(`/api/projects/${projectId}/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -205,6 +234,10 @@ export function createAppearancePanel({ projectId }) {
     if (!res.ok) return;
     const body = await res.json();
     window.projectAppearance?.set(body.settings);
+  }
+
+  async function persist() {
+    await putSettings({ ...saved(), ...formValue() });
   }
 
   function onInput() {
@@ -256,10 +289,83 @@ export function createAppearancePanel({ projectId }) {
     document.addEventListener("mousedown", onOutsideAdvanced, true);
   });
 
+  // --- styles: named, global, reusable snapshots of an appearance ----------
+
+  let styles = []; // [{ id, name, settings, date_created }, ...]
+
+  function populateStyleSelect() {
+    styleRowEls.select.innerHTML = "";
+    const defaultOption = document.createElement("option");
+    defaultOption.value = DEFAULT_STYLE_VALUE;
+    defaultOption.textContent = "Default (follows theme)";
+    styleRowEls.select.appendChild(defaultOption);
+    for (const style of styles) {
+      const option = document.createElement("option");
+      option.value = style.id;
+      option.textContent = style.name;
+      styleRowEls.select.appendChild(option);
+    }
+    // The select is a picker, not a display of current state -- a project
+    // never records which style (if any) it was last set from, only the
+    // resolved settings that came out of it (see putSettings/persist). It
+    // always resets to "Default" rather than trying to guess a match.
+    styleRowEls.select.value = DEFAULT_STYLE_VALUE;
+  }
+
+  async function loadStyles() {
+    const res = await fetch("/api/styles");
+    styles = res.ok ? await res.json() : [];
+    populateStyleSelect();
+  }
+
+  styleRowEls.select.addEventListener("change", async () => {
+    const value = styleRowEls.select.value;
+    // "Default" clears every appearance override for this project outright
+    // -- it is not a style with an id, just the instruction to fall back to
+    // style.css's globals, which is what makes the theme toggle affect this
+    // project again. Every real style is a fixed snapshot of colours and
+    // stays put when the theme changes.
+    const next = value === DEFAULT_STYLE_VALUE ? {} : styles.find((s) => s.id === value)?.settings;
+    if (next === undefined) return;
+    window.projectAppearance?.apply(next); // immediate preview, same path every input uses
+    await putSettings(next);
+    fillForm();
+  });
+
+  styleRowEls.saveBtn.addEventListener("click", async () => {
+    const name = window.prompt("Save the current appearance as a style named:");
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    const existing = styles.find((s) => s.name === trimmed);
+    if (existing) {
+      if (!window.confirm(`A style named "${trimmed}" already exists. Overwrite it?`)) return;
+      const res = await fetch(`/api/styles/${existing.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings: saved() }),
+      });
+      if (!res.ok) return;
+    } else {
+      const res = await fetch("/api/styles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmed, settings: saved() }),
+      });
+      if (!res.ok) return;
+    }
+    await loadStyles();
+  });
+
   return {
-    show() {
+    async show() {
       fillForm();
       showSection("appearance", el);
+      // Styles are global -- another project may have saved or deleted one
+      // since this panel last opened, so the list is refreshed every time
+      // rather than cached for the page's lifetime.
+      await loadStyles();
     },
     hide() {
       // A colour picked a moment before edit mode ends (or the format

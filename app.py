@@ -629,6 +629,61 @@ def api_save_project_settings(project_id):
     return jsonify({"settings": db.get_project_settings(project_id)})
 
 
+# --- Styles: saved appearance presets, global ---------------------------------
+#
+# A style is a named copy of a project_settings blob, reusable across
+# projects. There is deliberately no id linking a project back to the style
+# it was applied from -- applying one just writes its settings into that
+# project's own project_settings row, so deleting the style afterwards can
+# never change a project that used it.
+
+
+@app.get("/api/styles")
+def api_list_styles():
+    return jsonify(db.list_styles())
+
+
+@app.post("/api/styles")
+def api_create_style():
+    body = request.get_json(force=True, silent=True) or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "a name is required"}), 400
+    settings = body.get("settings")
+    if not isinstance(settings, dict):
+        return jsonify({"error": "settings must be an object"}), 400
+    style_id = str(uuid.uuid4())
+    db.create_style(style_id, name, settings)
+    return jsonify(db.get_style(style_id))
+
+
+@app.put("/api/styles/<style_id>")
+def api_update_style(style_id):
+    if not db.get_style(style_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    name = None
+    if "name" in body:
+        name = (body.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "a name is required"}), 400
+    settings = None
+    if "settings" in body:
+        settings = body.get("settings")
+        if not isinstance(settings, dict):
+            return jsonify({"error": "settings must be an object"}), 400
+    db.update_style(style_id, name=name, settings=settings)
+    return jsonify(db.get_style(style_id))
+
+
+@app.delete("/api/styles/<style_id>")
+def api_delete_style(style_id):
+    if not db.get_style(style_id):
+        abort(404)
+    db.delete_style(style_id)
+    return jsonify({"ok": True, "id": style_id})
+
+
 # --- Project space: canvas --------------------------------------------------
 #
 # Positions here are canvas world coordinates. The per-node routes are what the

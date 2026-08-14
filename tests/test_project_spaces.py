@@ -412,6 +412,63 @@ def test_settings_must_be_an_object(client):
     assert response.status_code == 400
 
 
+# --- Styles -------------------------------------------------------------------
+
+
+def test_styles_are_created_listed_and_fetched(client):
+    assert client.get("/api/styles").get_json() == []
+
+    settings = {"bg": "#123456", "accent": "#abcdef"}
+    created = client.post("/api/styles", json={"name": "Warm", "settings": settings})
+    assert created.status_code == 200
+    body = created.get_json()
+    assert body["name"] == "Warm"
+    assert body["settings"] == settings
+
+    listed = client.get("/api/styles").get_json()
+    assert [s["id"] for s in listed] == [body["id"]]
+
+
+def test_style_requires_a_name_and_object_settings(client):
+    assert client.post("/api/styles", json={"name": "", "settings": {}}).status_code == 400
+    assert client.post("/api/styles", json={"name": "X", "settings": [1]}).status_code == 400
+
+
+def test_style_can_be_renamed_and_resaved(client):
+    created = client.post("/api/styles", json={"name": "Warm", "settings": {"bg": "#111"}})
+    style_id = created.get_json()["id"]
+
+    renamed = client.put(f"/api/styles/{style_id}", json={"name": "Warmer"})
+    assert renamed.get_json()["name"] == "Warmer"
+    assert renamed.get_json()["settings"] == {"bg": "#111"}
+
+    resaved = client.put(f"/api/styles/{style_id}", json={"settings": {"bg": "#222"}})
+    assert resaved.get_json()["name"] == "Warmer"
+    assert resaved.get_json()["settings"] == {"bg": "#222"}
+
+
+def test_deleting_a_style_does_not_alter_a_project_that_used_it(client):
+    """A project stores a resolved copy of the style's settings, not a
+    reference to the style's id -- deleting the style afterwards must leave
+    every project that applied it exactly as it was."""
+    style_settings = {"bg": "#7c5c42", "accent": "#c23b2e"}
+    style_id = client.post("/api/styles", json={"name": "Autumn", "settings": style_settings}).get_json()["id"]
+
+    project_id = make_project(client)
+    # Applying a style is just writing its settings into the project's own
+    # project_settings row -- the same route the appearance panel uses.
+    client.put(f"/api/projects/{project_id}/settings", json={"settings": style_settings})
+
+    assert client.delete(f"/api/styles/{style_id}").status_code == 200
+    assert client.get("/api/styles").get_json() == []
+    assert client.get(f"/api/projects/{project_id}/settings").get_json()["settings"] == style_settings
+
+
+def test_style_routes_require_a_real_style(client):
+    assert client.put("/api/styles/nope", json={"name": "X"}).status_code == 404
+    assert client.delete("/api/styles/nope").status_code == 404
+
+
 # --- Canvas -----------------------------------------------------------------
 
 

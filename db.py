@@ -204,6 +204,23 @@ CREATE TABLE IF NOT EXISTS project_settings (
 );
 """
 
+# Saved appearance presets, global rather than per project -- the point is
+# reusing one look across projects, so there is no project_id here at all.
+# `settings` is the exact same JSON shape project_settings stores; saving a
+# style is a copy of the project's current settings blob, and applying one is
+# a copy back. A project that applies a style then stores the copy as its own
+# project_settings row -- deleting the style later must not change that
+# project (see delete_style), so there is deliberately no foreign key from
+# either table to the other.
+STYLES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS styles (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    settings TEXT NOT NULL,
+    date_created TEXT NOT NULL
+);
+"""
+
 # Nodes on a project's infinite canvas.
 #
 # One table for all three kinds (reference | text | widget) rather than three,
@@ -316,6 +333,7 @@ def init_db():
         conn.execute(FOLDER_REFERENCES_SCHEMA)
         conn.execute(WIDGETS_SCHEMA)
         conn.execute(PROJECT_SETTINGS_SCHEMA)
+        conn.execute(STYLES_SCHEMA)
         conn.execute(CANVAS_NODES_SCHEMA)
         conn.execute(CANVAS_EDGES_SCHEMA)
         for ddl in PROJECT_SPACE_INDEXES:
@@ -1317,6 +1335,57 @@ def save_project_settings(project_id, settings):
                ON CONFLICT(project_id) DO UPDATE SET settings = excluded.settings""",
             (project_id, json.dumps(settings)),
         )
+
+
+# --- Styles: saved appearance presets, global ---------------------------------
+
+
+def _style_to_dict(row):
+    d = dict(row)
+    d["settings"] = json.loads(d["settings"]) if d["settings"] else {}
+    return d
+
+
+def list_styles():
+    """Every saved style, newest first."""
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM styles ORDER BY date_created DESC").fetchall()
+        return [_style_to_dict(r) for r in rows]
+
+
+def get_style(style_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM styles WHERE id = ?", (style_id,)).fetchone()
+        return _style_to_dict(row) if row else None
+
+
+def create_style(style_id, name, settings):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO styles (id, name, settings, date_created) VALUES (?, ?, ?, ?)""",
+            (style_id, name, json.dumps(settings), datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def update_style(style_id, name=None, settings=None):
+    """Rename a style, replace its settings, or both."""
+    with get_conn() as conn:
+        if name is not None:
+            conn.execute("UPDATE styles SET name = ? WHERE id = ?", (name, style_id))
+        if settings is not None:
+            conn.execute(
+                "UPDATE styles SET settings = ? WHERE id = ?",
+                (json.dumps(settings), style_id),
+            )
+
+
+def delete_style(style_id):
+    """Delete a style. Projects store their own resolved settings copy in
+    project_settings, not a reference to this row, so nothing else needs
+    cleaning up -- a project that was using this style keeps looking exactly
+    as it did."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM styles WHERE id = ?", (style_id,))
 
 
 # --- Project spaces: canvas --------------------------------------------------
