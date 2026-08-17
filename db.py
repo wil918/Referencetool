@@ -221,6 +221,22 @@ CREATE TABLE IF NOT EXISTS styles (
 );
 """
 
+# Saved widget arrangements, global rather than per project -- same shape of
+# idea as styles above, but for layout instead of appearance. `widgets` is a
+# JSON list of portable widget entries (see capture_layout_widgets): type,
+# geometry, config and parent nesting, with nesting expressed as an index into
+# this same list rather than a widget or project id, so a layout carries no
+# reference back to the project it was captured from -- deleting that project
+# leaves every layout saved from it fully usable.
+LAYOUTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS layouts (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    widgets TEXT NOT NULL,
+    date_created TEXT NOT NULL
+);
+"""
+
 # Nodes on a project's infinite canvas.
 #
 # One table for all three kinds (reference | text | widget) rather than three,
@@ -270,25 +286,28 @@ PROJECT_SPACE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_canvas_edges_project ON canvas_edges(project_id)",
 )
 
-# What a brand new project starts with, when there is no template project to
-# copy (see TEMPLATE_PROJECT_TITLE below). The folder names are the six
-# lenses the tool thinks in; the widgets are the minimum for a usable
-# homepage -- a title, the two permanent controls, and the way into the
-# canvas. Positions are grid cells in the 24-column homepage grid.
+# What a brand new project starts with. The folder names are the six lenses
+# the tool thinks in. The widgets are a hand-frozen snapshot of what a project
+# called "Default Project Layout" looked like when this was captured -- baked
+# in as plain data rather than looked up at creation time, so deleting that
+# project (or never having made one) can never change what a new project
+# starts with; it was only ever a convenient place to arrange the default by
+# eye. Positions are grid cells in the 24-column homepage grid.
+#
+# Each entry is the same portable shape a saved layout's `widgets` column
+# holds (see capture_layout_widgets): type, geometry, config and a `parent`
+# that is an index into this same tuple (never a widget id) for nesting --
+# None here throughout, since this default has no container widgets.
 DEFAULT_FOLDER_NAMES = ("Texture", "Colour", "Form", "Vibe", "Fashion", "Narrative")
 DEFAULT_WIDGETS = (
-    # type, x, y, w, h
-    ("title", 0, 0, 24, 2),
-    ("canvas", 0, 2, 12, 4),
-    ("settings", 12, 2, 6, 2),
-    ("exit", 18, 2, 6, 2),
+    {"type": "title", "x": 9, "y": 0, "w": 6, "h": 2, "locked": False, "config": None, "parent": None},
+    {"type": "settings", "x": 21, "y": 0, "w": 1, "h": 1, "locked": False, "config": None, "parent": None},
+    {"type": "exit", "x": 22, "y": 0, "w": 2, "h": 1, "locked": False, "config": None, "parent": None},
+    {"type": "grid-button", "x": 21, "y": 1, "w": 3, "h": 1, "locked": False, "config": None, "parent": None},
+    {"type": "colourspace", "x": 0, "y": 2, "w": 9, "h": 12, "locked": False, "config": None, "parent": None},
+    {"type": "notepad", "x": 9, "y": 2, "w": 6, "h": 12, "locked": False, "config": {"content": ""}, "parent": None},
+    {"type": "canvas", "x": 15, "y": 2, "w": 9, "h": 12, "locked": False, "config": None, "parent": None},
 )
-
-# A project with this title, if one exists, is the template new projects seed
-# their widget layout and appearance from -- see seed_project_defaults(). Not
-# a special project in any other way: it's renameable and deletable like any
-# other, and losing it just means new projects fall back to DEFAULT_WIDGETS.
-TEMPLATE_PROJECT_TITLE = "Default Project Layout"
 
 COLOUR_ANALYSIS_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_colour_version ON colour_analysis(version)",
@@ -341,6 +360,7 @@ def init_db():
         conn.execute(WIDGETS_SCHEMA)
         conn.execute(PROJECT_SETTINGS_SCHEMA)
         conn.execute(STYLES_SCHEMA)
+        conn.execute(LAYOUTS_SCHEMA)
         conn.execute(CANVAS_NODES_SCHEMA)
         conn.execute(CANVAS_EDGES_SCHEMA)
         for ddl in PROJECT_SPACE_INDEXES:
@@ -933,17 +953,15 @@ def count_image_references():
 
 
 def seed_project_defaults(project_id):
-    """Give a brand new project its starting folders, widgets and appearance.
+    """Give a brand new project its starting folders and widgets.
 
-    The six folders are always the same starting lenses. Widgets and
-    appearance come from the TEMPLATE_PROJECT_TITLE project when one exists --
-    a user-maintained project the app treats as no more than a source to copy
-    from, not a protected special case -- so its layout, sizes and config
-    (including any container/child nesting) become the starting point for
-    every new project instead of the bare DEFAULT_WIDGETS tuple. Its
-    references, folders and canvas are deliberately not copied: those are
-    per-project content, not layout. Falls back to DEFAULT_WIDGETS untouched
-    when no template project exists, so a fresh install still works.
+    The six folders are always the same starting lenses. Widgets always come
+    from the baked-in DEFAULT_WIDGETS -- no project is consulted at creation
+    time, so nothing a user does to any project (including deleting one
+    called "Default Project Layout") can change what a new project starts
+    with. Appearance is deliberately not seeded: a new project starts with no
+    project_settings row and follows style.css's global theme, same as
+    picking "Default" from the style picker (see appearance-panel.js).
 
     One transaction rather than many separate calls, so a project is never
     briefly visible with half a project space. Ids are minted here for the
@@ -959,45 +977,22 @@ def seed_project_defaults(project_id):
                 for position, name in enumerate(DEFAULT_FOLDER_NAMES)
             ],
         )
-
-        template = conn.execute(
-            "SELECT id FROM projects WHERE title = ? ORDER BY date_created LIMIT 1",
-            (TEMPLATE_PROJECT_TITLE,),
-        ).fetchone()
-
-        if template:
-            _copy_widgets(conn, template["id"], project_id, now)
-            settings_row = conn.execute(
-                "SELECT settings FROM project_settings WHERE project_id = ?",
-                (template["id"],),
-            ).fetchone()
-            if settings_row:
-                conn.execute(
-                    """INSERT INTO project_settings (project_id, settings) VALUES (?, ?)
-                       ON CONFLICT(project_id) DO UPDATE SET settings = excluded.settings""",
-                    (project_id, settings_row["settings"]),
-                )
-        else:
-            conn.executemany(
-                """INSERT INTO widgets
-                       (id, project_id, type, parent_id, x, y, w, h, locked, config,
-                        position, date_created)
-                   VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 0, NULL, ?, ?)""",
-                [
-                    (str(uuid.uuid4()), project_id, type_, x, y, w, h, position, now)
-                    for position, (type_, x, y, w, h) in enumerate(DEFAULT_WIDGETS)
-                ],
-            )
+        _insert_layout_widgets(conn, project_id, DEFAULT_WIDGETS, now)
 
 
-def _copy_widgets(conn, source_project_id, dest_project_id, now):
-    """Copy every widget from one project to another, preserving parent_id
-    nesting by remapping the source ids to freshly minted ones."""
-    rows = conn.execute(
-        "SELECT * FROM widgets WHERE project_id = ? ORDER BY position, date_created",
-        (source_project_id,),
-    ).fetchall()
-    id_map = {row["id"]: str(uuid.uuid4()) for row in rows}
+def _insert_layout_widgets(conn, project_id, entries, now):
+    """Insert a portable widget list (the shape DEFAULT_WIDGETS and a saved
+    layout's `widgets` column both use) into a project, minting fresh ids and
+    resolving each entry's `parent` -- an index into `entries` itself, never a
+    real widget id -- to the newly minted id at that index.
+
+    Only used for a brand new project (seed_project_defaults), which has no
+    widgets yet to collide with. Loading a saved layout into a project that
+    already has widgets is a client-side operation instead (see
+    project/main.js's loadLayout) -- it has to decide what happens to the
+    existing permanent widgets, which this helper has no notion of.
+    """
+    ids = [str(uuid.uuid4()) for _ in entries]
     conn.executemany(
         """INSERT INTO widgets
                (id, project_id, type, parent_id, x, y, w, h, locked, config,
@@ -1005,20 +1000,20 @@ def _copy_widgets(conn, source_project_id, dest_project_id, now):
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         [
             (
-                id_map[row["id"]],
-                dest_project_id,
-                row["type"],
-                id_map.get(row["parent_id"]),
-                row["x"],
-                row["y"],
-                row["w"],
-                row["h"],
-                row["locked"],
-                row["config"],
-                row["position"],
+                ids[position],
+                project_id,
+                entry["type"],
+                ids[entry["parent"]] if entry.get("parent") is not None else None,
+                entry["x"],
+                entry["y"],
+                entry["w"],
+                entry["h"],
+                1 if entry.get("locked") else 0,
+                json.dumps(entry["config"]) if entry.get("config") is not None else None,
+                position,
                 now,
             )
-            for row in rows
+            for position, entry in enumerate(entries)
         ],
     )
 
@@ -1454,6 +1449,97 @@ def delete_style(style_id):
     as it did."""
     with get_conn() as conn:
         conn.execute("DELETE FROM styles WHERE id = ?", (style_id,))
+
+
+# --- Layouts: saved widget arrangements, global -------------------------------
+#
+# A layout is a named, portable snapshot of one project's widgets -- type,
+# geometry, config and parent nesting -- captured at save time and never
+# touched again by anything that happens to the source project afterwards.
+# There is deliberately no project_id column and no widget id anywhere in
+# `widgets`: nesting is expressed as an index into the entry list itself (see
+# capture_layout_widgets), so a layout stays fully usable after the project it
+# came from is deleted. Applying a layout to a project (as opposed to saving
+# or renaming one) is a client-side operation -- see project/main.js's
+# loadLayout -- because it has to decide what happens to the destination
+# project's existing permanent widgets, which no amount of data modelling
+# here can express.
+
+
+def capture_layout_widgets(project_id):
+    """This project's widgets, in the portable shape a layout stores.
+
+    Each entry carries what the widget looks like (type, x/y/w/h, locked,
+    config) and where it sits in the nesting -- `parent`, the index of its
+    parent *within this same list*, or None on the grid. That index is the
+    only thing standing in for parent_id: it means nothing outside the list
+    it was built from, which is exactly what makes the result independent of
+    both this project and these widgets' real ids.
+    """
+    rows = list_widgets(project_id)
+    index_by_id = {row["id"]: position for position, row in enumerate(rows)}
+    return [
+        {
+            "type": row["type"],
+            "x": row["x"],
+            "y": row["y"],
+            "w": row["w"],
+            "h": row["h"],
+            "locked": row["locked"],
+            "config": row["config"],
+            "parent": index_by_id.get(row["parent_id"]),
+        }
+        for row in rows
+    ]
+
+
+def _layout_to_dict(row):
+    d = dict(row)
+    d["widgets"] = json.loads(d["widgets"]) if d["widgets"] else []
+    return d
+
+
+def list_layouts():
+    """Every saved layout, newest first."""
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM layouts ORDER BY date_created DESC").fetchall()
+        return [_layout_to_dict(r) for r in rows]
+
+
+def get_layout(layout_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM layouts WHERE id = ?", (layout_id,)).fetchone()
+        return _layout_to_dict(row) if row else None
+
+
+def create_layout(layout_id, name, project_id):
+    """Save project_id's current widgets as a new named layout."""
+    widgets = capture_layout_widgets(project_id)
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO layouts (id, name, widgets, date_created) VALUES (?, ?, ?, ?)""",
+            (layout_id, name, json.dumps(widgets), datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def update_layout(layout_id, name=None, project_id=None):
+    """Rename a layout, re-capture its widgets from project_id, or both."""
+    widgets = capture_layout_widgets(project_id) if project_id is not None else None
+    with get_conn() as conn:
+        if name is not None:
+            conn.execute("UPDATE layouts SET name = ? WHERE id = ?", (name, layout_id))
+        if widgets is not None:
+            conn.execute(
+                "UPDATE layouts SET widgets = ? WHERE id = ?",
+                (json.dumps(widgets), layout_id),
+            )
+
+
+def delete_layout(layout_id):
+    """Delete a layout. Nothing references it back -- a project that was
+    built from this layout keeps its widgets exactly as they are."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM layouts WHERE id = ?", (layout_id,))
 
 
 # --- Project spaces: canvas --------------------------------------------------

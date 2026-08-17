@@ -23,6 +23,9 @@ export default {
   permanent: false,
   defaultSize: { w: 2, h: 1 },
   minSize: { w: 1, h: 1 },
+  // folder_id means nothing outside the project it was set in -- see
+  // registry.js's projectScopedConfig.
+  projectScopedConfig: ["folder_id"],
 
   create(host) {
     const wrap = document.createElement("div");

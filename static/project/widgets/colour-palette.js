@@ -19,6 +19,9 @@ export default {
   permanent: false,
   defaultSize: { w: 4, h: 3 },
   minSize: { w: 2, h: 2 },
+  // reference_ids means nothing outside the project it was set in -- see
+  // registry.js's projectScopedConfig.
+  projectScopedConfig: ["reference_ids"],
 
   create(host) {
     const projectId = host.project.id;

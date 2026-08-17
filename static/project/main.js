@@ -344,10 +344,14 @@ async function saveLayout() {
  * type starts from nothing, but a folder widget (widgets/folder.js) is
  * meaningless without a folder_id, and the dock's per-folder cards
  * (shell.addableTypes below) carry one to seed here.
+ *
+ * `size` overrides the definition's defaultSize -- used only by loadLayout,
+ * which is recreating widgets at the exact w/h a saved layout captured them
+ * at, not whatever a fresh widget of that type would normally start at.
  */
-async function addWidget(type, position = null, parentId = null, config = null) {
+async function addWidget(type, position = null, parentId = null, config = null, size = null) {
   const definition = definitionFor(type);
-  const body = { type, w: definition.defaultSize.w, h: definition.defaultSize.h };
+  const body = { type, w: size?.w ?? definition.defaultSize.w, h: size?.h ?? definition.defaultSize.h };
   if (config) body.config = config;
   if (parentId) {
     body.parent_id = parentId;
@@ -392,6 +396,124 @@ async function removeWidget(id) {
   grid.removeItem(id);
   notifyStructureChange();
   return { ok: true };
+}
+
+// Strips a widget's project-scoped config keys (registry.js's
+// projectScopedConfig -- folder_id, analysis_id, reference_ids, so far)
+// before it lands as a fresh widget via loadLayout. Never applied at save
+// time: a saved layout stays a faithful capture of the project it came from,
+// and this only matters at the moment a widget is actually materialised
+// somewhere.
+function stripProjectScopedConfig(type, config) {
+  if (!config) return config;
+  const fields = definitionFor(type).projectScopedConfig;
+  if (!fields.length) return config;
+  const next = { ...config };
+  for (const field of fields) delete next[field];
+  return next;
+}
+
+/* Replace the grid's arrangement with a saved (or Default) layout -- the
+ * appearance panel's Layout picker (appearance-panel.js), passed this
+ * function at creation time. `entries` is a layout's `widgets` list (db.py's
+ * capture_layout_widgets / DEFAULT_WIDGETS): portable type/geometry/config,
+ * with `parent` an index into the same list rather than a widget id.
+ *
+ * Two things this has to get right that a plain "delete everything, create
+ * everything" wouldn't:
+ *
+ * - Permanent widgets (settings/exit/canvas) can't be deleted or created
+ *   through the API, and a project must never end up without one. So they're
+ *   the one type of entry that reuses an existing widget's id instead of
+ *   minting a new one -- repositioned to the entry's geometry if the layout
+ *   has one, left exactly where it is if it doesn't.
+ * - A child entry's `parent` only resolves once its parent has actually been
+ *   created (or, for a permanent parent, identified) -- hence two passes:
+ *   every top-level entry first, then everything parented to one of them.
+ *   Nesting is one level deep by design, so two passes are always enough.
+ */
+async function loadLayout(entries) {
+  const existingPermanentByType = new Map();
+  for (const row of gridRows()) {
+    if (definitionFor(row.type).permanent) existingPermanentByType.set(row.type, row);
+  }
+
+  // Snapshot first -- removeWidget mutates `rows` as it goes, and a
+  // container's children come along with it (mirroring db.py's cascade), so
+  // iterating gridRows() live here could skip or double-handle a row.
+  const toRemove = gridRows().filter((row) => !definitionFor(row.type).permanent);
+  for (const row of toRemove) {
+    if (rows.has(row.id)) await removeWidget(row.id);
+  }
+
+  const idByIndex = new Map();
+
+  // Pass 1: every entry with no parent. A permanent type resolves to its
+  // existing widget's id without touching the API; everything else,
+  // containers included, is created fresh at the entry's own geometry.
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (entry.parent != null) continue;
+    const definition = definitionFor(entry.type);
+    if (definition.permanent) {
+      const existing = existingPermanentByType.get(entry.type);
+      if (existing) idByIndex.set(i, existing.id);
+      continue;
+    }
+    const result = await addWidget(
+      entry.type,
+      { x: entry.x, y: entry.y },
+      null,
+      stripProjectScopedConfig(entry.type, entry.config),
+      { w: entry.w, h: entry.h }
+    );
+    if (result.ok) idByIndex.set(i, result.row.id);
+  }
+
+  // Pass 2: entries parented to something resolved in pass 1.
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (entry.parent == null) continue;
+    const parentId = idByIndex.get(entry.parent);
+    if (!parentId) continue; // parent's own creation failed or was skipped
+    const result = await addWidget(
+      entry.type,
+      null,
+      parentId,
+      stripProjectScopedConfig(entry.type, entry.config),
+      { w: entry.w, h: entry.h }
+    );
+    if (result.ok) idByIndex.set(i, result.row.id);
+  }
+
+  // One bulk commit for exact locking and ordering, and to reposition
+  // whichever permanent widgets the layout had entries for -- addWidget's
+  // POST has no notion of locked or position, and pass 1 above deliberately
+  // never touches a permanent widget's row directly.
+  const finalEntries = entries
+    .map((entry, i) => {
+      const id = idByIndex.get(i);
+      const row = id ? rows.get(id) : null;
+      if (!row) return null;
+      return {
+        id: row.id,
+        parent_id: entry.parent != null ? idByIndex.get(entry.parent) ?? null : null,
+        x: entry.x,
+        y: entry.y,
+        w: entry.w,
+        h: entry.h,
+        locked: Boolean(entry.locked),
+        position: i,
+      };
+    })
+    .filter(Boolean);
+  if (finalEntries.length) await putWidgets(finalEntries);
+
+  // A full resync rather than the incremental addItem/removeItem calls
+  // above: this is a wholesale replace, not an edit in progress, so there is
+  // no unsaved drag position anywhere worth preserving.
+  grid.setItems(gridRows().map(toItem));
+  notifyStructureChange();
 }
 
 /* The floating Save/Cancel control shown while the grid is being edited.
@@ -725,7 +847,7 @@ async function init() {
     cellFromPoint: grid.cellFromPoint,
     wouldFit: grid.wouldFit,
   });
-  const appearancePanel = createAppearancePanel({ projectId });
+  const appearancePanel = createAppearancePanel({ projectId, loadLayout });
 
   // Appearance shows only while editing *and* no widget is pinned to the
   // format toolbar -- project-wide defaults aren't what you want while

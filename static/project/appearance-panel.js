@@ -78,6 +78,37 @@ function styleRow() {
   return { wrap, select, saveBtn };
 }
 
+// Loads db.py's baked-in DEFAULT_WIDGETS -- not a row in the layouts table,
+// exactly as DEFAULT_STYLE_VALUE's "Default" is not a row in styles. Unlike
+// that value, it can't just be "" and mean "clear everything": there is
+// concrete widget data behind it, fetched on demand from
+// GET /api/layouts/default (see fetchDefaultLayoutWidgets below).
+const DEFAULT_LAYOUT_VALUE = "__default__";
+
+// The layout select always shows this placeholder between loads rather than
+// tracking a "currently active" value the way the style select does --
+// there's nothing to compare a project's live widgets against, so instead of
+// syncStyleSelect's settingsEqual dance, picking a layout is a one-shot
+// action: fire loadLayout, then reset back here so the same entry can be
+// picked again later.
+const LAYOUT_PLACEHOLDER_VALUE = "";
+
+function layoutRow() {
+  const wrap = document.createElement("div");
+  wrap.className = "colour-control";
+  const label = document.createElement("label");
+  label.setAttribute("for", "appearance-layout-select");
+  label.textContent = "Layout";
+  const select = document.createElement("select");
+  select.id = "appearance-layout-select";
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "btn";
+  saveBtn.textContent = "Save current layout";
+  wrap.append(label, select, saveBtn);
+  return { wrap, select, saveBtn };
+}
+
 function fontRow(id, label) {
   const wrap = document.createElement("div");
   wrap.className = "colour-control";
@@ -100,7 +131,7 @@ function fontRow(id, label) {
   return { wrap, select };
 }
 
-export function createAppearancePanel({ projectId }) {
+export function createAppearancePanel({ projectId, loadLayout }) {
   const el = document.createElement("div");
   el.className = "appearance-panel";
 
@@ -151,8 +182,9 @@ export function createAppearancePanel({ projectId }) {
   advancedWrap.append(advancedToggle, dropdown);
 
   const styleRowEls = styleRow();
+  const layoutRowEls = layoutRow();
 
-  el.append(styleRowEls.wrap, bg.wrap, ink.wrap, accent.wrap, scaleWrap, advancedWrap);
+  el.append(styleRowEls.wrap, layoutRowEls.wrap, bg.wrap, ink.wrap, accent.wrap, scaleWrap, advancedWrap);
 
   // style.css's colour custom properties are plain #rrggbb, so they drop
   // straight into <input type="color"> with no conversion.
@@ -399,14 +431,108 @@ export function createAppearancePanel({ projectId }) {
     await loadStyles();
   });
 
+  // --- layouts: named, global, reusable snapshots of a widget arrangement --
+  //
+  // Unlike appearance, a layout is not something this project is currently
+  // "in" -- loading one immediately creates/removes/repositions widgets
+  // (main.js's loadLayout) rather than previewing and debouncing a save the
+  // way every field above does, so there is no persist/preview split here.
+
+  let layouts = []; // [{ id, name, widgets, date_created }, ...]
+  let defaultLayoutWidgets = null; // fetched once, lazily -- see below
+
+  function buildLayoutOptions() {
+    layoutRowEls.select.innerHTML = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = LAYOUT_PLACEHOLDER_VALUE;
+    placeholder.textContent = "Load a layout…";
+    placeholder.disabled = true;
+    layoutRowEls.select.appendChild(placeholder);
+
+    const defaultOption = document.createElement("option");
+    defaultOption.value = DEFAULT_LAYOUT_VALUE;
+    defaultOption.textContent = "Default";
+    layoutRowEls.select.appendChild(defaultOption);
+
+    for (const layout of layouts) {
+      const option = document.createElement("option");
+      option.value = layout.id;
+      option.textContent = layout.name;
+      layoutRowEls.select.appendChild(option);
+    }
+    layoutRowEls.select.value = LAYOUT_PLACEHOLDER_VALUE;
+  }
+
+  async function loadLayoutList() {
+    const res = await fetch("/api/layouts");
+    layouts = res.ok ? await res.json() : [];
+    buildLayoutOptions();
+  }
+
+  // DEFAULT_WIDGETS is baked-in Python data, not a database row -- there is
+  // nothing for GET /api/layouts to return for it, so it comes from its own
+  // route and is cached here rather than refetched on every pick (it cannot
+  // change over a page's lifetime).
+  async function fetchDefaultLayoutWidgets() {
+    if (defaultLayoutWidgets) return defaultLayoutWidgets;
+    const res = await fetch("/api/layouts/default");
+    const body = res.ok ? await res.json() : { widgets: [] };
+    defaultLayoutWidgets = body.widgets;
+    return defaultLayoutWidgets;
+  }
+
+  layoutRowEls.select.addEventListener("change", async () => {
+    const value = layoutRowEls.select.value;
+    if (value === LAYOUT_PLACEHOLDER_VALUE) return;
+    const widgets =
+      value === DEFAULT_LAYOUT_VALUE
+        ? await fetchDefaultLayoutWidgets()
+        : layouts.find((l) => l.id === value)?.widgets;
+    // Reset immediately rather than after loadLayout resolves -- picking the
+    // same entry twice in a row must fire another change event each time.
+    layoutRowEls.select.value = LAYOUT_PLACEHOLDER_VALUE;
+    if (!widgets) return;
+    await loadLayout(widgets);
+  });
+
+  layoutRowEls.saveBtn.addEventListener("click", async () => {
+    const name = window.prompt("Save the current layout as:");
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    // Overwriting re-captures this project's widgets fresh, same as saving
+    // under a new name -- a stale snapshot under a reused name would be a
+    // worse surprise than the confirm below.
+    const existing = layouts.find((l) => l.name === trimmed);
+    if (existing) {
+      if (!window.confirm(`A layout named "${trimmed}" already exists. Overwrite it?`)) return;
+      const res = await fetch(`/api/layouts/${existing.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: projectId }),
+      });
+      if (!res.ok) return;
+    } else {
+      const res = await fetch("/api/layouts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmed, project_id: projectId }),
+      });
+      if (!res.ok) return;
+    }
+    await loadLayoutList();
+  });
+
   return {
     async show() {
       fillForm();
       showSection("appearance", el);
-      // Styles are global -- another project may have saved or deleted one
-      // since this panel last opened, so the list is refreshed every time
-      // rather than cached for the page's lifetime.
+      // Styles and layouts are both global -- another project may have saved
+      // or deleted one since this panel last opened, so the lists are
+      // refreshed every time rather than cached for the page's lifetime.
       await loadStyles();
+      await loadLayoutList();
     },
     hide() {
       // A colour picked a moment before edit mode ends (or the format

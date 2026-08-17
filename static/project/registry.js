@@ -10,8 +10,19 @@
  *     canvasEligible, // may also be dropped on the infinite canvas
  *     defaultSize: { w, h },
  *     minSize: { w, h },
+ *     projectScopedConfig, // config keys that point at ids meaningful only
+ *                          // within the project they were set in -- see
+ *                          // below. Optional; defaults to none.
  *     create(host) { ...; return { destroy() {} }; },
  *   }
+ *
+ * projectScopedConfig exists for widgets whose config holds an id from
+ * another table scoped to one project -- folder.js's folder_id, analysis.js's
+ * analysis_id, colour-palette.js's reference_ids. project/main.js's
+ * loadLayout strips exactly these keys from a widget's config when it
+ * materialises from a loaded layout, so it never ends up pointing at another
+ * project's data. A new widget type with a config field like this must list
+ * it here, or a saved layout will quietly carry it across projects.
  *
  * host also carries editMode -- { isEditing(), subscribe(fn) }, read-only,
  * given to every widget (see mountWidget below) -- and shell, the same shape
@@ -80,6 +91,7 @@ function normalise(definition) {
     canvasEligible: definition.canvasEligible ?? (!container && !permanent),
     defaultSize: { w: 3, h: 2, ...definition.defaultSize },
     minSize: { w: 1, h: 1, ...definition.minSize },
+    projectScopedConfig: definition.projectScopedConfig || [],
     isPlaceholder: false,
   };
 }

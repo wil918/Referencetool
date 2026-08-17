@@ -684,6 +684,73 @@ def api_delete_style(style_id):
     return jsonify({"ok": True, "id": style_id})
 
 
+# --- Layouts: saved widget arrangements, global -------------------------------
+#
+# A layout is a named, portable snapshot of one project's widgets (db.py's
+# capture_layout_widgets), reusable across projects the same way a style is.
+# Unlike a style, creating or refreshing one takes a project_id rather than
+# the data itself -- the client has no easy way to build the portable,
+# index-based nesting a layout stores, so the server reads the project fresh
+# and captures it. Applying a saved layout to a project is not a route here at
+# all: it has to reconcile the destination project's existing permanent
+# widgets, which is main.js's job (loadLayout), done entirely through the
+# ordinary widget routes above.
+
+
+@app.get("/api/layouts")
+def api_list_layouts():
+    return jsonify(db.list_layouts())
+
+
+@app.get("/api/layouts/default")
+def api_default_layout():
+    """The baked-in DEFAULT_WIDGETS, in the same shape a saved layout's
+    `widgets` field has -- not a row in the table, exactly as "Default" is not
+    a row in styles, but the layout picker still needs the actual data to
+    apply, unlike style's "Default" which just clears to {}."""
+    return jsonify({"widgets": list(db.DEFAULT_WIDGETS)})
+
+
+@app.post("/api/layouts")
+def api_create_layout():
+    body = request.get_json(force=True, silent=True) or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "a name is required"}), 400
+    project_id = body.get("project_id")
+    if not project_id:
+        return jsonify({"error": "a project_id is required"}), 400
+    _require_project(project_id)
+    layout_id = str(uuid.uuid4())
+    db.create_layout(layout_id, name, project_id)
+    return jsonify(db.get_layout(layout_id))
+
+
+@app.put("/api/layouts/<layout_id>")
+def api_update_layout(layout_id):
+    if not db.get_layout(layout_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    name = None
+    if "name" in body:
+        name = (body.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "a name is required"}), 400
+    project_id = body.get("project_id")
+    if project_id is not None:
+        _require_project(project_id)
+    db.update_layout(layout_id, name=name, project_id=project_id)
+    return jsonify(db.get_layout(layout_id))
+
+
+@app.delete("/api/layouts/<layout_id>")
+def api_delete_layout(layout_id):
+    if not db.get_layout(layout_id):
+        abort(404)
+    db.delete_layout(layout_id)
+    return jsonify({"ok": True, "id": layout_id})
+
+
 # --- Project space: canvas --------------------------------------------------
 #
 # Positions here are canvas world coordinates. The per-node routes are what the

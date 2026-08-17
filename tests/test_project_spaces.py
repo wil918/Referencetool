@@ -58,62 +58,48 @@ def test_new_project_gets_the_default_widget_set_and_nothing_else(client):
     project_id = make_project(client)
     widgets = client.get(f"/api/projects/{project_id}/widgets").get_json()
 
-    assert {w["type"] for w in widgets} == {"title", "canvas", "settings", "exit"}
+    assert {w["type"] for w in widgets} == {e["type"] for e in db.DEFAULT_WIDGETS}
     # The title sits at the top, and everything starts on the grid rather than
-    # inside a container.
+    # inside a container -- this default has no containers.
     assert widget_of_type(client, project_id, "title")["y"] == 0
     assert all(w["parent_id"] is None for w in widgets)
 
 
-def test_new_project_copies_widgets_and_appearance_from_the_template_project(client):
-    """When a project named db.TEMPLATE_PROJECT_TITLE exists, new projects
-    copy its widget layout and appearance instead of the hard-coded default
-    set."""
-    template_id = make_project(client, db.TEMPLATE_PROJECT_TITLE)
-    sidebar = client.post(
-        f"/api/projects/{template_id}/widgets",
-        json={"type": "sidebar", "x": 0, "y": 6, "w": 4, "h": 4},
-    ).get_json()
+def test_new_projects_are_unaffected_by_any_project_named_default_project_layout(client):
+    """DEFAULT_WIDGETS is baked-in data, hand-captured once from a project
+    that used to be looked up live by title -- that lookup is gone, so a
+    project with that title today is completely ordinary and editing it must
+    never leak into what a later project starts with."""
+    template_id = make_project(client, "Default Project Layout")
     client.post(
         f"/api/projects/{template_id}/widgets",
-        json={"type": "colourspace", "parent_id": sidebar["id"], "x": 0, "y": 0, "w": 2, "h": 2},
+        json={"type": "sidebar", "x": 0, "y": 20, "w": 4, "h": 4},
     )
-    template_widgets = client.get(f"/api/projects/{template_id}/widgets").get_json()
     client.put(
         f"/api/projects/{template_id}/settings",
-        json={"settings": {"appearance": {"background": "#123456"}}},
+        json={"settings": {"bg": "#123456"}},
     )
 
     project_id = make_project(client, "A fresh project")
     widgets = client.get(f"/api/projects/{project_id}/widgets").get_json()
     settings = client.get(f"/api/projects/{project_id}/settings").get_json()["settings"]
 
-    assert {w["type"] for w in widgets} == {w["type"] for w in template_widgets}
-    nested = next(w for w in widgets if w["type"] == "colourspace")
-    new_sidebar = next(w for w in widgets if w["type"] == "sidebar")
-    # Nesting survives the copy, remapped to the new project's own widget ids
-    # -- not the template's.
-    assert nested["parent_id"] == new_sidebar["id"]
-    assert nested["id"] != sidebar["id"]
-    assert settings["appearance"]["background"] == "#123456"
-
-    # Only the layout was copied -- not the template's references, folders or
-    # canvas.
-    assert db.count_project_references(project_id) == 0
+    assert {w["type"] for w in widgets} == {e["type"] for e in db.DEFAULT_WIDGETS}
+    assert settings == {}
 
 
-def test_new_project_falls_back_to_defaults_if_the_template_project_is_deleted(client):
-    template_id = make_project(client, db.TEMPLATE_PROJECT_TITLE)
+def test_deleting_the_default_project_layout_project_does_not_change_new_project_defaults(client):
+    template_id = make_project(client, "Default Project Layout")
     client.delete(f"/api/projects/{template_id}")
 
     project_id = make_project(client, "Still works")
     widgets = client.get(f"/api/projects/{project_id}/widgets").get_json()
 
-    assert {w["type"] for w in widgets} == {"title", "canvas", "settings", "exit"}
+    assert {w["type"] for w in widgets} == {e["type"] for e in db.DEFAULT_WIDGETS}
     title_widget = widget_of_type(client, project_id, "title")
-    # 24-column grid: the title spans the full width, not the stale
-    # 12-column half-width.
-    assert title_widget["w"] == 24
+    default_title = next(e for e in db.DEFAULT_WIDGETS if e["type"] == "title")
+    assert title_widget["x"] == default_title["x"]
+    assert title_widget["w"] == default_title["w"]
 
 
 def test_a_default_folder_can_be_renamed_and_deleted(client):
@@ -518,6 +504,97 @@ def test_deleting_a_style_does_not_alter_a_project_that_used_it(client):
 def test_style_routes_require_a_real_style(client):
     assert client.put("/api/styles/nope", json={"name": "X"}).status_code == 404
     assert client.delete("/api/styles/nope").status_code == 404
+
+
+# --- Layouts ------------------------------------------------------------------
+
+
+def test_layouts_are_created_listed_and_fetched(client):
+    assert client.get("/api/layouts").get_json() == []
+
+    project_id = make_project(client)
+    created = client.post("/api/layouts", json={"name": "My layout", "project_id": project_id})
+    assert created.status_code == 200
+    body = created.get_json()
+    assert body["name"] == "My layout"
+    assert {w["type"] for w in body["widgets"]} == {e["type"] for e in db.DEFAULT_WIDGETS}
+
+    listed = client.get("/api/layouts").get_json()
+    assert [l["id"] for l in listed] == [body["id"]]
+
+
+def test_layout_requires_a_name_and_a_real_project(client):
+    project_id = make_project(client)
+    assert client.post("/api/layouts", json={"name": "", "project_id": project_id}).status_code == 400
+    assert client.post("/api/layouts", json={"name": "X", "project_id": "nope"}).status_code == 404
+    assert client.post("/api/layouts", json={"name": "X"}).status_code == 400
+
+
+def test_layout_can_be_renamed_and_recaptured(client):
+    project_id = make_project(client)
+    created = client.post("/api/layouts", json={"name": "Snap", "project_id": project_id}).get_json()
+    layout_id = created["id"]
+
+    renamed = client.put(f"/api/layouts/{layout_id}", json={"name": "Snapshot"})
+    assert renamed.get_json()["name"] == "Snapshot"
+    assert renamed.get_json()["widgets"] == created["widgets"]
+
+    client.post(
+        f"/api/projects/{project_id}/widgets",
+        json={"type": "sidebar", "x": 0, "y": 20, "w": 4, "h": 4},
+    )
+    recaptured = client.put(f"/api/layouts/{layout_id}", json={"project_id": project_id})
+    assert recaptured.get_json()["name"] == "Snapshot"
+    assert "sidebar" in {w["type"] for w in recaptured.get_json()["widgets"]}
+
+
+def test_layout_widgets_carry_no_project_or_widget_ids(client):
+    """A layout must be independent of the project it was captured from --
+    no widget id, and nesting expressed only as an index within the captured
+    list itself (db.py's capture_layout_widgets)."""
+    project_id = make_project(client)
+    sidebar = client.post(
+        f"/api/projects/{project_id}/widgets",
+        json={"type": "sidebar", "x": 0, "y": 20, "w": 4, "h": 4},
+    ).get_json()
+    # "similarity" rather than "colourspace" -- DEFAULT_WIDGETS already seeds
+    # a top-level colourspace, and this needs to be the only widget of its
+    # type so the lookup below is unambiguous.
+    client.post(
+        f"/api/projects/{project_id}/widgets",
+        json={"type": "similarity", "parent_id": sidebar["id"], "x": 0, "y": 0, "w": 2, "h": 2},
+    )
+
+    body = client.post("/api/layouts", json={"name": "Nested", "project_id": project_id}).get_json()
+    widgets = body["widgets"]
+    assert all("id" not in entry and "project_id" not in entry for entry in widgets)
+
+    nested = next(w for w in widgets if w["type"] == "similarity")
+    parent = widgets[nested["parent"]]
+    assert parent["type"] == "sidebar"
+
+
+def test_deleting_the_source_project_leaves_a_saved_layout_usable(client):
+    project_id = make_project(client)
+    layout_id = client.post(
+        "/api/layouts", json={"name": "Keepsake", "project_id": project_id}
+    ).get_json()["id"]
+
+    assert client.delete(f"/api/projects/{project_id}").status_code == 200
+
+    listed = client.get("/api/layouts").get_json()
+    assert [l["id"] for l in listed] == [layout_id]
+    assert listed[0]["widgets"]
+
+
+def test_layout_routes_require_a_real_layout(client):
+    assert client.put("/api/layouts/nope", json={"name": "X"}).status_code == 404
+    assert client.delete("/api/layouts/nope").status_code == 404
+
+
+def test_default_layout_matches_the_baked_in_widgets(client):
+    body = client.get("/api/layouts/default").get_json()
+    assert body["widgets"] == list(db.DEFAULT_WIDGETS)
 
 
 # --- Canvas -----------------------------------------------------------------

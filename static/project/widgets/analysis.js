@@ -47,6 +47,9 @@ export default {
   permanent: false,
   defaultSize: { w: 5, h: 4 },
   minSize: { w: 2, h: 2 },
+  // analysis_id means nothing outside the project it was set in -- see
+  // registry.js's projectScopedConfig.
+  projectScopedConfig: ["analysis_id"],
 
   create(host) {
     const projectId = host.project.id;
