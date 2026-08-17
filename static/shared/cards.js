@@ -53,16 +53,55 @@ export function markSelectable(card, isSelected) {
   card.appendChild(check);
 }
 
+/** The fallback shown in place of a thumbnail. A PDF lands here only if its
+ *  own render failed (a corrupt file, say) -- there's no text to fall back
+ *  to, so that case stays the plain icon-plus-description placeholder it
+ *  always was. A genuine plain-text reference gets its actual contents
+ *  instead, styled like a notepad. */
 export function textCard(ref) {
   const div = document.createElement("div");
   div.className = "text-card";
-  const icon = document.createElement("span");
-  icon.className = "text-card-icon";
-  icon.textContent = ref.ext === ".pdf" ? "PDF" : "TXT";
-  const desc = document.createElement("p");
-  desc.textContent = ref.description || "";
-  div.appendChild(icon);
-  div.appendChild(desc);
+
+  if (ref.ext === ".pdf") {
+    div.classList.add("text-card-placeholder");
+    const icon = document.createElement("span");
+    icon.className = "text-card-icon";
+    icon.textContent = "PDF";
+    const desc = document.createElement("p");
+    desc.textContent = ref.description || "";
+    div.appendChild(icon);
+    div.appendChild(desc);
+    return div;
+  }
+
+  // Scrollable, clipped rather than expandable -- there is no expand
+  // control, so a long file just clips instead of growing the card. The
+  // reference's title is not repeated in here: makeCard's own .card-caption
+  // already renders it as a sibling right after this element, which is what
+  // keeps the title visible while this scrolls (on the grid it sits in the
+  // card's normal flow below this fixed-size square; on the canvas,
+  // .canvas-node-reference's flex layout pins it at a fixed height at the
+  // bottom of the node -- style.css).
+  //
+  // READ ONLY. This looks like a notepad; it is not one. Editing a
+  // reference's text here would mean rewriting an archive file, which
+  // nothing else in the app does.
+  div.classList.add("text-card-notepad");
+  div.textContent = "Loading…";
+
+  // Fetched lazily -- only once this card is actually built, not for every
+  // text reference in a list -- and through the existing /media/<id> route
+  // rather than a new one, so file contents never ride along in the
+  // reference list payload itself.
+  fetch(`/media/${ref.id}`)
+    .then((res) => (res.ok ? res.text() : Promise.reject()))
+    .then((text) => {
+      div.textContent = text;
+    })
+    .catch(() => {
+      div.textContent = ref.description || "";
+    });
+
   return div;
 }
 

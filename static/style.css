@@ -559,18 +559,18 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
 /* Both the archive grid and the project detail grid sit flat rather than
    raised -- no shadow, a tight seam between tiles, and a much smaller
    radius, closer to a contact sheet than the soft-UI panels elsewhere. */
-#grid.grid, #project-grid.grid { gap: 0.4rem; }
+#grid.grid, .project-grid.grid { gap: 0.4rem; }
 
 #grid .card,
-#project-grid .card {
+.project-grid .card {
   border-radius: 6px;
   box-shadow: none;
 }
 
 #grid .card:hover,
-#project-grid .card:hover { box-shadow: none; }
+.project-grid .card:hover { box-shadow: none; }
 #grid .card:active,
-#project-grid .card:active { box-shadow: none; transform: scale(0.99); }
+.project-grid .card:active { box-shadow: none; transform: scale(0.99); }
 
 .card img {
   width: 100%;
@@ -582,13 +582,18 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
 
 .text-card {
   aspect-ratio: 1 / 1;
+  background: var(--sunken);
+}
+
+/* A broken PDF thumbnail's fallback -- centred icon and a clamped
+   description, no text of its own to show. */
+.text-card-placeholder {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 0.6rem;
   padding: 1rem;
-  background: var(--sunken);
   text-align: center;
 }
 
@@ -603,7 +608,7 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
   color: var(--muted);
 }
 
-.text-card p {
+.text-card-placeholder p {
   margin: 0;
   font-family: var(--serif);
   font-size: 0.78rem;
@@ -613,6 +618,24 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
+}
+
+/* A genuine text reference's own contents, notepad-style -- see
+   shared/cards.js's textCard. Scrolls within its own fixed-size box (the
+   1/1 square above on the grid, the flex box .canvas-node-reference gives it
+   on the canvas) rather than growing it; the reference's title is a sibling
+   .card-caption below this, not repeated in here. */
+.text-card-notepad {
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0.85rem 0.9rem;
+  font-family: var(--serif);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--ink);
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .card-caption {
@@ -2151,6 +2174,18 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* --- Project widget: the full reference grid (widgets/all-references.js) ---
+   .widget-body already clips to the widget's rounded box; this is the
+   element that actually scrolls inside that clip, so a long reference list
+   is contained here rather than growing the widget or pushing the rest of
+   the homepage grid down. */
+.widget-all-references {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* --- Project widgets: the Three.js scenes (colourspace, similarity) ---

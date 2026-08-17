@@ -17,6 +17,35 @@ import { ensureOverlays, setActiveReferences } from "./overlays.js";
 import { createAnalysisPanel } from "./analysis-panel.js";
 import { createColourPanel } from "./colour-panel.js";
 
+/* Delete means "remove from the project" here -- and, since a folder is only
+ * ever a view over its project's references (CLAUDE.md), that has to take
+ * the reference out of every one of this project's folders too, not just
+ * project_references (db.py's remove_reference_from_project does that
+ * cascade). The confirmation text says so, rather than leaving it to be
+ * discovered.
+ *
+ * Exported so every caller that mounts this page's grid for "every reference
+ * in the project" -- main.js's #page=grid route and widgets/all-references.js
+ * -- shares identical delete semantics instead of each redefining them.
+ */
+export function projectGridDeleteBehaviour(projectId) {
+  return {
+    label: "Delete",
+    confirmHeading: "Remove from project",
+    confirmText: (n) => `Remove ${n} reference${n === 1 ? "" : "s"} from this project?`,
+    note: "This takes them out of every folder in this project too. Their record in the archive is untouched.",
+    async perform(ids) {
+      const results = await Promise.all(
+        ids.map((id) =>
+          fetch(`/api/projects/${projectId}/references/${id}`, { method: "DELETE" }).then((r) => r.ok)
+        )
+      );
+      const deleted = results.filter(Boolean).length;
+      return { deleted, failed: results.length - deleted };
+    },
+  };
+}
+
 /**
  * @param el - the page container to render into (emptied first)
  * @param options.project - {id, title, ...}
@@ -85,13 +114,15 @@ export function createGridPage(el, options) {
   statusEl.className = "muted";
   el.appendChild(statusEl);
 
-  // Reuses index.html's #grid/#project-grid id so the flat, seamless card
-  // styling (style.css) applies without repeating it here -- only one of
-  // these ids is ever in the document at a time, since a page replaces the
-  // one before it rather than stacking.
+  // Reuses index.html's #grid archive grid's flat, seamless card styling
+  // (style.css) without repeating it here, via the shared .project-grid
+  // class -- a class rather than an id because this page can now be mounted
+  // more than once at a time: widgets/all-references.js embeds this same
+  // grid in a homepage widget, and a homepage widget stays mounted (just
+  // hidden) while the user navigates into a hash-routed page, so two
+  // instances can legitimately coexist in the document.
   const gridEl = document.createElement("div");
-  gridEl.id = "project-grid";
-  gridEl.className = "grid";
+  gridEl.className = "grid project-grid";
   el.appendChild(gridEl);
 
   const emptyEl = document.createElement("p");

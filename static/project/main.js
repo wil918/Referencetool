@@ -10,7 +10,7 @@ import { all as allWidgetDefinitions, definitionFor, mountWidget } from "./regis
 import { createWidgetDock } from "./widget-dock.js";
 import { createAppearancePanel } from "./appearance-panel.js";
 import { onActiveWidgetChange } from "./format-toolbar.js";
-import { createGridPage } from "./pages/grid-page.js";
+import { createGridPage, projectGridDeleteBehaviour } from "./pages/grid-page.js";
 import { createCanvasPage } from "./pages/canvas-page.js";
 import * as folders from "./folders.js";
 
@@ -685,30 +685,6 @@ function enterPage() {
   ensureBackButton().hidden = false;
 }
 
-// Delete means "remove from the project" here -- and, since a folder is only
-// ever a view over its project's references (CLAUDE.md), that has to take
-// the reference out of every one of this project's folders too, not just
-// project_references (db.py's remove_reference_from_project does that
-// cascade). The confirmation text says so, rather than leaving it to be
-// discovered.
-function projectGridDeleteBehaviour() {
-  return {
-    label: "Delete",
-    confirmHeading: "Remove from project",
-    confirmText: (n) => `Remove ${n} reference${n === 1 ? "" : "s"} from this project?`,
-    note: "This takes them out of every folder in this project too. Their record in the archive is untouched.",
-    async perform(ids) {
-      const results = await Promise.all(
-        ids.map((id) =>
-          fetch(`/api/projects/${projectId}/references/${id}`, { method: "DELETE" }).then((r) => r.ok)
-        )
-      );
-      const deleted = results.filter(Boolean).length;
-      return { deleted, failed: results.length - deleted };
-    },
-  };
-}
-
 // Delete means "unfile from this folder" here -- the project membership and
 // the archive record are untouched, which is exactly what makes this
 // different from the grid page's Delete and worth saying in the confirm text.
@@ -747,7 +723,7 @@ function showGridPage() {
       project.description = data.description;
       return data.references;
     },
-    deleteBehaviour: projectGridDeleteBehaviour(),
+    deleteBehaviour: projectGridDeleteBehaviour(projectId),
   });
 }
 

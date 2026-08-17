@@ -50,6 +50,7 @@ import notepadWidget from "./widgets/notepad.js";
 import sidebarWidget from "./widgets/sidebar.js";
 import foldersWidget from "./widgets/folders.js";
 import gridButtonWidget from "./widgets/grid-button.js";
+import allReferencesWidget from "./widgets/all-references.js";
 import folderWidget from "./widgets/folder.js";
 import colourspaceWidget from "./widgets/colourspace.js";
 import similarityWidget from "./widgets/similarity.js";
@@ -65,6 +66,7 @@ const MODULES = [
   sidebarWidget,
   foldersWidget,
   gridButtonWidget,
+  allReferencesWidget,
   folderWidget,
   colourspaceWidget,
   similarityWidget,
