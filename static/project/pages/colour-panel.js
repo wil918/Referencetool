@@ -22,10 +22,15 @@ import { makeBarThumb } from "../../shared/cards.js";
 // trip -- debounced so dragging one doesn't fire a request per pixel.
 const DEBOUNCE_MS = 250;
 
-export function createColourPanel({ project, getReferences, onReferenceAdded }) {
+export function createColourPanel({ project, getReferences, onReferenceAdded, source }) {
   let currentIds = [];
   let searchTimer = null;
   let requestId = 0;
+  // The combined profile behind the palette strip currently on screen --
+  // kept so "Save palette" can POST exactly what's shown rather than
+  // re-deriving it, and so it can be disabled the moment there's nothing
+  // valid to save (no selection, or a selection with no colour data).
+  let lastProfile = null;
 
   const sidebar = document.createElement("aside");
   sidebar.className = "colour-sidebar";
@@ -44,6 +49,7 @@ export function createColourPanel({ project, getReferences, onReferenceAdded }) 
         <div class="colour-selected"></div>
         <div class="colour-section-label">Combined palette</div>
         <div class="palette-strip large colour-combined-palette"></div>
+        <button type="button" class="btn colour-save-palette" disabled>Save palette</button>
       </div>
 
       <div class="colour-section">
@@ -81,6 +87,7 @@ export function createColourPanel({ project, getReferences, onReferenceAdded }) 
   const bodyEl = sidebar.querySelector(".colour-body");
   const selectedEl = sidebar.querySelector(".colour-selected");
   const combinedPaletteEl = sidebar.querySelector(".colour-combined-palette");
+  const savePaletteBtn = sidebar.querySelector(".colour-save-palette");
   const statusEl = sidebar.querySelector(".colour-status");
   const resultsEl = sidebar.querySelector(".colour-results");
   const sliders = [...sidebar.querySelectorAll("[data-weight]")];
@@ -100,6 +107,31 @@ export function createColourPanel({ project, getReferences, onReferenceAdded }) 
   excludeBW.addEventListener("change", () => {
     clearTimeout(searchTimer);
     runSearch(); // a checkbox click isn't a drag -- no need to debounce
+  });
+
+  savePaletteBtn.addEventListener("click", async () => {
+    if (!lastProfile) return;
+    const name = window.prompt("Save this palette as:");
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    savePaletteBtn.disabled = true;
+    const label = savePaletteBtn.textContent;
+    try {
+      const res = await fetch("/api/palettes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmed, profile: lastProfile, source }),
+      });
+      savePaletteBtn.textContent = res.ok ? "Saved" : "Could not save";
+    } catch {
+      savePaletteBtn.textContent = "Could not save";
+    }
+    setTimeout(() => {
+      savePaletteBtn.textContent = label;
+      savePaletteBtn.disabled = !lastProfile;
+    }, 1500);
   });
 
   function weights() {
@@ -141,10 +173,14 @@ export function createColourPanel({ project, getReferences, onReferenceAdded }) 
     } catch (err) {
       if (thisRequestId !== requestId) return;
       statusEl.textContent = `Colour search unavailable — ${err.message}`;
+      lastProfile = null;
+      savePaletteBtn.disabled = true;
       return;
     }
     if (thisRequestId !== requestId) return;
 
+    lastProfile = data.profile || null;
+    savePaletteBtn.disabled = !lastProfile;
     renderCombinedPalette(data.profile);
     renderResults(data);
   }
@@ -282,6 +318,8 @@ export function createColourPanel({ project, getReferences, onReferenceAdded }) 
         emptyEl.hidden = false;
         bodyEl.hidden = true;
         resultsEl.innerHTML = "";
+        lastProfile = null;
+        savePaletteBtn.disabled = true;
         return;
       }
       clearTimeout(searchTimer);

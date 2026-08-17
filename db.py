@@ -221,6 +221,27 @@ CREATE TABLE IF NOT EXISTS styles (
 );
 """
 
+# Saved colour palettes, global rather than per project -- same shape of idea
+# as styles above: a name given to a snapshot that would otherwise vanish the
+# moment the page that generated it is left. `profile` is a whole colour.py
+# profile dict (palette entries with their Lab, rgb AND weight, plus the hue/
+# lightness/saturation histograms), not just the swatch list -- style_gen.py
+# needs the weights to map proportion to area, and a profile is cheap enough
+# to store whole that there is no reason to keep only part of it. `source` is
+# either "archive" (generated across every reference) or a folder id, exactly
+# as it was chosen from when the palette was saved -- purely descriptive, it
+# is never joined against or validated, so a deleted folder leaves a palette
+# with a source that no longer resolves to anything, which is fine.
+PALETTES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS palettes (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    profile TEXT NOT NULL,
+    source TEXT,
+    date_created TEXT NOT NULL
+);
+"""
+
 # Saved widget arrangements, global rather than per project -- same shape of
 # idea as styles above, but for layout instead of appearance. `widgets` is a
 # JSON list of portable widget entries (see capture_layout_widgets): type,
@@ -360,6 +381,7 @@ def init_db():
         conn.execute(WIDGETS_SCHEMA)
         conn.execute(PROJECT_SETTINGS_SCHEMA)
         conn.execute(STYLES_SCHEMA)
+        conn.execute(PALETTES_SCHEMA)
         conn.execute(LAYOUTS_SCHEMA)
         conn.execute(CANVAS_NODES_SCHEMA)
         conn.execute(CANVAS_EDGES_SCHEMA)
@@ -1449,6 +1471,46 @@ def delete_style(style_id):
     as it did."""
     with get_conn() as conn:
         conn.execute("DELETE FROM styles WHERE id = ?", (style_id,))
+
+
+# --- Palettes: saved colour palettes, global -----------------------------------
+
+
+def _palette_to_dict(row):
+    d = dict(row)
+    d["profile"] = json.loads(d["profile"]) if d["profile"] else {}
+    return d
+
+
+def list_palettes():
+    """Every saved palette, newest first."""
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM palettes ORDER BY date_created DESC").fetchall()
+        return [_palette_to_dict(r) for r in rows]
+
+
+def get_palette(palette_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM palettes WHERE id = ?", (palette_id,)).fetchone()
+        return _palette_to_dict(row) if row else None
+
+
+def create_palette(palette_id, name, profile, source=None):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO palettes (id, name, profile, source, date_created)
+               VALUES (?, ?, ?, ?, ?)""",
+            (palette_id, name, json.dumps(profile), source, datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def delete_palette(palette_id):
+    """Delete a palette. A style already generated from it keeps its own
+    resolved settings copy (style_gen.generate_style's output, saved through
+    create_style same as any hand-made style), so nothing else needs
+    cleaning up."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM palettes WHERE id = ?", (palette_id,))
 
 
 # --- Layouts: saved widget arrangements, global -------------------------------

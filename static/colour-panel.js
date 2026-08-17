@@ -21,16 +21,45 @@ export function createColourPanel({ onMatches, onFocus }) {
   const resultsEl = document.getElementById("cm-results");
   const findBtn = document.getElementById("cm-find");
   const clearBtn = document.getElementById("cm-clear");
+  const savePaletteBtn = document.getElementById("cm-save-palette");
 
   let selection = [];
   let nodesById = new Map();
   let timer = null;
   let requestId = 0;
   let lastResults = [];
+  let lastProfile = null;
   let excludeBlackWhite = false;
   let onClear = () => {};
 
   clearBtn.addEventListener("click", () => onClear());
+
+  savePaletteBtn.addEventListener("click", async () => {
+    if (!lastProfile) return;
+    const name = window.prompt("Save this palette as:");
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    savePaletteBtn.disabled = true;
+    const label = savePaletteBtn.textContent;
+    try {
+      // This panel searches the whole archive, never one project or folder --
+      // "archive" is the honest source for anything saved from here.
+      const res = await fetch("/api/palettes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmed, profile: lastProfile, source: "archive" }),
+      });
+      savePaletteBtn.textContent = res.ok ? "Saved" : "Could not save";
+    } catch {
+      savePaletteBtn.textContent = "Could not save";
+    }
+    setTimeout(() => {
+      savePaletteBtn.textContent = label;
+      savePaletteBtn.disabled = !lastProfile;
+    }, 1500);
+  });
 
   findBtn.addEventListener("click", () => {
     if (!lastResults.length) return;
@@ -128,10 +157,14 @@ export function createColourPanel({ onMatches, onFocus }) {
     } catch (err) {
       if (id !== requestId) return;
       statusEl.textContent = `Colour search unavailable — ${err.message}`;
+      lastProfile = null;
+      savePaletteBtn.disabled = true;
       return;
     }
     if (id !== requestId) return;
 
+    lastProfile = data.profile || null;
+    savePaletteBtn.disabled = !lastProfile;
     combinedEl.innerHTML = "";
     if (data.profile) {
       combinedEl.appendChild(paletteStrip(data.profile.palette, "cm-palette large"));
@@ -156,6 +189,8 @@ export function createColourPanel({ onMatches, onFocus }) {
         resultsEl.innerHTML = "";
         combinedEl.innerHTML = "";
         lastResults = [];
+        lastProfile = null;
+        savePaletteBtn.disabled = true;
         onMatches(new Map());
         return;
       }

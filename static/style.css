@@ -1858,6 +1858,73 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 
 .appearance-advanced-dropdown[hidden] { display: none; }
 
+/* The "Generate from palette" preview -- positioned exactly like
+   .appearance-advanced-dropdown (absolute, floating off the bar) for the
+   same reason: it can hold six colour rows without adding to the bar's own
+   height, and it sits over the live grid rather than beside it so the
+   preview underneath stays visible while this is open. */
+.appearance-generate { position: relative; }
+
+.appearance-generate-preview {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem 1.25rem;
+  border-radius: 14px;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-md);
+  min-width: 260px;
+}
+
+.appearance-generate-preview[hidden] { display: none; }
+
+.appearance-generate-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+/* A swatch showing an actual generated colour, not a surface -- like
+   .palette-strip span, it's the colour itself and needs no shadow or
+   border to read as one (CLAUDE.md's neumorphic rule is about surfaces
+   that are the page's own colour, which this deliberately isn't). */
+.appearance-generate-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  flex: 0 0 auto;
+}
+
+.appearance-generate-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.appearance-generate-role {
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  color: var(--ink);
+}
+
+.appearance-generate-detail {
+  font-family: var(--sans);
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.appearance-generate-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
 .format-toolbar-fields {
   display: flex;
   align-items: center;

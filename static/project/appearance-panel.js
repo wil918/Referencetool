@@ -93,6 +93,87 @@ const DEFAULT_LAYOUT_VALUE = "__default__";
 // picked again later.
 const LAYOUT_PLACEHOLDER_VALUE = "";
 
+// A saved palette's own value space has no "Default" or "Custom" -- picking
+// one is a one-shot action exactly like the layout select (reset back to
+// this placeholder immediately, see below), not a persistent choice being
+// tracked, since nothing commits until the preview it opens is Accepted.
+const GENERATE_PLACEHOLDER_VALUE = "";
+
+function generateRow() {
+  const wrap = document.createElement("div");
+  wrap.className = "colour-control appearance-generate";
+  const label = document.createElement("label");
+  label.setAttribute("for", "appearance-generate-select");
+  label.textContent = "Generate";
+  const select = document.createElement("select");
+  select.id = "appearance-generate-select";
+  wrap.append(label, select);
+  return { wrap, select };
+}
+
+// The six roles a generated style covers, in the order the preview lists
+// them -- kept in step with style_gen.py's settings/report keys by hand,
+// the same reasoning as FONT_STACK_VARS above (this file loads before the
+// importmap, so nothing here imports a shared constant from a Python-facing
+// module either).
+const GENERATE_ROLES = [
+  ["bg", "Background"],
+  ["ink", "Primary text"],
+  ["muted", "Secondary text"],
+  ["accent", "Accent"],
+  ["button", "Button"],
+  ["buttonInk", "Button text"],
+];
+
+function generatePreviewPanel() {
+  const el = document.createElement("div");
+  el.className = "appearance-generate-preview";
+  el.hidden = true;
+
+  const rows = {};
+  for (const [key, label] of GENERATE_ROLES) {
+    const row = document.createElement("div");
+    row.className = "appearance-generate-row";
+    const swatch = document.createElement("span");
+    swatch.className = "appearance-generate-swatch";
+    const text = document.createElement("div");
+    text.className = "appearance-generate-text";
+    const name = document.createElement("span");
+    name.className = "appearance-generate-role";
+    name.textContent = label;
+    const detail = document.createElement("span");
+    detail.className = "appearance-generate-detail";
+    text.append(name, detail);
+    row.append(swatch, text);
+    el.appendChild(row);
+    rows[key] = { swatch, detail };
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "appearance-generate-actions";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "btn";
+  cancelBtn.textContent = "Cancel";
+  const acceptBtn = document.createElement("button");
+  acceptBtn.type = "button";
+  acceptBtn.className = "btn primary";
+  acceptBtn.textContent = "Accept";
+  actions.append(cancelBtn, acceptBtn);
+  el.appendChild(actions);
+
+  return { el, rows, cancelBtn, acceptBtn };
+}
+
+// `entry` is one of style_gen.py's report values: {hex, source_hex,
+// contrast, threshold, against, adjusted}. bg/button carry no contrast rule
+// at all (contrast is null), so they show just the colour.
+function describeGeneratedColour(entry) {
+  if (entry.contrast == null) return entry.hex;
+  const base = `${entry.hex} · ${entry.contrast.toFixed(2)}:1 (needs ${entry.threshold}:1)`;
+  return entry.adjusted ? `${base} · adjusted from ${entry.source_hex}` : base;
+}
+
 function layoutRow() {
   const wrap = document.createElement("div");
   wrap.className = "colour-control";
@@ -183,8 +264,20 @@ export function createAppearancePanel({ projectId, loadLayout }) {
 
   const styleRowEls = styleRow();
   const layoutRowEls = layoutRow();
+  const generateRowEls = generateRow();
+  const generatePreviewEls = generatePreviewPanel();
+  generateRowEls.wrap.appendChild(generatePreviewEls.el);
 
-  el.append(styleRowEls.wrap, layoutRowEls.wrap, bg.wrap, ink.wrap, accent.wrap, scaleWrap, advancedWrap);
+  el.append(
+    styleRowEls.wrap,
+    generateRowEls.wrap,
+    layoutRowEls.wrap,
+    bg.wrap,
+    ink.wrap,
+    accent.wrap,
+    scaleWrap,
+    advancedWrap
+  );
 
   // style.css's colour custom properties are plain #rrggbb, so they drop
   // straight into <input type="color"> with no conversion.
@@ -431,6 +524,100 @@ export function createAppearancePanel({ projectId, loadLayout }) {
     await loadStyles();
   });
 
+  // --- generate: a style built from a saved palette, previewed before it's
+  // anything more than that ------------------------------------------------
+  //
+  // Unlike picking an existing style (immediate apply + persist above),
+  // choosing a palette here only ever previews -- window.projectAppearance.
+  // apply() with no putSettings -- until the preview is explicitly Accepted
+  // or Cancelled. `generated` holds the exact {settings, report} the server
+  // returned so Accept always commits precisely what was generated, no
+  // matter what else on the page happened to be touched while the preview
+  // was showing.
+
+  let palettes = []; // [{ id, name, profile, source, date_created }, ...]
+  let generated = null;
+
+  function buildPaletteOptions() {
+    generateRowEls.select.innerHTML = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = GENERATE_PLACEHOLDER_VALUE;
+    placeholder.textContent = palettes.length ? "Generate from palette…" : "No saved palettes yet";
+    placeholder.disabled = true;
+    generateRowEls.select.appendChild(placeholder);
+    for (const palette of palettes) {
+      const option = document.createElement("option");
+      option.value = palette.id;
+      option.textContent = palette.name;
+      generateRowEls.select.appendChild(option);
+    }
+    generateRowEls.select.value = GENERATE_PLACEHOLDER_VALUE;
+  }
+
+  async function loadPalettes() {
+    const res = await fetch("/api/palettes");
+    palettes = res.ok ? await res.json() : [];
+    buildPaletteOptions();
+  }
+
+  function showGeneratedPreview(result) {
+    generated = result;
+    for (const [key] of GENERATE_ROLES) {
+      const entry = result.report[key];
+      const { swatch, detail } = generatePreviewEls.rows[key];
+      swatch.style.background = entry.hex;
+      detail.textContent = describeGeneratedColour(entry);
+    }
+    window.projectAppearance?.apply({ ...saved(), ...result.settings }); // preview only -- no putSettings
+    generatePreviewEls.el.hidden = false;
+  }
+
+  // Also what leaving edit mode with an unaccepted preview still showing
+  // does (see hide() below) -- an unaccepted generated look must never be
+  // the thing left on screen, the same guarantee Cancel gives explicitly.
+  function cancelGeneratedPreview() {
+    if (!generated) return;
+    generated = null;
+    generatePreviewEls.el.hidden = true;
+    window.projectAppearance?.apply(saved());
+  }
+
+  generateRowEls.select.addEventListener("change", async () => {
+    const value = generateRowEls.select.value;
+    if (value === GENERATE_PLACEHOLDER_VALUE) return;
+    // One-shot, like the layout select: reset before the request resolves so
+    // picking the same palette again later still fires a change event.
+    generateRowEls.select.value = GENERATE_PLACEHOLDER_VALUE;
+
+    const res = await fetch(`/api/palettes/${value}/style`);
+    if (!res.ok) return;
+    showGeneratedPreview(await res.json());
+  });
+
+  generatePreviewEls.cancelBtn.addEventListener("click", cancelGeneratedPreview);
+
+  generatePreviewEls.acceptBtn.addEventListener("click", async () => {
+    if (!generated) return;
+    const name = window.prompt("Save this generated style as:");
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    const settings = generated.settings;
+    const res = await fetch("/api/styles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: trimmed, settings }),
+    });
+    if (!res.ok) return; // preview stays open -- nothing committed, try again
+
+    generated = null;
+    generatePreviewEls.el.hidden = true;
+    await putSettings(settings); // persist + apply + resync the style select
+    fillForm();
+    await loadStyles();
+  });
+
   // --- layouts: named, global, reusable snapshots of a widget arrangement --
   //
   // Unlike appearance, a layout is not something this project is currently
@@ -528,10 +715,12 @@ export function createAppearancePanel({ projectId, loadLayout }) {
     async show() {
       fillForm();
       showSection("appearance", el);
-      // Styles and layouts are both global -- another project may have saved
-      // or deleted one since this panel last opened, so the lists are
-      // refreshed every time rather than cached for the page's lifetime.
+      // Styles, palettes and layouts are all global -- another project may
+      // have saved or deleted one since this panel last opened, so the
+      // lists are refreshed every time rather than cached for the page's
+      // lifetime.
       await loadStyles();
+      await loadPalettes();
       await loadLayoutList();
     },
     hide() {
@@ -544,6 +733,11 @@ export function createAppearancePanel({ projectId, loadLayout }) {
         saveTimer = null;
         persist();
       }
+      // An unaccepted generated preview is not a "committed" appearance, the
+      // same reasoning as the debounced field above being flushed rather
+      // than left dangling -- except here nothing was ever queued to persist
+      // in the first place, so restoring is the only correct way out.
+      cancelGeneratedPreview();
       closeAdvanced();
       hideSection("appearance");
     },

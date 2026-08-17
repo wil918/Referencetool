@@ -32,6 +32,9 @@ export default {
     // is actually shown.
     let allReferences = null;
     let paletteRequestId = 0;
+    // The profile behind whatever palette is currently on screen -- "Save
+    // palette" POSTs exactly this, and is only ever built once it's non-null.
+    let lastProfile = null;
 
     const wrap = document.createElement("div");
     wrap.className = "widget-colour-palette";
@@ -154,6 +157,7 @@ export default {
 
     async function renderPalette() {
       if (!referenceIds.length) {
+        lastProfile = null;
         renderMessage("Choose references to build a combined palette.");
         return;
       }
@@ -170,12 +174,14 @@ export default {
         if (!res.ok) throw new Error(data.error || `Colour search failed (${res.status}).`);
       } catch (err) {
         if (thisRequest !== paletteRequestId) return;
+        lastProfile = null;
         renderMessage(err.message);
         return;
       }
       if (thisRequest !== paletteRequestId) return;
 
       if (!data.profile) {
+        lastProfile = null;
         const pending = data.coverage?.pending || 0;
         renderMessage(
           pending
@@ -187,6 +193,7 @@ export default {
         return;
       }
 
+      lastProfile = data.profile;
       view.innerHTML = "";
 
       await ensureReferences();
@@ -208,6 +215,41 @@ export default {
         strip.appendChild(block);
       }
       view.appendChild(strip);
+
+      const saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.className = "btn colour-palette-save";
+      saveBtn.textContent = "Save palette";
+      saveBtn.addEventListener("click", () => savePalette(saveBtn));
+      view.appendChild(saveBtn);
+    }
+
+    async function savePalette(button) {
+      if (!lastProfile) return;
+      const name = window.prompt("Save this palette as:");
+      if (name === null) return;
+      const trimmed = name.trim();
+      if (!trimmed) return;
+
+      button.disabled = true;
+      const label = button.textContent;
+      try {
+        // No `source` -- this widget's reference_ids are a hand-picked,
+        // per-widget selection, not "the archive" or a folder, so there's
+        // nothing honest to record there (see db.py's palettes.source).
+        const res = await fetch("/api/palettes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: trimmed, profile: lastProfile }),
+        });
+        button.textContent = res.ok ? "Saved" : "Could not save";
+      } catch {
+        button.textContent = "Could not save";
+      }
+      setTimeout(() => {
+        button.textContent = label;
+        button.disabled = false;
+      }, 1500);
     }
 
     renderPalette();

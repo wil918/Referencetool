@@ -32,9 +32,13 @@ import { createColourPanel } from "./colour-panel.js";
  *     note,              // extra muted clarifying line in the modal
  *     perform(ids),      // async -> { deleted, failed }
  *   }
+ * @param options.colourSource - passed straight through to the Colour
+ *   Similarity sidebar as the `source` a saved palette records: "archive"
+ *   for the project grid, a folder's id for a folder page. Purely
+ *   descriptive (db.py's palettes.source) -- never validated or joined.
  */
 export function createGridPage(el, options) {
-  const { project, heading, subheading, emptyMessage, load, deleteBehaviour } = options;
+  const { project, heading, subheading, emptyMessage, load, deleteBehaviour, colourSource } = options;
 
   ensureOverlays();
 
@@ -131,6 +135,7 @@ export function createGridPage(el, options) {
     project,
     getReferences: () => references,
     onReferenceAdded: reload,
+    source: colourSource,
   });
 
   // --- rendering -------------------------------------------------------------

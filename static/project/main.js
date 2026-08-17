@@ -737,6 +737,7 @@ function showGridPage() {
     heading: project.title,
     subheading: "All references in this project -- folders are just a view, nothing here is filtered by them.",
     emptyMessage: "No references in this project yet. Add some from the Archive page.",
+    colourSource: "archive",
     async load() {
       const res = await fetch(`/api/projects/${projectId}`);
       const data = await res.json();
@@ -769,6 +770,7 @@ async function showFolderPage(folderId, token) {
     heading: folder.name,
     subheading: `Folder in "${project.title}"`,
     emptyMessage: `No references in "${folder.name}" yet.`,
+    colourSource: folder.id,
     load: () => folders.listFolderReferences(folderId),
     deleteBehaviour: folderDeleteBehaviour(folder),
   });

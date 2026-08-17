@@ -29,6 +29,7 @@ import db
 import embeddings
 import graph_layout
 import ingest
+import style_gen
 from config import ARCHIVE_API_TOKEN, REFERENCES_DIR
 
 app = Flask(__name__, static_folder="static", static_url_path="")
@@ -682,6 +683,59 @@ def api_delete_style(style_id):
         abort(404)
     db.delete_style(style_id)
     return jsonify({"ok": True, "id": style_id})
+
+
+# --- Palettes: saved colour palettes, global -----------------------------------
+#
+# A palette is a named copy of a colour.py profile -- generated on a project's
+# All References or folder page, or the archive-wide colour map, and kept here
+# so it can be reused without re-running the colour search that built it.
+# style_gen.py is the only thing that reads a saved palette's profile back.
+
+
+@app.get("/api/palettes")
+def api_list_palettes():
+    return jsonify(db.list_palettes())
+
+
+@app.post("/api/palettes")
+def api_create_palette():
+    body = request.get_json(force=True, silent=True) or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "a name is required"}), 400
+    profile = body.get("profile")
+    if not isinstance(profile, dict) or not profile.get("palette"):
+        return jsonify({"error": "profile must be a colour profile with a palette"}), 400
+    source = body.get("source")
+    source = source if isinstance(source, str) else None
+    palette_id = str(uuid.uuid4())
+    db.create_palette(palette_id, name, profile, source)
+    return jsonify(db.get_palette(palette_id))
+
+
+@app.delete("/api/palettes/<palette_id>")
+def api_delete_palette(palette_id):
+    if not db.get_palette(palette_id):
+        abort(404)
+    db.delete_palette(palette_id)
+    return jsonify({"ok": True, "id": palette_id})
+
+
+@app.get("/api/palettes/<palette_id>/style")
+def api_generate_style_from_palette(palette_id):
+    """A project settings dict generated from a saved palette -- see
+    style_gen.py. Computed fresh on every call rather than stored: it's cheap
+    (a handful of contrast checks over at most a few palette colours) and the
+    caller is always about to preview it, never polling for it.
+    """
+    palette = db.get_palette(palette_id)
+    if not palette:
+        abort(404)
+    try:
+        return jsonify(style_gen.generate_style(palette["profile"]))
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
 
 
 # --- Layouts: saved widget arrangements, global -------------------------------

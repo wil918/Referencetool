@@ -149,7 +149,7 @@
   #colour-panel[hidden] { display: none; }
   #cm-head { display: flex; align-items: baseline; justify-content: space-between; }
   #cm-head h2 { font-family: var(--serif); font-size: 1.05rem; font-weight: 500; margin: 0; }
-  #cm-clear, #cm-find {
+  #cm-clear, #cm-find, #cm-save-palette {
     font-family: var(--sans);
     font-size: 0.78rem;
     color: var(--ink);
@@ -161,8 +161,9 @@
     box-shadow: var(--raise-sm);
   }
   #cm-find { width: 100%; padding: 0.6rem; margin-top: 0.3rem; }
-  #cm-find:disabled { color: var(--muted); box-shadow: var(--press-sm); cursor: default; }
-  #cm-clear:active, #cm-find:not(:disabled):active { box-shadow: var(--press-sm); }
+  #cm-save-palette { margin-top: 0.5rem; }
+  #cm-find:disabled, #cm-save-palette:disabled { color: var(--muted); box-shadow: var(--press-sm); cursor: default; }
+  #cm-clear:active, #cm-find:not(:disabled):active, #cm-save-palette:not(:disabled):active { box-shadow: var(--press-sm); }
 
   #cm-bw-label {
     display: flex;
@@ -283,6 +284,7 @@
 
       <div class="cm-label">Combined palette</div>
       <div id="cm-combined"></div>
+      <button type="button" id="cm-save-palette" disabled>Save palette</button>
 
       <button type="button" id="cm-find" disabled>Find similar colours</button>
       <div id="cm-results"></div>
