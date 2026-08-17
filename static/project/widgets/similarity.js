@@ -19,7 +19,12 @@
  * than as several separate ones, the same reading /api/colour/search gives a
  * multi-reference colour selection. See similarity-map.js's combinedScores.
  *
- * config: { show_labels, selection }
+ * Pause view freezes the orbit controls on whatever angle the camera is
+ * currently at and remembers it, so a project page can settle on one
+ * considered shot instead of resetting to the default isometric framing on
+ * every reload. Unchecking hands the camera back rather than resetting it.
+ *
+ * config: { show_labels, selection, paused, paused_view }
  */
 
 import { createSceneWidget } from "../scene-widget.js";
@@ -40,6 +45,8 @@ export default {
     const projectId = host.project.id;
     let showLabels = host.config?.show_labels ?? false;
     let selection = new Set(host.config?.selection || []);
+    let paused = Boolean(host.config?.paused);
+    const pausedView = host.config?.paused_view || null;
 
     return createSceneWidget(host, {
       async load() {
@@ -73,7 +80,7 @@ export default {
         return { data };
       },
 
-      async build({ sceneHost, data, chrome, setCaption }) {
+      async build({ sceneHost, data, chrome, setCaption, setPaused }) {
         const { camera, controls, theme } = sceneHost;
 
         // Imported here rather than at the top of the module so a project
@@ -102,6 +109,17 @@ export default {
         controls.minDistance = 2;
         controls.maxDistance = boundingSize * 3;
         controls.update();
+
+        /* A paused session overrides that default framing with the exact
+         * camera position and orbit target it was paused on -- see the
+         * Pause view toggle below -- and starts already frozen, so nothing
+         * moves before the user acts on the checkbox. */
+        if (paused && pausedView) {
+          camera.position.set(pausedView.position.x, pausedView.position.y, pausedView.position.z);
+          controls.target.set(pausedView.target.x, pausedView.target.y, pausedView.target.z);
+          controls.update();
+        }
+        setPaused(paused);
 
         const restingCaption = () =>
           `${data.nodes.length} references · ${data.cluster_count} clusters · ${data.edges.length} threads`;
@@ -207,6 +225,40 @@ export default {
           showLabels = box.checked;
           map.setLabelsVisible(showLabels);
           host.save({ ...host.config, show_labels: showLabels });
+        });
+
+        /* Freezes the camera exactly where it is and remembers that view --
+         * position and orbit target are the smallest state that reproduces
+         * it exactly, since OrbitControls derives everything else (azimuth,
+         * polar angle, radius) from those same two vectors. Unpausing hands
+         * the camera back rather than resetting it, so orbiting on from a
+         * paused shot picks up where the pause left off. */
+        const pauseToggle = document.createElement("label");
+        pauseToggle.className = "checkbox-label";
+        const pauseBox = document.createElement("input");
+        pauseBox.type = "checkbox";
+        pauseBox.checked = paused;
+        pauseToggle.append(pauseBox, document.createTextNode("Pause view"));
+        chrome.appendChild(pauseToggle);
+
+        pauseBox.addEventListener("change", () => {
+          paused = pauseBox.checked;
+          host.save({
+            ...host.config,
+            paused,
+            // Only recorded on pausing -- unpausing leaves the last saved
+            // angle alone, so pausing again without touching the camera
+            // saves the same view instead of losing it.
+            ...(paused
+              ? {
+                  paused_view: {
+                    position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+                    target: { x: controls.target.x, y: controls.target.y, z: controls.target.z },
+                  },
+                }
+              : {}),
+          });
+          setPaused(paused);
         });
 
         return {

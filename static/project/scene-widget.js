@@ -26,10 +26,19 @@
 
 /* `load` runs before anything is built: it returns { data } to go ahead, or
  * { empty: { message, actionLabel, actionHref } } to show a sentence instead.
- * `build({ sceneHost, data, chrome, setCaption })` then fills the scene and
- * returns { destroy() } for whatever it made -- it may be async (both widgets
- * import their scene module inside it), and is awaited so that destroy()
- * always has the finished thing to tear down rather than a promise of one.
+ * `build({ sceneHost, data, chrome, setCaption, setPaused })` then fills the
+ * scene and returns { destroy() } for whatever it made -- it may be async
+ * (both widgets import their scene module inside it), and is awaited so that
+ * destroy() always has the finished thing to tear down rather than a promise
+ * of one.
+ *
+ * setPaused(bool) is how a widget freezes its own scene independently of
+ * edit mode -- similarity.js's Pause view toggle calls it. Edit mode and a
+ * pause toggle both want a say over sceneHost.setInteractive, and neither
+ * owns the other, so the two are combined here rather than in the widget:
+ * left to itself, edit mode's own subscription (below) would blindly
+ * re-enable interaction on the way out of an edit and silently undo a
+ * widget's pause.
  */
 export function createSceneWidget(host, { load, build }) {
   const frame = document.createElement("div");
@@ -59,6 +68,10 @@ export function createSceneWidget(host, { load, build }) {
   let sceneHost = null;
   let contents = null;
   let unsubscribeEdit = null;
+  // Combined with `paused` (below) into every call to setInteractive, rather
+  // than each owning it separately -- see the setPaused doc comment above.
+  let editing = false;
+  let paused = false;
 
   function setCaption(text) {
     caption.textContent = text || "";
@@ -119,9 +132,23 @@ export function createSceneWidget(host, { load, build }) {
     // anything half-built is this function's own to clean up, below.
     const graphBg3d = window.projectAppearance?.get()?.graphBg3d;
     const scene = createSceneHost(mount, { background: graphBg3d || null });
+
+    function applyInteractive() {
+      scene.setInteractive(!editing && !paused);
+    }
+
     let built;
     try {
-      built = (await build({ sceneHost: scene, data: outcome.data, chrome, setCaption })) || {};
+      built = (await build({
+        sceneHost: scene,
+        data: outcome.data,
+        chrome,
+        setCaption,
+        setPaused(next) {
+          paused = Boolean(next);
+          applyInteractive();
+        },
+      })) || {};
     } catch (err) {
       scene.dispose();
       if (!cancelled) showStatus(err.message || String(err));
@@ -141,8 +168,9 @@ export function createSceneWidget(host, { load, build }) {
 
     // Fires once immediately, so a widget mounted while the grid is already
     // being edited starts inert rather than waiting for the next flip.
-    unsubscribeEdit = host.editMode?.subscribe((editing) => {
-      sceneHost?.setInteractive(!editing);
+    unsubscribeEdit = host.editMode?.subscribe((nextEditing) => {
+      editing = nextEditing;
+      applyInteractive();
     });
   }
 
