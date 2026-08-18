@@ -18,7 +18,14 @@
  * This widget is the picture: where this project's references sit in colour
  * space, at a glance, on the homepage.
  *
- * config: { exclude_black_white }
+ * Pause view freezes the orbit controls on whatever angle the camera is
+ * currently at and remembers it, so a project page can settle on one
+ * considered shot instead of resetting to the default square-on framing on
+ * every reload. Unchecking hands the camera back rather than resetting it.
+ * Same mechanism as similarity.js's identical toggle -- see scene-widget.js's
+ * setPaused.
+ *
+ * config: { exclude_black_white, paused, paused_view }
  */
 
 import { createSceneWidget } from "../scene-widget.js";
@@ -37,6 +44,8 @@ export default {
     // through host.save, and re-reading host.config mid-flight would race
     // that debounced write.
     let excludeBlackWhite = Boolean(host.config?.exclude_black_white);
+    let paused = Boolean(host.config?.paused);
+    const pausedView = host.config?.paused_view || null;
 
     const summary = (data) => `${data.nodes.length} references by lightness, chroma and hue`;
 
@@ -68,7 +77,7 @@ export default {
         return data.nodes.length ? { data } : { empty: emptyState(data) };
       },
 
-      async build({ sceneHost, data, chrome, setCaption }) {
+      async build({ sceneHost, data, chrome, setCaption, setPaused }) {
         const { camera, controls, theme } = sceneHost;
 
         // Imported here rather than at the top of the module so a project
@@ -96,6 +105,17 @@ export default {
         controls.minDistance = 2;
         controls.maxDistance = Math.max(data.radius, data.height) * 4;
         controls.update();
+
+        /* A paused session overrides that default framing with the exact
+         * camera position and orbit target it was paused on -- see the
+         * Pause view toggle below -- and starts already frozen, so nothing
+         * moves before the user acts on the checkbox. */
+        if (paused && pausedView) {
+          camera.position.set(pausedView.position.x, pausedView.position.y, pausedView.position.z);
+          controls.target.set(pausedView.target.x, pausedView.target.y, pausedView.target.z);
+          controls.update();
+        }
+        setPaused(paused);
 
         // Every reference is meant to read as its own image here, so
         // thumbnails load regardless of distance -- nearest first, a few at a
@@ -168,6 +188,40 @@ export default {
           } finally {
             if (!disposed) box.disabled = false;
           }
+        });
+
+        /* Freezes the camera exactly where it is and remembers that view --
+         * position and orbit target are the smallest state that reproduces
+         * it exactly, since OrbitControls derives everything else (azimuth,
+         * polar angle, radius) from those same two vectors. Unpausing hands
+         * the camera back rather than resetting it, so orbiting on from a
+         * paused shot picks up where the pause left off. */
+        const pauseToggle = document.createElement("label");
+        pauseToggle.className = "checkbox-label";
+        const pauseBox = document.createElement("input");
+        pauseBox.type = "checkbox";
+        pauseBox.checked = paused;
+        pauseToggle.append(pauseBox, document.createTextNode("Pause view"));
+        chrome.appendChild(pauseToggle);
+
+        pauseBox.addEventListener("change", () => {
+          paused = pauseBox.checked;
+          host.save({
+            ...host.config,
+            paused,
+            // Only recorded on pausing -- unpausing leaves the last saved
+            // angle alone, so pausing again without touching the camera
+            // saves the same view instead of losing it.
+            ...(paused
+              ? {
+                  paused_view: {
+                    position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+                    target: { x: controls.target.x, y: controls.target.y, z: controls.target.z },
+                  },
+                }
+              : {}),
+          });
+          setPaused(paused);
         });
 
         return {
