@@ -343,7 +343,10 @@ export function createPalette({ container, viewport, references = [], addNode })
       item.type = "button";
       item.className = "canvas-dock-ref";
       item.title = ref.title;
-      item.appendChild(makeBarThumb(ref));
+      // Text references have no thumbnail to tell them apart -- unlike a
+      // hover tooltip, the title has to be visible here without hovering
+      // each one, since they're side by side in a grid.
+      item.appendChild(makeBarThumb(ref, { showTitleForText: true }));
       const fields = { kind: "reference", reference_id: ref.id };
       makeDraggable(item, {
         onClick: () => addNode({ ...fields, ...nextPoint() }),

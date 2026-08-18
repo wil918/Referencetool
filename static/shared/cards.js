@@ -107,8 +107,17 @@ export function textCard(ref) {
 
 /** The small square thumbnail used in project bars, colour results and
  *  analysis list previews -- an icon-only fallback rather than textCard's
- *  full description block, since these sit in a narrow row. */
-export function makeBarThumb(ref) {
+ *  full description block, since these sit in a narrow row.
+ *
+ *  `showTitleForText` adds the reference's title under the icon, but only
+ *  for a genuine text reference (a PDF's icon is already a rare fallback --
+ *  its own render failed -- and doesn't need the same treatment). Off by
+ *  default: every "TXT" icon otherwise looks identical, which is fine in a
+ *  strip of thumbnails sized for a bare square (a project bar, a colour
+ *  result row) but not in a picker where several text references sit side
+ *  by side with nothing else distinguishing them -- canvas/palette.js's
+ *  reference picker is the one caller that opts in. */
+export function makeBarThumb(ref, { showTitleForText = false } = {}) {
   const thumb = document.createElement("div");
   thumb.className = "bar-thumb";
   const img = document.createElement("img");
@@ -116,10 +125,18 @@ export function makeBarThumb(ref) {
   img.alt = ref.title;
   img.onerror = () => {
     img.remove();
+    const isPdf = ref.ext === ".pdf";
     const icon = document.createElement("span");
     icon.className = "text-card-icon";
-    icon.textContent = ref.ext === ".pdf" ? "PDF" : "TXT";
+    icon.textContent = isPdf ? "PDF" : "TXT";
     thumb.appendChild(icon);
+    if (showTitleForText && !isPdf) {
+      thumb.classList.add("bar-thumb-titled");
+      const label = document.createElement("span");
+      label.className = "bar-thumb-title";
+      label.textContent = ref.title;
+      thumb.appendChild(label);
+    }
   };
   thumb.appendChild(img);
   return thumb;
