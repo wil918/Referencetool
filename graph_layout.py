@@ -267,6 +267,20 @@ CONSTELLATION_INITIAL_STEP = 0.3
 CONSTELLATION_COOLING = 0.994
 CONSTELLATION_EDGE_TOP_FRACTION = 0.02  # sparse -- positions already carry the similarity information
 
+# The simulation's own equilibrium scale (attract/repel/step above) has no
+# relationship to graph-common.js's shared visual constants -- DOT_SIZE,
+# THUMBNAIL_DISTANCE, PLANE_SIZE -- which every 3D view of the archive is
+# drawn against. Left at its natural scale the whole archive lands within a
+# couple of world units: smaller than a dot's own thumbnail-reveal radius, so
+# every node crosses THUMBNAIL_DISTANCE at once and the view reads as one
+# undifferentiated ball regardless of how separated the underlying
+# similarity structure actually is. _rescale_to_target_spread fixes this by
+# stretching the finished layout uniformly about its centroid -- chosen to
+# put typical nearest-neighbour spacing safely above DOT_SIZE and comfortably
+# inside THUMBNAIL_DISTANCE, so thumbnails reveal gradually as the camera
+# closes in rather than all together.
+CONSTELLATION_TARGET_SPREAD = 12.0
+
 # Past roughly this many references, an O(n^2)-per-iteration simulation run on
 # every request starts costing multiple seconds even with the iteration count
 # tapered below, and this should become a stored, versioned table --
@@ -398,6 +412,26 @@ def _force_layout_3d(similarity):
     return positions
 
 
+def _rescale_to_target_spread(positions, target=CONSTELLATION_TARGET_SPREAD):
+    """Stretch the finished layout uniformly about its centroid so its scale
+    matches graph-common.js's shared visual constants -- see
+    CONSTELLATION_TARGET_SPREAD.
+
+    This changes nothing about the layout's information content: Kruskal
+    stress already fits its own scale factor between actual and target
+    distances (_kruskal_stress), and neighbour retention depends only on
+    rank order within each row, so a uniform rescale leaves both figures
+    exactly unchanged (verified against the real archive before this was
+    tuned in). It only makes the *drawing* legible.
+    """
+    center = positions.mean(axis=0)
+    centered = positions - center
+    rms = np.sqrt((centered ** 2).sum(axis=1).mean())
+    if rms < 1e-9:
+        return centered
+    return centered * (target / rms)
+
+
 def _kruskal_stress(actual, target, mask):
     """Kruskal stress (formula 1, linear rescaling rather than a monotonic
     one): how much the 3D layout's distances distort the corrected-similarity
@@ -516,7 +550,7 @@ def build_constellation(reference_ids=None):
         ]
 
     corrected, known = _corrected_similarity_matrix(ids, ref_by_id, scores)
-    positions = _force_layout_3d(corrected)
+    positions = _rescale_to_target_spread(_force_layout_3d(corrected))
 
     target_dist = 1.0 - corrected
     np.fill_diagonal(target_dist, 0.0)
