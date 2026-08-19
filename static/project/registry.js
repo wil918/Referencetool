@@ -54,6 +54,7 @@ import allReferencesWidget from "./widgets/all-references.js";
 import folderWidget from "./widgets/folder.js";
 import colourspaceWidget from "./widgets/colourspace.js";
 import similarityWidget from "./widgets/similarity.js";
+import constellationWidget from "./widgets/constellation.js";
 import canvasWidget from "./widgets/canvas.js";
 import colourPaletteWidget from "./widgets/colour-palette.js";
 import analysisWidget from "./widgets/analysis.js";
@@ -70,6 +71,7 @@ const MODULES = [
   folderWidget,
   colourspaceWidget,
   similarityWidget,
+  constellationWidget,
   canvasWidget,
   colourPaletteWidget,
   analysisWidget,

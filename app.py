@@ -1096,6 +1096,54 @@ def api_project_similarity_graph(project_id):
     return jsonify(graph_layout.build_graph(reference_ids=ids))
 
 
+@app.get("/api/similarity/constellation")
+def api_similarity_constellation():
+    """Every reference placed by CLIP similarity alone, via the force-directed
+    layout in graph_layout.build_constellation() -- a third archive-wide 3D
+    view, alongside the cluster-plane graph above and the colour cylinder
+    below. Same emptiness check as /api/similarity/graph: both read the same
+    similarity_scores table.
+    """
+    if not db.list_similarity_scores():
+        return jsonify({"error": NO_SIMILARITY_SCORES}), 400
+    return jsonify(_constellation_response(graph_layout.build_constellation()))
+
+
+@app.get("/api/projects/<project_id>/similarity/constellation")
+def api_project_similarity_constellation(project_id):
+    """The same map as /api/similarity/constellation, over one project's own
+    references -- see api_project_similarity_graph on why the emptiness check
+    stays archive-wide."""
+    _require_project(project_id)
+    if not db.list_similarity_scores():
+        return jsonify({"error": NO_SIMILARITY_SCORES}), 400
+    ids = [r["id"] for r in db.list_project_references(project_id)]
+    return jsonify(_constellation_response(graph_layout.build_constellation(reference_ids=ids)))
+
+
+def _constellation_response(layout):
+    refs = {r["id"]: r for r in db.get_references_by_ids([n["id"] for n in layout["nodes"]])}
+    nodes = []
+    for node in layout["nodes"]:
+        ref = refs.get(node["id"])
+        if not ref:
+            continue  # deleted between layout and now
+        nodes.append({
+            **_ref_summary(ref),
+            "cluster": node["cluster"],
+            "color": node["color"],
+            "x": node["x"], "y": node["y"], "z": node["z"],
+        })
+
+    return {
+        "nodes": nodes,
+        "edges": layout["edges"],
+        "cluster_count": layout["cluster_count"],
+        "stress": layout["stress"],
+        "neighbour_retention": layout["neighbour_retention"],
+    }
+
+
 @app.get("/media/<ref_id>")
 def media(ref_id):
     ref = _find_reference(ref_id)

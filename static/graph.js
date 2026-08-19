@@ -32,6 +32,7 @@ import { createSceneHost } from "./shared/scene-host.js";
 import { createSimilarityMap } from "./similarity-map.js";
 import { createColourMap } from "./colour-map.js";
 import { createColourPanel } from "./colour-panel.js";
+import { createConstellationMap } from "./constellation-map.js";
 
 const TRANSITION_DURATION_MS = 2200; // scroll-triggered camera move to the isometric view
 const START_DISTANCE_RATIO = 0.9; // how far in front of the first plane the static opening shot sits, relative to the stack's total depth
@@ -90,6 +91,9 @@ function buildScene(data) {
   const theme = currentTheme();
   const dotTex = dotTexture(theme.dot);
   const hubTex = dotTexture(theme.hub);
+  // Constellation nodes are tinted per cluster from a plain white dot rather
+  // than a themed one -- see constellation-map.js's module comment.
+  const whiteDotTex = dotTexture("#ffffff");
 
   // Renderer, camera, orbit controls, lighting and environment (clearcoat
   // still benefits from something to reflect, even without full
@@ -264,33 +268,98 @@ function buildScene(data) {
     controls.update();
   }
 
+  // --- Constellation mode ---------------------------------------------------
+  //
+  // A third layout in this same scene: every reference placed by CLIP
+  // similarity alone, via graph_layout.build_constellation()'s force-directed
+  // 3D simulation. No selection, no search panel -- it hands over to the
+  // orbit controls immediately, exactly like Colour mode, and its only extra
+  // chrome is the honesty figures in the status line below.
+
+  const constellationMap = createConstellationMap(scene, theme);
+  let constellationSprites = [];
+  let constellationLoaded = false;
+  // Captured once, right after init() sets it -- so leaving Constellation
+  // mode can put the similarity view's own status line text back, since the
+  // two modes share that one element rather than each owning their own.
+  const visualStatusText = statusLine.textContent;
+
+  async function loadConstellationMap(force = false) {
+    if (constellationLoaded && !force) return true;
+    statusLine.textContent = "Loading constellation…";
+    let data;
+    try {
+      const res = await fetch("/api/similarity/constellation");
+      data = await res.json();
+      if (!res.ok) throw new Error(data.error || `failed to load (${res.status})`);
+    } catch (err) {
+      statusLine.textContent = `Constellation unavailable — ${err.message}`;
+      return false;
+    }
+
+    if (!data.nodes.length) {
+      statusLine.textContent = "Not enough references yet to build a constellation.";
+      return false;
+    }
+
+    constellationSprites = constellationMap.setData(data, whiteDotTex);
+    constellationLoaded = true;
+    updateConstellationStatus();
+    return true;
+  }
+
+  /* Plain language, not the statistics' names -- the same spirit as the
+   * README's note about CLIP similarity scores running high: this map is a
+   * browsing surface, not a precise neighbour finder, and the two figures
+   * from build_constellation say exactly how rough it is rather than being
+   * rounded away. */
+  function updateConstellationStatus() {
+    const { stress, neighbourRetention } = constellationMap.metrics;
+    const distortion = Math.round(stress * 100);
+    const retained = Math.round(neighbourRetention * 100);
+    statusLine.textContent =
+      `${constellationSprites.length} references · a rough map, not a precise one — ` +
+      `distances here are off by around ${distortion}% on average, and for about ${retained}% ` +
+      `of references their true closest match is actually among the five nearest on this map.`;
+  }
+
   async function setMode(next) {
     if (next === mode) return;
     if (next === "colour" && !(await loadColourMap())) return;
+    if (next === "constellation" && !(await loadConstellationMap())) return;
+    const leavingConstellation = mode === "constellation";
 
     mode = next;
     modeButtons.forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
     document.body.classList.toggle("colour-mode", mode === "colour");
 
-    // Switching modes is a visibility flip on the two layouts' groups rather
-    // than a teardown and rebuild -- the scene, camera and controls are
-    // shared and never re-created.
+    // Switching modes is a visibility flip on the three layouts' groups
+    // rather than a teardown and rebuild -- the scene, camera and controls
+    // are shared and never re-created.
     const showColour = mode === "colour";
-    map.group.visible = !showColour;
+    const showConstellation = mode === "constellation";
+    map.group.visible = mode === "visual";
     colourMap.group.visible = showColour;
+    constellationMap.group.visible = showConstellation;
     if (showColour) colourPanel.setSelection(colourSelection, colourNodesById);
     else colourPanel.hide();
 
+    if (showConstellation) updateConstellationStatus();
+    else if (leavingConstellation) statusLine.textContent = visualStatusText;
+
     nodeLabel.classList.remove("visible");
 
-    // The similarity view opens on a scripted intro; the colour map has no
-    // such story to tell, so it hands straight over to the orbit controls.
+    // The similarity view opens on a scripted intro; neither the colour map
+    // nor the constellation has such a story to tell, so both hand straight
+    // over to the orbit controls.
     introTitle.classList.add("hidden");
     scrollTriggered = true;
     phase = "done";
     controls.enabled = true;
     hint.textContent = showColour
       ? "Drag to orbit · scroll to zoom · click a reference to select · shift-click to add"
+      : showConstellation
+      ? "Drag to orbit · scroll to zoom · move closer for thumbnails"
       : "Drag to rotate · scroll to zoom · right-drag to pan · move closer for thumbnails";
 
     if (showColour) {
@@ -298,6 +367,12 @@ function buildScene(data) {
       camera.position.set(colourRadius * 1.6, colourHeight * 0.5, colourRadius * 1.6);
       controls.minDistance = 2;
       controls.maxDistance = Math.max(colourRadius, colourHeight) * 4;
+    } else if (showConstellation) {
+      controls.target.set(0, 0, 0);
+      const r = constellationMap.metrics.boundingRadius;
+      camera.position.set(r * 1.3, r * 0.9, r * 1.3);
+      controls.minDistance = 2;
+      controls.maxDistance = r * 4;
     } else {
       controls.target.set(0, 0, 0);
       camera.position.copy(isoPosition);
@@ -309,7 +384,11 @@ function buildScene(data) {
   }
 
   // --- Hover label ---
-  const activeSprites = () => (mode === "colour" ? colourSprites : spriteList);
+  const activeSprites = () => {
+    if (mode === "colour") return colourSprites;
+    if (mode === "constellation") return constellationSprites;
+    return spriteList;
+  };
 
   window.addEventListener("pointermove", (e) => {
     if (folding) return;
@@ -518,6 +597,14 @@ function buildScene(data) {
   const backLink = document.getElementById("back-link");
   backLink.addEventListener("click", (e) => {
     e.preventDefault();
+    // The fold has two destinations -- the flat Connections canvas and its
+    // colour counterpart -- and Constellation has no flat page of its own to
+    // unfold into, so it skips the choreography and leaves directly instead
+    // of animating toward a front-on shot of a view that isn't showing.
+    if (mode === "constellation") {
+      window.location.href = "/index.html";
+      return;
+    }
     startFold();
   });
 
@@ -630,6 +717,21 @@ function buildScene(data) {
           // The colour map sizes its own sprites -- a selected node is drawn
           // larger than the rest -- so it re-applies that once one grows.
           .forEach((sprite) => loadThumbnail(sprite, () => colourMap.refresh()));
+      } else if (mode === "constellation") {
+        // Same distance-based LOD as the similarity view: zoomed out shows
+        // dots (tinted by cluster), and thumbnails resolve as the camera
+        // moves in -- a cloud of every thumbnail at once would be mush, and
+        // more references will only make that worse.
+        camera.getWorldPosition(cameraWorldPos);
+        for (const sprite of constellationSprites) {
+          const dist = sprite.position.distanceTo(cameraWorldPos);
+          const state = sprite.userData.thumbState;
+          if (dist < THUMBNAIL_DISTANCE && state === "none") {
+            constellationMap.loadThumbnail(sprite);
+          } else if (dist >= THUMBNAIL_DISTANCE && state === "loaded") {
+            constellationMap.revertToDot(sprite, whiteDotTex);
+          }
+        }
       } else {
         camera.getWorldPosition(cameraWorldPos);
         for (const sprite of spriteList) {

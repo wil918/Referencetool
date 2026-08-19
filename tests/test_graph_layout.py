@@ -29,6 +29,15 @@ def image(archive, name, rgb=(120, 80, 60)):
     return ingest.add_reference(path, title=name)["id"]
 
 
+def text(archive, name, content="some reference text"):
+    """A real text reference, through the real ingest path -- gives a
+    reference with type 'text' rather than 'image', for the modality-block
+    tests."""
+    path = archive / f"{name}.txt"
+    path.write_text(f"{content} ({name})", encoding="utf-8")
+    return ingest.add_reference(path, title=name)["id"]
+
+
 class FakeCollection:
     """Stands in for the Chroma collection.
 
@@ -280,3 +289,187 @@ def test_project_graph_route_404s_for_an_unknown_project(client, archive, monkey
     scores((a, b, 0.5))
 
     assert client.get("/api/projects/nope/similarity/graph").status_code == 404
+
+
+# --- The constellation view --------------------------------------------------
+
+
+def test_modality_correction_closes_the_gap_between_blocks(archive):
+    """The whole point of the correction: two blocks with systematically
+    different raw means (the modality gap) come out with the same mean once
+    standardised onto the shared statistic."""
+    a1, a2, a3 = image(archive, "a1"), image(archive, "a2"), image(archive, "a3")
+    t1, t2, t3 = text(archive, "t1"), text(archive, "t2"), text(archive, "t3")
+    ref_by_id = {r["id"]: r for r in db.list_references()}
+    assert ref_by_id[a1]["type"] == "image"
+    assert ref_by_id[t1]["type"] == "text"
+
+    # image-image pairs cluster tightly high; text-image pairs cluster
+    # tightly low -- a textbook modality gap.
+    pairs = [
+        (a1, a2, 0.85), (a1, a3, 0.82), (a2, a3, 0.88),
+        (a1, t1, 0.20), (a1, t2, 0.22), (a2, t1, 0.18),
+        (a2, t2, 0.21), (a3, t1, 0.19), (a3, t2, 0.23),
+    ]
+    scores(*pairs)
+    ids = sorted(ref_by_id.keys())
+    corrected, known = graph_layout._corrected_similarity_matrix(ids, ref_by_id, db.list_similarity_scores())
+
+    index = {i: n for n, i in enumerate(ids)}
+    image_image = [corrected[index[x]][index[y]] for x, y, _ in pairs[:3]]
+    image_text = [corrected[index[x]][index[y]] for x, y, _ in pairs[3:]]
+    # Not asserting exact equality of the two block means (the standardising
+    # transform matches them only up to floating point), but the correction
+    # must have pulled them far closer together than the raw 0.85 vs 0.20.
+    assert abs(np.mean(image_image) - np.mean(image_text)) < abs(0.84 - 0.205) / 2
+    assert known.sum() == 2 * len(pairs)  # symmetric, off-diagonal
+
+
+def test_constellation_leaves_stored_similarity_scores_untouched(archive, monkeypatch):
+    a = image(archive, "a", (200, 30, 30))
+    b = image(archive, "b", (30, 200, 30))
+    c = image(archive, "c", (30, 30, 200))
+    seed_vectors(monkeypatch, {a: 1.0, b: 1.0, c: -1.0})
+    scores((a, b, 0.9), (b, c, 0.2), (a, c, 0.1))
+    before = db.list_similarity_scores()
+
+    graph_layout.build_constellation()
+
+    assert db.list_similarity_scores() == before
+
+
+def test_constellation_is_deterministic(archive, monkeypatch):
+    a = image(archive, "a", (200, 30, 30))
+    b = image(archive, "b", (30, 200, 30))
+    c = image(archive, "c", (30, 30, 200))
+    d = text(archive, "d")
+    seed_vectors(monkeypatch, {a: 1.0, b: 0.8, c: -0.9, d: 0.2})
+    scores((a, b, 0.9), (b, c, 0.2), (a, c, 0.1), (a, d, 0.3), (b, d, 0.25), (c, d, 0.15))
+
+    first = graph_layout.build_constellation()
+    second = graph_layout.build_constellation()
+
+    assert first["nodes"] == second["nodes"]
+    assert first["stress"] == second["stress"]
+    assert first["neighbour_retention"] == second["neighbour_retention"]
+
+
+def test_two_reference_archive_does_not_crash(archive, monkeypatch):
+    a = image(archive, "a", (200, 30, 30))
+    b = image(archive, "b", (30, 30, 200))
+    seed_vectors(monkeypatch, {a: 1.0, b: -1.0})
+    scores((a, b, 0.5))
+
+    result = graph_layout.build_constellation()
+    assert {n["id"] for n in result["nodes"]} == {a, b}
+    assert 0.0 <= result["stress"] <= 1.0
+    assert 0.0 <= result["neighbour_retention"] <= 1.0
+
+
+def test_fewer_than_two_references_is_empty_rather_than_a_crash(archive, monkeypatch):
+    a = image(archive, "a")
+    seed_vectors(monkeypatch, {a: 1.0})
+
+    empty = {"nodes": [], "edges": [], "cluster_count": 0, "stress": 0.0, "neighbour_retention": 0.0}
+    assert graph_layout.build_constellation() == empty
+    assert graph_layout.build_constellation(reference_ids=[]) == empty
+
+
+def test_an_all_image_archive_has_no_text_block_and_still_lays_out(archive, monkeypatch):
+    """No text references at all -- the text-text and image-text blocks are
+    simply absent, not a crash. With only one block present, the correction
+    should be close to a no-op (there's no gap to close)."""
+    ids = [image(archive, f"r{i}", (30 * i, 200 - 30 * i, 90)) for i in range(6)]
+    seed_vectors(monkeypatch, {i: 1.0 if n < 3 else -1.0 for n, i in enumerate(ids)})
+    pairs = [(ids[i], ids[j], 0.5 + 0.1 * (i + j) % 3 / 10) for i in range(6) for j in range(i + 1, 6)]
+    scores(*pairs)
+
+    result = graph_layout.build_constellation()
+    assert {n["id"] for n in result["nodes"]} == set(ids)
+    assert 0.0 <= result["stress"] <= 1.0
+    assert 0.0 <= result["neighbour_retention"] <= 1.0
+
+
+def test_stress_and_neighbour_retention_are_returned_and_bounded(archive, monkeypatch):
+    ids = [image(archive, f"r{i}", (25 * i, 200 - 25 * i, 90)) for i in range(8)]
+    text_ids = [text(archive, f"t{i}") for i in range(3)]
+    all_ids = ids + text_ids
+    seed_vectors(monkeypatch, {ref_id: float(n % 3) for n, ref_id in enumerate(all_ids)})
+    pairs = [
+        (all_ids[i], all_ids[j], 0.1 + (0.7 * ((i * 7 + j * 3) % 10) / 10))
+        for i in range(len(all_ids)) for j in range(i + 1, len(all_ids))
+    ]
+    scores(*pairs)
+
+    result = graph_layout.build_constellation()
+    assert isinstance(result["stress"], float)
+    assert isinstance(result["neighbour_retention"], float)
+    assert 0.0 <= result["stress"] <= 1.0
+    assert 0.0 <= result["neighbour_retention"] <= 1.0
+    assert len(result["nodes"]) == len(all_ids)
+    assert {n["id"] for n in result["nodes"]} == set(all_ids)
+
+
+def test_constellation_reuses_build_graph_cluster_labels(archive, monkeypatch):
+    """Colouring the constellation from a second, independent clustering
+    could disagree with the plane view about what the groups are -- it must
+    reuse build_graph's own labels instead."""
+    a = image(archive, "a", (200, 30, 30))
+    b = image(archive, "b", (190, 40, 40))
+    others = [image(archive, f"far{i}", (30, 30, 200)) for i in range(6)]
+    seed_vectors(monkeypatch, {a: 1.0, b: 0.9, **{i: -1.0 for i in others}})
+    scores(*[(x, y, 0.3) for i, x in enumerate([a, b, *others]) for y in [a, b, *others][i + 1:]])
+
+    plane_clusters = {n["id"]: n["cluster"] for n in graph_layout.build_graph()["nodes"]}
+    constellation_clusters = {n["id"]: n["cluster"] for n in graph_layout.build_constellation()["nodes"]}
+
+    assert constellation_clusters == plane_clusters
+
+
+# --- The routes -------------------------------------------------------------
+
+
+def test_constellation_route_reports_missing_scores_like_the_graph_route(client, archive, monkeypatch):
+    a = image(archive, "a", (200, 30, 30))
+    b = image(archive, "b", (30, 30, 200))
+    seed_vectors(monkeypatch, {a: 1.0, b: -1.0})
+
+    constellation = client.get("/api/similarity/constellation")
+    graph = client.get("/api/similarity/graph")
+    assert constellation.status_code == graph.status_code == 400
+    assert constellation.get_json()["error"] == graph.get_json()["error"]
+
+
+def test_constellation_route_returns_ref_summary_shaped_nodes(client, archive, monkeypatch):
+    a = image(archive, "a", (200, 30, 30))
+    b = image(archive, "b", (30, 30, 200))
+    seed_vectors(monkeypatch, {a: 1.0, b: -1.0})
+    scores((a, b, 0.5))
+
+    body = client.get("/api/similarity/constellation").get_json()
+    assert {n["id"] for n in body["nodes"]} == {a, b}
+    node = body["nodes"][0]
+    for key in ("id", "title", "type", "tags", "description", "ext", "is_own_work", "cluster", "x", "y", "z"):
+        assert key in node
+    assert "stress" in body and "neighbour_retention" in body and "edges" in body
+
+
+def test_project_constellation_route_scopes_to_the_project(client, archive, monkeypatch):
+    a = image(archive, "a", (200, 30, 30))
+    b = image(archive, "b", (30, 30, 200))
+    c = image(archive, "c", (30, 200, 30))
+    seed_vectors(monkeypatch, {a: 1.0, b: -1.0, c: 1.0})
+    scores((a, b, 0.9), (a, c, 0.8), (b, c, 0.7))
+    pid = project_with(client, [a, b])
+
+    body = client.get(f"/api/projects/{pid}/similarity/constellation").get_json()
+    assert {n["id"] for n in body["nodes"]} == {a, b}
+
+
+def test_project_constellation_route_404s_for_an_unknown_project(client, archive, monkeypatch):
+    a = image(archive, "a", (200, 30, 30))
+    b = image(archive, "b", (30, 30, 200))
+    seed_vectors(monkeypatch, {a: 1.0, b: -1.0})
+    scores((a, b, 0.5))
+
+    assert client.get("/api/projects/nope/similarity/constellation").status_code == 404
