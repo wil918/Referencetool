@@ -1460,6 +1460,7 @@ S18  style presets
 S18b layout presets + baked-in default
 S19  generate a style from a palette
 S20  all-references widget + text reference rendering
+S21  constellation: metric 3D archive view
 ```
 
 ---
@@ -1922,4 +1923,123 @@ without changing the card size; PDFs are unchanged.
 ````
 
 **Exit criteria:** the widget matches the page's capabilities, and text references read as text.
+
+---
+
+### Session 21 — Constellation: a metric 3D view of the whole archive
+
+**Delivers:** a third archive-wide 3D view where distance in space genuinely approximates distance in CLIP space, on a modality-corrected similarity matrix.
+
+**Why this exists.** The existing similarity view places a node's angle within its plane as `(idx / len) * 2π`, where `idx` is just its rank in degree order. Only the radius — distance from the cluster hub — carries meaning, so two references sitting next to each other have no reason to be alike. The colour cylinder is fully metric on all three axes; the similarity view is not. This is the missing view: one where being near means being similar.
+
+**Measured on the real archive before writing this** (131 references, 8,515 pairs). Numbers are from that run and are what the implementation should roughly reproduce:
+
+| Layout | Stress | True NN in top 5 | Core density | Axis 1 = modality |
+|---|---|---|---|---|
+| MDS raw | 0.372 | 0.344 | 0.710 | 2.69 |
+| MDS corrected | 0.320 | 0.336 | 0.313 | 0.54 |
+| Force raw | 0.220 | 0.443 | 0.191 | 2.14 |
+| **Force corrected** | 0.255 | 0.321 | 0.069 | 0.24 |
+
+**Model:** Sonnet 5, `high`
+**Estimate:** 3.5–4.5 h · 300–400k tokens · ~1 window
+
+````
+Read graph_layout.py (build_graph and its k-means), embeddings.py
+(compute_all_pairwise_similarities), static/graph.js, static/similarity-map.js,
+static/colour-map.js, static/shared/scene-host.js, static/graph-common.js
+(especially disposeSubtree and the userData.shared rule), and
+static/project/scene-widget.js first.
+
+Build a third archive-wide 3D view. Per CLAUDE.md, it is a fourth CALLER of
+scene-host.js, not a fourth renderer.
+
+1. Modality correction, in graph_layout.py. CLIP text and image embeddings
+   occupy separate cones, so text-image cosine similarity is systematically
+   lower than image-image regardless of meaning. Measured on the real archive,
+   this dominates: the raw first axis separates the 10 text references from
+   the 116 images, spending the single most valuable dimension on a
+   distinction the file extension already gives you.
+
+   Correct it by standardising the similarity matrix in three blocks --
+   image-image, text-text, image-text -- to a common mean and standard
+   deviation taken from the whole matrix, then clipping to [0,1] with a
+   unit diagonal. That is pure numpy over data you already store.
+
+   This must NOT touch the stored similarity_scores table, and must NOT change
+   what /api/similarity/graph or /api/similarity return. It is a layout-time
+   transform for this view only. A reference type other than image or text
+   (there are none today) must not crash it.
+
+2. Force-directed 3D layout, in a new function in graph_layout.py.
+   Springs proportional to corrected similarity, repulsion between all pairs,
+   cooling step size. Do NOT use MDS: measured on the real archive it gives
+   worse stress (0.320 vs 0.255) and eight times the core concentration once
+   the modality correction is applied.
+
+   Determinism is required -- the same archive must always produce the same
+   map, exactly as colour_map() guarantees. Seed the RNG with a constant, and
+   iterate references in a stable id-sorted order so the input never varies.
+   State both in a comment.
+
+   Performance: this is O(n^2) per iteration. At 131 references it is well
+   under a second; it will not stay that way. Scale the iteration count down
+   as n grows and document the point at which this needs to become a stored,
+   versioned table (hard rule 8) rather than an on-demand computation. Follow
+   build_graph()'s on-demand precedent for now.
+
+3. Report the projection's honesty alongside the positions:
+     - Kruskal stress: how much the 3D distances distort the true ones
+     - neighbour retention: for what fraction of references the true nearest
+       neighbour is among the five nearest on the map
+   Measured, these land around 0.26 and 0.32. That second number matters: this
+   view is a BROWSING surface, not a precise neighbour finder. It sits
+   alongside the existing exact search and never replaces it. Surface both
+   figures in the UI in plain language, in the same spirit as the README's
+   note about CLIP similarity scores running high. Do not round them away or
+   bury them.
+
+4. New route GET /api/similarity/constellation returning nodes with x/y/z and
+   the same _ref_summary shape the other views use, plus the two quality
+   figures and the cluster id per node. Return the existing 400 when
+   similarity_scores is empty, matching /api/similarity/graph.
+
+   Reuse build_graph()'s existing k-means cluster labels to COLOUR nodes, so
+   this view and the plane view visibly agree about what groups exist. Do not
+   run a second clustering.
+
+5. static/constellation-map.js -- builds into a scene handed in, exactly as
+   colour-map.js does with createColourMap(scene, theme). Every visual
+   constant comes from graph-common.js. Add it as a third mode in graph.js
+   beside the similarity and colour modes.
+
+   Density is the main visual risk: a cloud of 131 thumbnails is mush, and
+   more will be worse. Reuse the existing distance-based thumbnail LOD
+   (THUMBNAIL_DISTANCE) so zoomed-out shows dots and thumbnails resolve as you
+   move in. Draw only the strongest threads, if any -- the positions carry the
+   similarity information here, so heavy edges would just be noise.
+
+   Disposal: follow graph-common.js's disposeSubtree rule and leave anything
+   marked userData.shared alone. A leaked WebGL context breaks the page after
+   a handful of mode switches.
+
+6. If the window allows, add a `constellation` widget in
+   static/project/widgets/, scoped to the project's references, built on
+   scene-widget.js like colourspace.js and similarity.js. It reaches the
+   widget dock automatically via shell.addableTypes(). Drop this item rather
+   than rushing it -- the archive-wide view is the deliverable.
+
+Add tests in tests/test_graph_layout.py: the correction leaves the stored
+similarity_scores untouched; the same input twice produces identical
+positions; an archive of two references does not crash; an all-image archive
+(no text block) is handled; stress and neighbour retention are returned and
+are in [0,1].
+
+Verify by hand: /graph.html offers three modes and switching between them
+repeatedly does not leak WebGL contexts; the constellation's clusters agree in
+colour with the plane view's; the quality figures are visible and honest;
+zooming in resolves thumbnails.
+````
+
+**Exit criteria:** distance on screen means distance in embedding space, the modality gap no longer owns an axis, positions are reproducible, and the view states its own error.
 
