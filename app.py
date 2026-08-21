@@ -1429,6 +1429,438 @@ def _accept_one(envelope, upload=None):
     return capture.summary(row), 202
 
 
+# --- Schedule: tasks ---------------------------------------------------------
+#
+# See db.py's "Schedule" section for the full data model and cascade rules.
+# app.py stays a thin validation layer over it, same as everywhere else in
+# this file.
+
+
+@app.get("/api/tasks")
+def api_list_tasks():
+    """List tasks, optionally narrowed by project, deliverable and/or status
+    -- any combination given at once is an AND, same as list_tasks."""
+    project_id = request.args.get("project_id")
+    deliverable_id = request.args.get("deliverable_id")
+    status = request.args.get("status")
+    if status is not None and status not in db.TASK_STATUSES:
+        return jsonify({"error": f"status must be one of {', '.join(db.TASK_STATUSES)}"}), 400
+    return jsonify(
+        db.list_tasks(project_id=project_id, deliverable_id=deliverable_id, status=status)
+    )
+
+
+@app.post("/api/tasks")
+def api_create_task():
+    body = request.get_json(force=True, silent=True) or {}
+    title = (body.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "a title is required"}), 400
+
+    status = body.get("status", "pending")
+    if status not in db.TASK_STATUSES:
+        return jsonify({"error": f"status must be one of {', '.join(db.TASK_STATUSES)}"}), 400
+    support_level = body.get("support_level", "independent")
+    if support_level not in db.TASK_SUPPORT_LEVELS:
+        return jsonify({
+            "error": f"support_level must be one of {', '.join(db.TASK_SUPPORT_LEVELS)}"
+        }), 400
+
+    task_id = str(uuid.uuid4())
+    db.create_task(
+        task_id,
+        title,
+        project_id=body.get("project_id"),
+        deliverable_id=body.get("deliverable_id"),
+        description=body.get("description"),
+        measurable_goal=body.get("measurable_goal"),
+        deadline=body.get("deadline"),
+        required_location_id=body.get("required_location_id"),
+        support_level=support_level,
+        est_minutes=body.get("est_minutes"),
+        importance=body.get("importance"),
+        difficulty=body.get("difficulty"),
+        is_finishing=bool(body.get("is_finishing")),
+        status=status,
+        recurrence_id=body.get("recurrence_id"),
+        continues_task_id=body.get("continues_task_id"),
+        est_minutes_source=body.get("est_minutes_source"),
+        importance_source=body.get("importance_source"),
+        difficulty_source=body.get("difficulty_source"),
+    )
+    return jsonify(db.get_task(task_id))
+
+
+@app.get("/api/tasks/<task_id>")
+def api_get_task(task_id):
+    task = db.get_task(task_id)
+    if not task:
+        abort(404)
+    return jsonify(task)
+
+
+@app.put("/api/tasks/<task_id>")
+def api_update_task(task_id):
+    if not db.get_task(task_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    fields = {k: v for k, v in body.items() if k in db.TASK_PATCH_COLUMNS}
+
+    if "status" in fields and fields["status"] not in db.TASK_STATUSES:
+        return jsonify({"error": f"status must be one of {', '.join(db.TASK_STATUSES)}"}), 400
+    if "support_level" in fields and fields["support_level"] not in db.TASK_SUPPORT_LEVELS:
+        return jsonify({
+            "error": f"support_level must be one of {', '.join(db.TASK_SUPPORT_LEVELS)}"
+        }), 400
+
+    db.update_task(task_id, **fields)
+    return jsonify(db.get_task(task_id))
+
+
+@app.delete("/api/tasks/<task_id>")
+def api_delete_task(task_id):
+    if not db.get_task(task_id):
+        abort(404)
+    db.delete_task(task_id)
+    return jsonify({"ok": True, "id": task_id})
+
+
+@app.post("/api/tasks/<task_id>/dependencies")
+def api_add_task_dependency(task_id):
+    """Add a dependency edge, refusing anything that would close a cycle."""
+    if not db.get_task(task_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    depends_on_task_id = body.get("depends_on_task_id")
+    if not depends_on_task_id or not db.get_task(depends_on_task_id):
+        return jsonify({"error": "depends_on_task_id must be an existing task"}), 400
+
+    cycle = db.task_dependency_cycle(task_id, depends_on_task_id)
+    if cycle:
+        # Name the tasks involved rather than just their ids, so the rejection
+        # is legible without a follow-up lookup.
+        titles = {t["id"]: t["title"] for t in db.get_tasks_by_ids(cycle)}
+        chain = " -> ".join(titles.get(tid, tid) for tid in cycle)
+        return jsonify({
+            "error": f"would create a dependency cycle: {chain}",
+            "task_ids": cycle,
+        }), 400
+
+    db.add_task_dependency(task_id, depends_on_task_id)
+    return jsonify({"ok": True, "depends_on": db.list_task_dependencies(task_id)})
+
+
+@app.delete("/api/tasks/<task_id>/dependencies")
+def api_remove_task_dependency(task_id):
+    if not db.get_task(task_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    depends_on_task_id = body.get("depends_on_task_id")
+    if not depends_on_task_id:
+        return jsonify({"error": "depends_on_task_id is required"}), 400
+    db.remove_task_dependency(task_id, depends_on_task_id)
+    return jsonify({"ok": True})
+
+
+# --- Schedule: deliverables ---------------------------------------------------
+
+
+@app.get("/api/projects/<project_id>/deliverables")
+def api_list_deliverables(project_id):
+    _require_project(project_id)
+    return jsonify(db.list_deliverables(project_id))
+
+
+@app.post("/api/projects/<project_id>/deliverables")
+def api_create_deliverable(project_id):
+    _require_project(project_id)
+    body = request.get_json(force=True, silent=True) or {}
+    title = (body.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "a title is required"}), 400
+    deliverable_id = str(uuid.uuid4())
+    db.create_deliverable(
+        deliverable_id,
+        project_id,
+        title,
+        description=body.get("description"),
+        due_at=body.get("due_at"),
+        weighting=body.get("weighting"),
+        spec=body.get("spec"),
+    )
+    return jsonify(db.get_deliverable(deliverable_id))
+
+
+@app.put("/api/deliverables/<deliverable_id>")
+def api_update_deliverable(deliverable_id):
+    if not db.get_deliverable(deliverable_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    fields = {k: v for k, v in body.items() if k in db.DELIVERABLE_PATCH_COLUMNS}
+    if "title" in fields and not (fields["title"] or "").strip():
+        return jsonify({"error": "a title is required"}), 400
+    db.update_deliverable(deliverable_id, **fields)
+    return jsonify(db.get_deliverable(deliverable_id))
+
+
+@app.delete("/api/deliverables/<deliverable_id>")
+def api_delete_deliverable(deliverable_id):
+    if not db.get_deliverable(deliverable_id):
+        abort(404)
+    db.delete_deliverable(deliverable_id)
+    return jsonify({"ok": True, "id": deliverable_id})
+
+
+# --- Schedule: locations -------------------------------------------------------
+
+
+@app.get("/api/locations")
+def api_list_locations():
+    return jsonify(db.list_locations())
+
+
+@app.post("/api/locations")
+def api_create_location():
+    body = request.get_json(force=True, silent=True) or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "a name is required"}), 400
+    location_id = str(uuid.uuid4())
+    db.create_location(
+        location_id,
+        name,
+        address=body.get("address"),
+        travel_minutes_from_home=body.get("travel_minutes_from_home"),
+        notes=body.get("notes"),
+    )
+    return jsonify(db.get_location(location_id))
+
+
+@app.put("/api/locations/<location_id>")
+def api_update_location(location_id):
+    if not db.get_location(location_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    fields = {k: v for k, v in body.items() if k in db.LOCATION_PATCH_COLUMNS}
+    if "name" in fields and not (fields["name"] or "").strip():
+        return jsonify({"error": "a name is required"}), 400
+    db.update_location(location_id, **fields)
+    return jsonify(db.get_location(location_id))
+
+
+@app.delete("/api/locations/<location_id>")
+def api_delete_location(location_id):
+    if not db.get_location(location_id):
+        abort(404)
+    db.delete_location(location_id)
+    return jsonify({"ok": True, "id": location_id})
+
+
+@app.get("/api/locations/<location_id>/hours")
+def api_get_location_hours(location_id):
+    if not db.get_location(location_id):
+        abort(404)
+    return jsonify(db.get_location_hours(location_id))
+
+
+@app.put("/api/locations/<location_id>/hours")
+def api_save_location_hours(location_id):
+    """Replace a location's whole weekly schedule at once -- see
+    db.save_location_hours for why this is wholesale, not per-day."""
+    if not db.get_location(location_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    hours = body.get("hours")
+    if not isinstance(hours, list):
+        return jsonify({"error": "hours must be a list"}), 400
+    db.save_location_hours(location_id, hours)
+    return jsonify(db.get_location_hours(location_id))
+
+
+@app.post("/api/locations/<location_id>/overrides")
+def api_create_location_override(location_id):
+    if not db.get_location(location_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    date = body.get("date")
+    if not date:
+        return jsonify({"error": "a date is required"}), 400
+    override_id = str(uuid.uuid4())
+    db.create_location_override(
+        override_id,
+        location_id,
+        date,
+        opens=body.get("opens"),
+        closes=body.get("closes"),
+        closed=bool(body.get("closed")),
+    )
+    return jsonify(db.list_location_overrides(location_id))
+
+
+@app.delete("/api/locations/<location_id>/overrides")
+def api_delete_location_override(location_id):
+    """Deletes one override, named by id in the body -- there's no override id
+    in the URL, since an override only ever makes sense in the context of the
+    location it belongs to."""
+    if not db.get_location(location_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    override_id = body.get("id")
+    if not override_id:
+        return jsonify({"error": "an override id is required"}), 400
+    db.delete_location_override(override_id)
+    return jsonify(db.list_location_overrides(location_id))
+
+
+# --- Schedule: travel -----------------------------------------------------------
+
+
+@app.get("/api/travel")
+def api_list_travel():
+    return jsonify(db.list_travel())
+
+
+@app.put("/api/travel")
+def api_save_travel():
+    """Replace the whole location-to-location travel matrix at once -- see
+    db.save_travel."""
+    body = request.get_json(force=True, silent=True) or {}
+    entries = body.get("travel")
+    if not isinstance(entries, list):
+        return jsonify({"error": "travel must be a list"}), 400
+    db.save_travel(entries)
+    return jsonify(db.list_travel())
+
+
+# --- Schedule: commitments -------------------------------------------------------
+
+
+@app.get("/api/commitments")
+def api_list_commitments():
+    return jsonify(db.list_commitments())
+
+
+@app.post("/api/commitments")
+def api_create_commitment():
+    body = request.get_json(force=True, silent=True) or {}
+    title = (body.get("title") or "").strip()
+    start, end = body.get("start"), body.get("end")
+    if not title or not start or not end:
+        return jsonify({"error": "title, start and end are required"}), 400
+    support_level = body.get("support_level", "none")
+    if support_level not in db.COMMITMENT_SUPPORT_LEVELS:
+        return jsonify({
+            "error": f"support_level must be one of {', '.join(db.COMMITMENT_SUPPORT_LEVELS)}"
+        }), 400
+    commitment_id = str(uuid.uuid4())
+    db.create_commitment(
+        commitment_id,
+        title,
+        start,
+        end,
+        kind=body.get("kind"),
+        location_id=body.get("location_id"),
+        support_level=support_level,
+        source=body.get("source"),
+        external_uid=body.get("external_uid"),
+        energy_cost=body.get("energy_cost"),
+    )
+    return jsonify(db.get_commitment(commitment_id))
+
+
+@app.put("/api/commitments/<commitment_id>")
+def api_update_commitment(commitment_id):
+    if not db.get_commitment(commitment_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    fields = {k: v for k, v in body.items() if k in db.COMMITMENT_PATCH_COLUMNS}
+    if "support_level" in fields and fields["support_level"] not in db.COMMITMENT_SUPPORT_LEVELS:
+        return jsonify({
+            "error": f"support_level must be one of {', '.join(db.COMMITMENT_SUPPORT_LEVELS)}"
+        }), 400
+    db.update_commitment(commitment_id, **fields)
+    return jsonify(db.get_commitment(commitment_id))
+
+
+@app.delete("/api/commitments/<commitment_id>")
+def api_delete_commitment(commitment_id):
+    if not db.get_commitment(commitment_id):
+        abort(404)
+    db.delete_commitment(commitment_id)
+    return jsonify({"ok": True, "id": commitment_id})
+
+
+# --- Schedule: resources -----------------------------------------------------------
+
+
+@app.get("/api/resources")
+def api_list_resources():
+    return jsonify(db.list_resources())
+
+
+@app.post("/api/resources")
+def api_create_resource():
+    body = request.get_json(force=True, silent=True) or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "a name is required"}), 400
+    resource_id = str(uuid.uuid4())
+    db.create_resource(
+        resource_id,
+        name,
+        location_id=body.get("location_id"),
+        url=body.get("url"),
+        notes=body.get("notes"),
+    )
+    return jsonify(db.get_resource(resource_id))
+
+
+@app.put("/api/resources/<resource_id>")
+def api_update_resource(resource_id):
+    if not db.get_resource(resource_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    fields = {k: v for k, v in body.items() if k in db.RESOURCE_PATCH_COLUMNS}
+    if "name" in fields and not (fields["name"] or "").strip():
+        return jsonify({"error": "a name is required"}), 400
+    db.update_resource(resource_id, **fields)
+    return jsonify(db.get_resource(resource_id))
+
+
+@app.delete("/api/resources/<resource_id>")
+def api_delete_resource(resource_id):
+    if not db.get_resource(resource_id):
+        abort(404)
+    db.delete_resource(resource_id)
+    return jsonify({"ok": True, "id": resource_id})
+
+
+@app.post("/api/resources/<resource_id>/items")
+def api_add_resource_item(resource_id):
+    if not db.get_resource(resource_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    item = (body.get("item") or "").strip()
+    if not item:
+        return jsonify({"error": "an item is required"}), 400
+    db.add_resource_item(resource_id, item, tags=body.get("tags"))
+    return jsonify(db.list_resource_items(resource_id))
+
+
+@app.delete("/api/resources/<resource_id>/items")
+def api_remove_resource_item(resource_id):
+    """Removes one item, named in the body -- like the location overrides
+    delete, an item has no id of its own outside the resource it belongs to."""
+    if not db.get_resource(resource_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    item = body.get("item")
+    if not item:
+        return jsonify({"error": "an item is required"}), 400
+    db.remove_resource_item(resource_id, item)
+    return jsonify(db.list_resource_items(resource_id))
+
+
 @app.get("/api/health")
 def api_health():
     """Cheap liveness probe -- the extension calls this to decide between
