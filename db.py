@@ -458,6 +458,15 @@ CREATE TABLE IF NOT EXISTS task_actuals (
 # that IS the task ('task') from a block the scheduler inserted around it
 # ('travel'), so the calendar can render both without the travel block being
 # mistaken for work.
+#
+# start and end come in two shapes, because the scheduler's precision decays
+# with distance (see SLOT_DETAIL_DAYS in scheduling.py). A near-term block
+# carries a full "YYYY-MM-DDTHH:MM:SS" -- a real time of day. A block further
+# out carries a bare "YYYY-MM-DD" in both columns: that task, that day, no
+# claim about when, because a time five weeks out would be fiction. Its
+# length lives on the task's est_minutes rather than in the row, and
+# scheduling.block_granularity is what tells the two apart. Both sort
+# correctly in a range query, since "2026-03-15" precedes "2026-03-15T09:00".
 SCHEDULED_BLOCKS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS scheduled_blocks (
     id TEXT PRIMARY KEY,
@@ -2209,6 +2218,19 @@ def get_deliverable(deliverable_id):
         return _deliverable_to_dict(row) if row else None
 
 
+def get_deliverables_by_ids(ids):
+    """Many deliverables at once, across projects -- the scheduler holds tasks
+    from every project at the same time, so it can't ask project by project."""
+    if not ids:
+        return []
+    placeholders = ",".join("?" for _ in ids)
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM deliverables WHERE id IN ({placeholders})", list(ids)
+        ).fetchall()
+        return [_deliverable_to_dict(r) for r in rows]
+
+
 DELIVERABLE_PATCH_COLUMNS = ("title", "description", "due_at", "weighting", "spec", "position")
 
 
@@ -2397,6 +2419,16 @@ def list_task_dependencies(task_id):
         return [r["depends_on_task_id"] for r in rows]
 
 
+def list_all_task_dependencies():
+    """Every dependency edge in the database at once. The scheduler builds
+    the whole graph before it starts, and one query beats one per task."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT task_id, depends_on_task_id FROM task_dependencies"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def task_dependency_cycle(task_id, depends_on_task_id):
     """The chain of existing dependencies that would close into a cycle if
     task_id were made to depend on depends_on_task_id -- as a list of task ids
@@ -2524,6 +2556,54 @@ def list_scheduled_blocks_for_task(task_id):
             "SELECT * FROM scheduled_blocks WHERE task_id = ? ORDER BY start", (task_id,)
         ).fetchall()
         return [_scheduled_block_to_dict(r) for r in rows]
+
+
+def list_scheduled_blocks_between(range_start, range_end):
+    """Blocks starting inside [range_start, range_end), by start.
+
+    A half-open range on the block's start, not the overlap test commitments
+    use: a scheduled block belongs to the day it starts on, and a calendar
+    asking for a week wants that week's blocks, not one that began the
+    Sunday before. Ordered by id within a start so a day's worth of
+    day-granularity blocks -- which all share the same date string -- come
+    back in the same order every time.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM scheduled_blocks WHERE start >= ? AND start < ? ORDER BY start, id",
+            (range_start, range_end),
+        ).fetchall()
+        return [_scheduled_block_to_dict(r) for r in rows]
+
+
+def replace_scheduled_blocks(blocks):
+    """Replace every scheduled block with this plan's, in one transaction.
+
+    Wholesale, same contract as save_working_hours: the table IS the current
+    plan, and merging a new plan into the remains of an old one would leave
+    blocks for work the new plan placed elsewhere. Each block supplies its own
+    id -- the scheduler derives ids from the placement so an unmoved block
+    keeps its id across replans (see scheduling._block_id).
+    """
+    generated_at = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        conn.execute("DELETE FROM scheduled_blocks")
+        conn.executemany(
+            """INSERT INTO scheduled_blocks (id, task_id, start, end, is_locked, kind, generated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (
+                    b["id"],
+                    b["task_id"],
+                    b["start"],
+                    b["end"],
+                    1 if b.get("is_locked") else 0,
+                    b.get("kind", "task"),
+                    generated_at,
+                )
+                for b in blocks
+            ],
+        )
 
 
 def _scheduled_block_to_dict(row):

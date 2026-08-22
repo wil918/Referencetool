@@ -15,7 +15,7 @@ import tempfile
 import threading
 import uuid
 import webbrowser
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 
@@ -1637,12 +1637,18 @@ def _default_actual_minutes(task):
     """The length of this task's current scheduled block, or its estimate if
     it was never scheduled -- travel blocks the scheduler inserted around the
     task don't count as the task's own duration."""
-    blocks = [b for b in db.list_scheduled_blocks_for_task(task["id"]) if b["kind"] == "task"]
+    blocks = [
+        b for b in db.list_scheduled_blocks_for_task(task["id"])
+        if b["kind"] == "task" and scheduling.block_granularity(b) == "slot"
+    ]
     if blocks:
         block = blocks[-1]
         start = datetime.fromisoformat(block["start"])
         end = datetime.fromisoformat(block["end"])
         return round((end - start).total_seconds() / 60)
+    # A day-granularity block says which day, not how long (see
+    # SCHEDULED_BLOCKS_SCHEMA), so a task placed that far out falls back to
+    # its estimate rather than to a length the block never claimed.
     return task["est_minutes"]
 
 
@@ -2022,6 +2028,78 @@ def api_set_manual_energy(date_str):
     updated = db.get_daily_capacity(date_str)
     updated["energy"] = scheduling.effective_energy(updated)
     return jsonify(updated)
+
+
+# --- Schedule: the plan --------------------------------------------------------
+
+
+@app.post("/api/schedule/plan")
+def api_run_schedule_plan():
+    """Run the scheduler and replace scheduled_blocks with what it placed.
+
+    Wholesale -- the table is the current plan, not an accumulation of past
+    ones (see db.replace_scheduled_blocks). Task rows are never touched: the
+    scheduler's only output is blocks and the at-risk list it returns here.
+
+    An optional `now` in the body anchors the walk somewhere other than the
+    actual current time, which is what makes a plan reproducible; a dependency
+    cycle is a 400 naming the tasks in it, never a schedule in some order the
+    scheduler picked for itself.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        return jsonify(scheduling.replan(body.get("now")))
+    except scheduling.DependencyCycleError as e:
+        return jsonify({"error": str(e), "task_ids": e.task_ids}), 400
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.get("/api/schedule")
+def api_get_schedule():
+    """The scheduled blocks in a date range, plus the at-risk list.
+
+    `start` and `end` are inclusive dates, defaulting to today and the end of
+    the current horizon -- so no arguments at all means the whole plan from
+    here on.
+
+    The blocks are what the last plan committed. The at-risk list is computed
+    fresh on every read rather than stored, because it is the half that has to
+    be true *now*: a deadline that moved this morning changes what is
+    unreachable whether or not anything has been replanned since, and being
+    told late is the failure this whole feature exists to prevent. If the two
+    ever disagree, the fix is to replan.
+    """
+    start = request.args.get("start")
+    end = request.args.get("end")
+    for value in (start, end):
+        if value is not None and not _is_valid_date(value):
+            return jsonify({"error": "start and end must be YYYY-MM-DD"}), 400
+
+    try:
+        result = scheduling.plan()
+    except scheduling.DependencyCycleError as e:
+        return jsonify({"error": str(e), "task_ids": e.task_ids}), 400
+
+    range_start = start or result["today"]
+    range_end = end or result["horizon_end"]
+    # end is inclusive, and db's range is half-open, so the query runs to the
+    # following midnight -- otherwise a request for a week silently drops
+    # everything scheduled on its last day.
+    stop = (date.fromisoformat(range_end) + timedelta(days=1)).isoformat()
+    blocks = db.list_scheduled_blocks_between(range_start, stop)
+    for block in blocks:
+        block["granularity"] = scheduling.block_granularity(block)
+
+    return jsonify({
+        "start": range_start,
+        "end": range_end,
+        "blocks": blocks,
+        "at_risk": result["at_risk"],
+        "at_risk_by_deliverable": result["at_risk_by_deliverable"],
+        "horizon_end": result["horizon_end"],
+        "slot_detail_until": result["slot_detail_until"],
+    })
 
 
 # --- Schedule: resources -----------------------------------------------------------

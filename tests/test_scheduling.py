@@ -1,8 +1,14 @@
 """scheduling.travel_minutes -- the rules in order: same-location/missing is
 free, a direct or reverse location_travel row wins over the via-home
 fallback, and a missing location never raises -- plus daily capacity
-(available_minutes, infer_energy, compute_daily_capacity).
+(available_minutes, infer_energy, compute_daily_capacity) and the scheduler
+itself.
 """
+import json
+from datetime import date, datetime, timedelta
+
+import pytest
+
 import db
 import scheduling
 
@@ -175,3 +181,546 @@ def test_recomputing_capacity_does_not_clear_a_manual_override(archive):
 
     assert row["manual_energy"] == 1
     assert row["inferred_energy"] == scheduling.LOW_ENERGY
+
+
+def test_available_minutes_counts_overlapping_commitments_once(archive):
+    set_working_hours(0, "09:00", "18:00")
+    db.create_commitment("c1", "Studio session", "2026-01-05T10:00:00", "2026-01-05T12:00:00")
+    # A lunch inside the session isn't a second hour lost -- it's the same
+    # hour, already gone.
+    db.create_commitment("c2", "Lunch", "2026-01-05T11:00:00", "2026-01-05T11:30:00")
+
+    assert scheduling.available_minutes("2026-01-05") == 9 * 60 - 120
+
+
+def test_free_intervals_are_what_is_left_either_side_of_a_commitment(archive):
+    set_working_hours(0, "09:00", "18:00")
+    db.create_commitment("c1", "Studio session", "2026-01-05T10:00:00", "2026-01-05T12:00:00")
+
+    assert scheduling.free_intervals("2026-01-05") == [
+        (datetime(2026, 1, 5, 9, 0), datetime(2026, 1, 5, 10, 0)),
+        (datetime(2026, 1, 5, 12, 0), datetime(2026, 1, 5, 18, 0)),
+    ]
+
+
+# --- The scheduler ---------------------------------------------------------------
+#
+# Every plan is anchored explicitly, so none of these depend on the day they
+# are run. MONDAY is a Monday; the working week below runs Monday to Friday.
+
+MONDAY = "2026-03-02"
+TUESDAY = "2026-03-03"
+WEDNESDAY = "2026-03-04"
+FRIDAY = "2026-03-06"
+
+
+def working_week(opens="09:00", closes="17:00", weekdays=range(5)):
+    db.save_working_hours([{"weekday": w, "opens": opens, "closes": closes} for w in weekdays])
+
+
+def task(task_id, title=None, **fields):
+    db.create_task(task_id, title or task_id, **fields)
+    return task_id
+
+
+def placed(result):
+    """Blocks by task id -- what the plan actually committed to."""
+    return {b["task_id"]: b for b in result["blocks"]}
+
+
+def risk(result):
+    return {e["task_id"]: e for e in result["at_risk"]}
+
+
+def test_an_empty_task_set_returns_an_empty_schedule_rather_than_raising(archive):
+    working_week()
+
+    result = scheduling.plan(MONDAY)
+
+    assert result["blocks"] == []
+    assert result["at_risk"] == []
+    assert result["at_risk_by_deliverable"] == []
+    assert result["summary"]["tasks"] == 0
+    # The horizon still exists -- there is simply nothing in it.
+    assert result["horizon_end"] > result["today"]
+
+
+def test_nothing_can_be_placed_with_no_working_hours_at_all(archive):
+    task("t-a", est_minutes=60)
+
+    result = scheduling.plan(MONDAY)
+
+    assert result["blocks"] == []
+    assert risk(result)["t-a"]["reason"] == scheduling.AT_RISK_NO_CAPACITY
+
+
+def test_a_dependency_is_never_scheduled_before_what_it_depends_on(archive):
+    working_week()
+    # The dependent is the more important of the two, so a scheduler that
+    # ranked on score alone would place it first.
+    task("t-a-cut", "Cut the toile", est_minutes=120, importance=1)
+    task("t-b-sew", "Sew the toile", est_minutes=120, importance=5)
+    db.add_task_dependency("t-b-sew", "t-a-cut")
+
+    blocks = placed(scheduling.plan(MONDAY))
+
+    assert blocks["t-a-cut"]["end"] <= blocks["t-b-sew"]["start"]
+
+
+def test_a_chain_of_dependencies_comes_out_in_order(archive):
+    working_week()
+    for n in range(4):
+        task(f"t-{n}", est_minutes=180)
+    for n in range(1, 4):
+        db.add_task_dependency(f"t-{n}", f"t-{n - 1}")
+
+    blocks = placed(scheduling.plan(MONDAY))
+
+    starts = [blocks[f"t-{n}"]["start"] for n in range(4)]
+    assert starts == sorted(starts)
+
+
+def test_a_dependency_cycle_is_an_error_naming_the_tasks(archive):
+    working_week()
+    task("t-a", "Cut the toile")
+    task("t-b", "Sew the toile")
+    # add_task_dependency trusts its caller (the route checks first), which is
+    # how a cycle can be in the table at all.
+    db.add_task_dependency("t-a", "t-b")
+    db.add_task_dependency("t-b", "t-a")
+
+    with pytest.raises(scheduling.DependencyCycleError) as excinfo:
+        scheduling.plan(MONDAY)
+
+    assert "Cut the toile" in str(excinfo.value)
+    assert "Sew the toile" in str(excinfo.value)
+    assert set(excinfo.value.task_ids) == {"t-a", "t-b"}
+
+
+def test_a_dependency_on_finished_work_does_not_block_anything(archive):
+    working_week()
+    task("t-done", est_minutes=60, status="done")
+    task("t-next", est_minutes=60)
+    db.add_task_dependency("t-next", "t-done")
+
+    blocks = placed(scheduling.plan(MONDAY))
+
+    assert blocks["t-next"]["start"].startswith(MONDAY)
+    assert "t-done" not in blocks  # finished work is not replanned
+
+
+def test_urgency_comes_from_slack_not_from_the_raw_deadline(archive):
+    working_week(closes="18:00")  # nine-hour days, so both fit on Monday
+    # Four days of sewing, due Friday, entered the way it would really be
+    # entered: a chain of day-long tasks.
+    for n in range(4):
+        task(f"t-sew-{n}", f"Sew part {n}", est_minutes=8 * 60, deadline=FRIDAY, importance=3)
+        if n:
+            db.add_task_dependency(f"t-sew-{n}", f"t-sew-{n - 1}")
+    # An hour of admin, due a day EARLIER. Ranked by deadline it would go
+    # first; ranked by slack the sewing does, because four days of work
+    # against four days of calendar has none left.
+    task("t-admin", "Admin", est_minutes=60, deadline=WEDNESDAY, importance=3)
+
+    blocks = placed(scheduling.plan(MONDAY))
+
+    assert blocks["t-sew-0"]["start"] < blocks["t-admin"]["start"]
+    assert blocks["t-sew-0"]["start"] == f"{MONDAY}T09:00:00"
+
+
+def test_an_undated_prerequisite_inherits_the_urgency_of_what_waits_on_it(archive):
+    # Monday holds one two-hour slot, so only one of the two undated tasks
+    # can have it.
+    db.save_working_hours([
+        {"weekday": 0, "opens": "09:00", "closes": "11:00"},
+        {"weekday": 1, "opens": "09:00", "closes": "17:00"},
+        {"weekday": 2, "opens": "09:00", "closes": "17:00"},
+    ])
+    task("t-aaa-loose", "Loose end", est_minutes=120)
+    task("t-zzz-prep", "Prepare", est_minutes=120)
+    task("t-urgent", "Hand in", est_minutes=60, deadline=TUESDAY)
+    db.add_task_dependency("t-urgent", "t-zzz-prep")
+
+    blocks = placed(scheduling.plan(MONDAY))
+
+    # Identical on their own terms, so without the inherited deadline id order
+    # would give Monday to t-aaa-loose and leave the hand-in unreachable.
+    assert blocks["t-zzz-prep"]["start"].startswith(MONDAY)
+    assert blocks["t-aaa-loose"]["start"].startswith(TUESDAY)
+    assert blocks["t-urgent"]["start"].startswith(TUESDAY)
+
+
+def test_the_same_input_twice_gives_byte_identical_output(archive):
+    working_week()
+    db.create_commitment("c1", "Class", f"{MONDAY}T10:00:00", f"{MONDAY}T12:00:00")
+    task("t-a", "Cut", est_minutes=120, importance=4, difficulty=3, deadline=FRIDAY)
+    task("t-b", "Sew", est_minutes=180, importance=4, difficulty=4)
+    # Two tasks alike in every way but their ids: the tie has to break the
+    # same way every run, or the plan shuffles between replans.
+    task("t-c", "Press", est_minutes=90, importance=3, difficulty=2)
+    task("t-d", "Trim", est_minutes=90, importance=3, difficulty=2)
+    task("t-e", "Unreachable", est_minutes=20 * 60, deadline=TUESDAY)
+    db.add_task_dependency("t-b", "t-a")
+
+    first = json.dumps(scheduling.plan(MONDAY))
+    second = json.dumps(scheduling.plan(MONDAY))
+
+    assert first == second
+
+
+def test_a_replan_keeps_the_ids_of_blocks_that_did_not_move(archive):
+    working_week()
+    task("t-a", est_minutes=60)
+
+    scheduling.replan(MONDAY)
+    first = [b["id"] for b in db.list_scheduled_blocks_for_task("t-a")]
+    scheduling.replan(MONDAY)
+    second = [b["id"] for b in db.list_scheduled_blocks_for_task("t-a")]
+
+    assert first == second != []
+
+
+def test_a_task_with_no_slack_lands_on_the_at_risk_list(archive):
+    working_week()
+    # Five days of work due Wednesday, with three working days to do it in.
+    for n in range(5):
+        task(f"t-{n}", f"Task {n}", est_minutes=8 * 60, deadline=WEDNESDAY)
+
+    result = scheduling.plan(MONDAY)
+
+    assert len(result["blocks"]) == 3
+    at_risk = result["at_risk"]
+    assert len(at_risk) == 2
+    assert all(e["reason"] == scheduling.AT_RISK_NO_CAPACITY for e in at_risk)
+    assert all(e["message"] for e in at_risk)
+
+
+def test_a_task_longer_than_any_available_day_is_flagged_rather_than_silently_dropped(archive):
+    working_week()  # eight-hour days
+    task("t-long", "Ten hours of pattern cutting", est_minutes=10 * 60, deadline=FRIDAY)
+
+    result = scheduling.plan(MONDAY)
+
+    assert result["blocks"] == []
+    entry = risk(result)["t-long"]
+    assert entry["reason"] == scheduling.AT_RISK_TOO_LONG
+    assert "10h" in entry["message"]
+    assert "8h" in entry["message"]
+
+
+def test_a_task_whose_deadline_has_already_passed_says_so(archive):
+    working_week()
+    task("t-late", est_minutes=60, deadline="2026-02-20")
+
+    entry = risk(scheduling.plan(MONDAY))["t-late"]
+
+    assert entry["reason"] == scheduling.AT_RISK_OVERDUE
+    assert "2026-02-20" in entry["message"]
+
+
+def test_work_waiting_on_unplaceable_work_is_reported_as_blocked(archive):
+    working_week()
+    task("t-a-huge", "Huge", est_minutes=20 * 60, deadline=FRIDAY)
+    task("t-b-after", "After", est_minutes=60, deadline=FRIDAY)
+    db.add_task_dependency("t-b-after", "t-a-huge")
+
+    entries = risk(scheduling.plan(MONDAY))
+
+    assert entries["t-a-huge"]["reason"] == scheduling.AT_RISK_TOO_LONG
+    assert entries["t-b-after"]["reason"] == scheduling.AT_RISK_BLOCKED
+    assert "Huge" in entries["t-b-after"]["message"]
+
+
+def test_a_low_energy_day_refuses_a_high_difficulty_task(archive):
+    working_week()
+    db.save_daily_capacity(MONDAY, manual_energy=scheduling.LOW_ENERGY)
+    task("t-hard", "Fit the sleeve head", est_minutes=60, difficulty=5)
+
+    block = placed(scheduling.plan(MONDAY))["t-hard"]
+
+    assert block["start"].startswith(TUESDAY)
+
+
+def test_a_low_energy_day_still_takes_low_difficulty_work(archive):
+    working_week()
+    db.save_daily_capacity(MONDAY, manual_energy=scheduling.LOW_ENERGY)
+    task("t-easy", "Trim threads", est_minutes=60, difficulty=2)
+
+    block = placed(scheduling.plan(MONDAY))["t-easy"]
+
+    assert block["start"].startswith(MONDAY)
+
+
+def test_a_task_no_day_has_the_energy_for_is_at_risk_with_that_reason(archive):
+    working_week()
+    for day in (MONDAY, TUESDAY):
+        db.save_daily_capacity(day, manual_energy=1)
+    task("t-hard", "Draft the block", est_minutes=60, difficulty=4, deadline=TUESDAY)
+
+    entry = risk(scheduling.plan(MONDAY))["t-hard"]
+
+    assert entry["reason"] == scheduling.AT_RISK_ENERGY
+    assert "difficulty 4" in entry["message"]
+
+
+def test_the_horizon_runs_to_the_furthest_deadline_not_a_fixed_window(archive):
+    working_week()
+    task("t-soon", est_minutes=60, deadline=FRIDAY)
+    task("t-far", est_minutes=60, deadline="2026-04-10")  # six weeks out
+
+    result = scheduling.plan(MONDAY)
+
+    assert result["horizon_end"] == "2026-04-10"
+    assert placed(result)["t-far"]  # and it is reachable inside it
+
+
+def test_the_horizon_still_covers_a_fortnight_with_no_deadlines_at_all(archive):
+    working_week()
+    task("t-a", est_minutes=60)
+
+    result = scheduling.plan(MONDAY)
+
+    expected = date.fromisoformat(MONDAY) + timedelta(days=scheduling.DEFAULT_HORIZON_DAYS)
+    assert result["horizon_end"] == expected.isoformat()
+
+
+def test_a_task_inherits_its_deliverables_due_date(archive):
+    working_week()
+    db.create_project("p1", "Construction")
+    db.create_deliverable("d1", "p1", "Part 2", due_at="2026-04-03")
+    task("t-a", est_minutes=60, project_id="p1", deliverable_id="d1")
+
+    result = scheduling.plan(MONDAY)
+
+    assert result["horizon_end"] == "2026-04-03"
+
+
+def test_detail_decays_beyond_the_first_week(archive):
+    working_week()
+    for n in range(12):
+        task(f"t-{n:02d}", est_minutes=8 * 60)
+
+    result = scheduling.plan(MONDAY)
+
+    near = [b for b in result["blocks"] if b["granularity"] == "slot"]
+    far = [b for b in result["blocks"] if b["granularity"] == "day"]
+    assert near and far
+    assert all("T" in b["start"] and "T" in b["end"] for b in near)
+    # Further out a block claims a date and nothing more.
+    assert all(b["start"] == b["end"] and "T" not in b["start"] for b in far)
+    boundary = date.fromisoformat(MONDAY) + timedelta(days=scheduling.SLOT_DETAIL_DAYS - 1)
+    assert result["slot_detail_until"] == boundary.isoformat()
+    assert max(b["start"][:10] for b in near) <= boundary.isoformat()
+    assert min(b["start"][:10] for b in far) > boundary.isoformat()
+
+
+def test_a_far_out_dependency_still_lands_after_what_it_depends_on(archive):
+    working_week()
+    # Fill the near week, so the chain is pushed into day-granularity days.
+    for n in range(6):
+        task(f"t-filler-{n}", est_minutes=8 * 60)
+    task("t-x-first", est_minutes=8 * 60)
+    task("t-y-second", est_minutes=8 * 60)
+    db.add_task_dependency("t-y-second", "t-x-first")
+
+    blocks = placed(scheduling.plan(MONDAY))
+
+    assert blocks["t-x-first"]["start"] < blocks["t-y-second"]["start"]
+
+
+def test_at_risk_is_aggregated_per_deliverable(archive):
+    working_week()
+    db.create_project("p1", "Construction")
+    db.create_deliverable("d1", "p1", "Part 2", due_at=WEDNESDAY)
+    for n in range(5):
+        task(f"t-{n}", f"Task {n}", project_id="p1", deliverable_id="d1", est_minutes=8 * 60)
+
+    result = scheduling.plan(MONDAY)
+
+    assert len(result["at_risk"]) == 2
+    rollup = result["at_risk_by_deliverable"]
+    assert len(rollup) == 1
+    assert rollup[0]["deliverable_id"] == "d1"
+    assert rollup[0]["title"] == "Part 2"
+    assert rollup[0]["project_id"] == "p1"
+    assert rollup[0]["at_risk_tasks"] == 2
+    assert rollup[0]["total_tasks"] == 5
+    assert rollup[0]["at_risk_minutes"] == 2 * 8 * 60
+    assert rollup[0]["task_ids"] == sorted(rollup[0]["task_ids"])
+
+
+def test_a_standalone_task_at_risk_is_reported_but_not_aggregated(archive):
+    working_week()
+    task("t-a", est_minutes=20 * 60, deadline=FRIDAY)
+
+    result = scheduling.plan(MONDAY)
+
+    assert len(result["at_risk"]) == 1
+    assert result["at_risk_by_deliverable"] == []
+
+
+def test_work_is_never_placed_in_hours_that_have_already_passed(archive):
+    working_week()
+    task("t-a", est_minutes=60)
+
+    result = scheduling.plan(datetime(2026, 3, 2, 14, 30))
+
+    assert placed(result)["t-a"]["start"] == f"{MONDAY}T14:30:00"
+
+
+def test_commitments_are_planned_around_not_over(archive):
+    working_week()
+    db.create_commitment("c1", "Studio class", f"{MONDAY}T09:00:00", f"{MONDAY}T15:00:00")
+    task("t-a", est_minutes=120)
+
+    assert placed(scheduling.plan(MONDAY))["t-a"]["start"] == f"{MONDAY}T15:00:00"
+
+
+def test_the_scheduler_never_mutates_a_task_row(archive):
+    working_week()
+    task("t-a", est_minutes=60, deadline=FRIDAY)
+    task("t-b", est_minutes=40 * 60, deadline=FRIDAY)  # will be at risk
+    before = {t["id"]: t for t in db.list_tasks()}
+
+    scheduling.replan(MONDAY)
+
+    assert {t["id"]: t for t in db.list_tasks()} == before
+    assert db.list_scheduled_blocks_for_task("t-a")  # it did place it
+
+
+def test_replan_replaces_the_previous_plan_wholesale(archive):
+    working_week()
+    task("t-a", est_minutes=60)
+    scheduling.replan(MONDAY)
+    db.create_scheduled_block("stale", "t-a", "2026-01-01T09:00:00", "2026-01-01T10:00:00")
+
+    scheduling.replan(MONDAY)
+
+    blocks = db.list_scheduled_blocks_for_task("t-a")
+    assert [b["id"] for b in blocks] != ["stale"]
+    assert len(blocks) == 1
+
+
+def test_a_stored_day_granularity_block_is_recognised_as_such(archive):
+    working_week()
+    for n in range(12):
+        task(f"t-{n:02d}", est_minutes=8 * 60)
+    scheduling.replan(MONDAY)
+
+    stored = db.list_scheduled_blocks_between(MONDAY, "2026-04-01")
+    kinds = {scheduling.block_granularity(b) for b in stored}
+
+    assert kinds == {"slot", "day"}
+
+
+# --- The routes -------------------------------------------------------------------
+#
+# Anchored on today rather than a fixed date, so the stored blocks fall inside
+# the range GET /api/schedule covers by default.
+
+
+def any_day_working_hours():
+    db.save_working_hours([{"weekday": w, "opens": "09:00", "closes": "17:00"} for w in range(7)])
+
+
+def test_the_plan_route_places_work_and_persists_the_blocks(client):
+    any_day_working_hours()
+    today = date.today().isoformat()
+    task("t-a", "Cut the toile", est_minutes=120)
+
+    body = client.post("/api/schedule/plan", json={"now": today}).get_json()
+
+    assert body["summary"]["placed"] == 1
+    assert body["blocks"][0]["task_id"] == "t-a"
+    assert [b["id"] for b in db.list_scheduled_blocks_for_task("t-a")] == [body["blocks"][0]["id"]]
+
+
+def test_the_plan_route_replaces_the_previous_plans_blocks(client):
+    any_day_working_hours()
+    today = date.today().isoformat()
+    task("t-a", est_minutes=120)
+    db.create_scheduled_block("stale", "t-a", "2020-01-01T09:00:00", "2020-01-01T10:00:00")
+
+    client.post("/api/schedule/plan", json={"now": today})
+
+    assert "stale" not in [b["id"] for b in db.list_scheduled_blocks_for_task("t-a")]
+
+
+def test_the_plan_route_rejects_a_dependency_cycle(client):
+    any_day_working_hours()
+    task("t-a", "Cut the toile")
+    task("t-b", "Sew the toile")
+    db.add_task_dependency("t-a", "t-b")
+    db.add_task_dependency("t-b", "t-a")
+
+    resp = client.post("/api/schedule/plan", json={})
+
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert "Cut the toile" in body["error"]
+    assert set(body["task_ids"]) == {"t-a", "t-b"}
+
+
+def test_the_plan_route_rejects_an_unreadable_anchor(client):
+    resp = client.post("/api/schedule/plan", json={"now": "next tuesday"})
+
+    assert resp.status_code == 400
+
+
+def test_the_schedule_route_returns_blocks_in_range_plus_the_at_risk_list(client):
+    any_day_working_hours()
+    today = date.today()
+    task("t-a", "Cut the toile", est_minutes=120)
+    task("t-b", "Unreachable", est_minutes=100 * 60, deadline=(today + timedelta(days=2)).isoformat())
+    client.post("/api/schedule/plan", json={"now": today.isoformat()})
+
+    body = client.get("/api/schedule").get_json()
+
+    assert [b["task_id"] for b in body["blocks"]] == ["t-a"]
+    assert body["blocks"][0]["granularity"] == "slot"
+    assert [e["task_id"] for e in body["at_risk"]] == ["t-b"]
+    assert body["start"] == today.isoformat()
+    # No range given, so it runs to the end of the horizon.
+    assert body["end"] == body["horizon_end"]
+
+
+def test_the_schedule_routes_end_date_is_inclusive(client):
+    any_day_working_hours()
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+    # Two full days of work, so there is a block on each of them.
+    task("t-a", est_minutes=8 * 60)
+    task("t-b", est_minutes=8 * 60)
+    client.post("/api/schedule/plan", json={"now": today.isoformat()})
+
+    body = client.get(f"/api/schedule?start={today.isoformat()}&end={tomorrow.isoformat()}").get_json()
+
+    assert {b["start"][:10] for b in body["blocks"]} == {today.isoformat(), tomorrow.isoformat()}
+
+
+def test_the_schedule_route_rejects_a_malformed_date(client):
+    resp = client.get("/api/schedule?start=the-fifth")
+
+    assert resp.status_code == 400
+
+
+def test_an_ordinary_day_admits_the_hardest_work(archive):
+    # Energy is only ever inferred as baseline or one below it, so if a
+    # baseline day refused difficulty 5 nothing that hard could be scheduled
+    # at all without a manual override.
+    working_week()
+    task("t-hard", "Fit the sleeve head", est_minutes=60, difficulty=5)
+
+    block = placed(scheduling.plan(MONDAY))["t-hard"]
+
+    assert block["start"].startswith(MONDAY)
+
+
+def test_the_at_risk_list_reads_soonest_deadline_first(archive):
+    working_week()
+    task("t-z-soon", "Soon", est_minutes=20 * 60, deadline=WEDNESDAY)
+    task("t-a-later", "Later", est_minutes=20 * 60, deadline=FRIDAY)
+
+    result = scheduling.plan(MONDAY)
+
+    assert [e["task_id"] for e in result["at_risk"]] == ["t-z-soon", "t-a-later"]
