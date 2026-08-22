@@ -317,6 +317,75 @@ def test_commitment_crud_and_support_level_validation(client):
     assert client.get("/api/commitments").get_json() == []
 
 
+# --- Working hours and daily capacity -----------------------------------------
+
+
+def test_working_hours_round_trip_wholesale(client):
+    resp = client.put("/api/working-hours", json={
+        "hours": [{"weekday": 0, "opens": "09:00", "closes": "18:00"}]
+    })
+    assert resp.status_code == 200
+    assert client.get("/api/working-hours").get_json() == [
+        {"weekday": 0, "opens": "09:00", "closes": "18:00"}
+    ]
+
+    client.put("/api/working-hours", json={"hours": []})
+    assert client.get("/api/working-hours").get_json() == []
+
+
+def test_capacity_route_computes_available_minutes_from_working_hours_and_commitments(client):
+    client.put("/api/working-hours", json={
+        "hours": [{"weekday": 0, "opens": "09:00", "closes": "18:00"}]  # Monday
+    })
+    client.post("/api/commitments", json={
+        "title": "Studio class", "start": "2026-01-05T10:00:00", "end": "2026-01-05T11:00:00",
+    })
+
+    resp = client.get("/api/capacity/2026-01-05")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["available_minutes"] == 9 * 60 - 60
+    assert body["energy"] == body["inferred_energy"]
+
+
+def test_capacity_route_rejects_a_malformed_date(client):
+    assert client.get("/api/capacity/not-a-date").status_code == 400
+    assert client.put("/api/capacity/not-a-date", json={"manual_energy": 4}).status_code == 400
+
+
+def test_manual_energy_override_wins_and_survives_recompute(client):
+    client.get("/api/capacity/2026-01-06")  # seed a row with inferred_energy
+
+    resp = client.put("/api/capacity/2026-01-06", json={"manual_energy": 5})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["manual_energy"] == 5
+    assert body["energy"] == 5
+
+    # Recomputing (e.g. after a new commitment) must not clear the override.
+    client.post("/api/commitments", json={
+        "title": "Something new", "start": "2026-01-05T09:00:00", "end": "2026-01-05T10:00:00",
+    })
+    again = client.get("/api/capacity/2026-01-06").get_json()
+    assert again["manual_energy"] == 5
+    assert again["energy"] == 5
+
+
+def test_manual_energy_override_can_be_cleared_back_to_inferred(client):
+    client.put("/api/capacity/2026-01-06", json={"manual_energy": 5})
+
+    cleared = client.put("/api/capacity/2026-01-06", json={"manual_energy": None}).get_json()
+
+    assert cleared["manual_energy"] is None
+    assert cleared["energy"] == cleared["inferred_energy"]
+
+
+def test_capacity_override_route_requires_manual_energy_key(client):
+    resp = client.put("/api/capacity/2026-01-06", json={})
+    assert resp.status_code == 400
+
+
 # --- Task field generation ---------------------------------------------------
 #
 # task_ai.generate_task_fields itself is stubbed for every test (conftest.py),

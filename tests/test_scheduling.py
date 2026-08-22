@@ -1,6 +1,7 @@
 """scheduling.travel_minutes -- the rules in order: same-location/missing is
 free, a direct or reverse location_travel row wins over the via-home
-fallback, and a missing location never raises.
+fallback, and a missing location never raises -- plus daily capacity
+(available_minutes, infer_energy, compute_daily_capacity).
 """
 import db
 import scheduling
@@ -64,3 +65,113 @@ def test_a_reverse_pair_row_overrides_the_symmetric_fallback(archive):
 
     assert scheduling.travel_minutes(studio, shop) == 8
     assert scheduling.travel_minutes(shop, studio) == 12
+
+
+# --- Daily capacity ------------------------------------------------------------
+
+
+def set_working_hours(weekday, opens="09:00", closes="18:00"):
+    db.save_working_hours([{"weekday": weekday, "opens": opens, "closes": closes}])
+
+
+def test_available_minutes_subtracts_commitments_correctly(archive):
+    # 2026-01-05 is a Monday (weekday 0).
+    set_working_hours(0, "09:00", "18:00")
+    db.create_commitment("c1", "Studio class", "2026-01-05T10:00:00", "2026-01-05T11:00:00")
+
+    assert scheduling.available_minutes("2026-01-05") == 9 * 60 - 60
+
+
+def test_available_minutes_only_subtracts_the_overlapping_part_of_a_commitment(archive):
+    set_working_hours(0, "09:00", "18:00")
+    # Starts before the window opens, ends inside it -- only 08:00-09:00 is
+    # outside working hours and doesn't count.
+    db.create_commitment("c1", "Early shift", "2026-01-05T08:00:00", "2026-01-05T09:30:00")
+
+    assert scheduling.available_minutes("2026-01-05") == 9 * 60 - 30
+
+
+def test_available_minutes_ignores_a_commitment_entirely_outside_the_window(archive):
+    set_working_hours(0, "09:00", "18:00")
+    db.create_commitment("c1", "Late dinner", "2026-01-05T20:00:00", "2026-01-05T22:00:00")
+
+    assert scheduling.available_minutes("2026-01-05") == 9 * 60
+
+
+def test_available_minutes_is_zero_with_no_working_hours_for_that_weekday(archive):
+    set_working_hours(0, "09:00", "18:00")  # Monday only
+
+    assert scheduling.available_minutes("2026-01-04") == 0  # a Sunday
+
+
+def test_infer_energy_is_baseline_with_no_commitments_the_day_before(archive):
+    assert scheduling.infer_energy("2026-01-06") == scheduling.BASELINE_ENERGY
+
+
+def test_infer_energy_drops_after_a_high_cost_commitment_ending_late(archive):
+    db.create_commitment(
+        "c1", "Late crit", "2026-01-05T18:00:00", "2026-01-05T21:00:00",
+        energy_cost=scheduling.HIGH_ENERGY_COST,
+    )
+
+    assert scheduling.infer_energy("2026-01-06") == scheduling.LOW_ENERGY
+
+
+def test_infer_energy_is_unaffected_by_a_high_cost_commitment_that_ends_early(archive):
+    db.create_commitment(
+        "c1", "Busy but done by dinner", "2026-01-05T14:00:00", "2026-01-05T18:00:00",
+        energy_cost=scheduling.HIGH_ENERGY_COST,
+    )
+
+    assert scheduling.infer_energy("2026-01-06") == scheduling.BASELINE_ENERGY
+
+
+def test_infer_energy_is_unaffected_by_a_late_commitment_that_is_not_high_cost(archive):
+    db.create_commitment(
+        "c1", "Relaxed evening class", "2026-01-05T18:00:00", "2026-01-05T21:00:00",
+        energy_cost=scheduling.HIGH_ENERGY_COST - 1,
+    )
+
+    assert scheduling.infer_energy("2026-01-06") == scheduling.BASELINE_ENERGY
+
+
+def test_compute_daily_capacity_persists_available_minutes_and_inferred_energy(archive):
+    set_working_hours(0, "09:00", "18:00")
+    db.create_commitment("c1", "Studio class", "2026-01-05T10:00:00", "2026-01-05T11:00:00")
+
+    row = scheduling.compute_daily_capacity("2026-01-05")
+
+    assert row["available_minutes"] == 9 * 60 - 60
+    assert row["inferred_energy"] == scheduling.BASELINE_ENERGY
+    assert db.get_daily_capacity("2026-01-05") == row
+
+
+def test_a_manual_energy_override_wins_over_inferred(archive):
+    db.create_commitment(
+        "c1", "Late crit", "2026-01-05T18:00:00", "2026-01-05T21:00:00",
+        energy_cost=scheduling.HIGH_ENERGY_COST,
+    )
+    scheduling.compute_daily_capacity("2026-01-06")  # inferred_energy would be LOW
+    db.save_daily_capacity("2026-01-06", manual_energy=5)
+
+    row = scheduling.compute_daily_capacity("2026-01-06")
+
+    assert row["inferred_energy"] == scheduling.LOW_ENERGY
+    assert row["manual_energy"] == 5
+    assert scheduling.effective_energy(row) == 5
+
+
+def test_recomputing_capacity_does_not_clear_a_manual_override(archive):
+    scheduling.compute_daily_capacity("2026-01-06")
+    db.save_daily_capacity("2026-01-06", manual_energy=1, available_minutes=0)
+
+    # A new commitment on the day before changes what would be inferred --
+    # recomputing must still leave the override in place.
+    db.create_commitment(
+        "c1", "Late crit", "2026-01-05T18:00:00", "2026-01-05T21:00:00",
+        energy_cost=scheduling.HIGH_ENERGY_COST,
+    )
+    row = scheduling.compute_daily_capacity("2026-01-06")
+
+    assert row["manual_energy"] == 1
+    assert row["inferred_energy"] == scheduling.LOW_ENERGY

@@ -7,3 +7,9 @@ numpy>=1.24.0
 python-dotenv>=1.0.0
 Flask>=3.0.0
 pytest>=8.0.0
+
+# ICS parsing for schedule import (session 4). icalendar does the parsing;
+# recurring_ical_events expands RRULE/EXDATE/RECURRENCE-ID into concrete
+# occurrences with correct per-instance DST handling -- see ics_import.py.
+icalendar>=6.0
+recurring-ical-events>=3.0

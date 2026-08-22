@@ -601,6 +601,20 @@ CREATE TABLE IF NOT EXISTS briefs (
 );
 """
 
+# The user's own regular working hours, one row per weekday (same 0=Monday
+# convention as LOCATION_HOURS_SCHEMA) -- global rather than per-location,
+# since this is when the user could work at all, before location or
+# commitment availability narrows it further. No row for a weekday means no
+# working hours that day, same "absence is the closed case" convention as
+# location_hours.
+WORKING_HOURS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS working_hours (
+    weekday INTEGER PRIMARY KEY,
+    opens TEXT,
+    closes TEXT
+);
+"""
+
 # One row per day: how much the scheduler thinks is available, and how much
 # energy is likely on hand -- inferred_energy from patterns in past actuals,
 # manual_energy when the user overrides that guess for a specific day (an
@@ -623,6 +637,8 @@ SCHEDULE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_scheduled_blocks_task ON scheduled_blocks(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_scheduled_blocks_start ON scheduled_blocks(start)",
     "CREATE INDEX IF NOT EXISTS idx_commitments_start ON commitments(start)",
+    "CREATE INDEX IF NOT EXISTS idx_commitments_external_uid ON commitments(external_uid)",
+    "CREATE INDEX IF NOT EXISTS idx_commitments_source ON commitments(source)",
     "CREATE INDEX IF NOT EXISTS idx_deliverables_project ON deliverables(project_id)",
     "CREATE INDEX IF NOT EXISTS idx_location_hours_location ON location_hours(location_id)",
 )
@@ -691,6 +707,7 @@ def init_db():
         conn.execute(RESOURCES_SCHEMA)
         conn.execute(RESOURCE_ITEMS_SCHEMA)
         conn.execute(BRIEFS_SCHEMA)
+        conn.execute(WORKING_HOURS_SCHEMA)
         conn.execute(DAILY_CAPACITY_SCHEMA)
         for ddl in SCHEDULE_INDEXES:
             conn.execute(ddl)
@@ -2542,6 +2559,41 @@ def get_commitment(commitment_id):
         return dict(row) if row else None
 
 
+def get_commitment_by_external_uid(external_uid):
+    """Look up the commitment an ICS sync already imported for this UID (or
+    UID#RECURRENCE-ID -- see ics_import.py), so a re-sync updates it in place
+    instead of inserting a duplicate."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM commitments WHERE external_uid = ?", (external_uid,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_commitments_by_source(source):
+    """Every commitment previously imported from this feed -- what
+    ics_import.sync_feed diffs the freshly-parsed feed against to find
+    occurrences that were deleted upstream."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM commitments WHERE source = ?", (source,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_commitments_between(range_start, range_end):
+    """Commitments overlapping [range_start, range_end) at all, including
+    ones that only partially overlap -- the standard interval-overlap test,
+    not a containment test. Used by scheduling.available_minutes to find
+    what's already busy inside a day's working hours."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM commitments WHERE start < ? AND end > ? ORDER BY start",
+            (range_end, range_start),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 COMMITMENT_PATCH_COLUMNS = (
     "title", "start", "end", "kind", "location_id", "support_level", "source",
     "external_uid", "energy_cost",
@@ -2910,6 +2962,26 @@ def _brief_to_dict(row):
     d = dict(row)
     d["extracted"] = json.loads(d["extracted"]) if d["extracted"] else None
     return d
+
+
+# --- Schedule: working hours ------------------------------------------------
+
+
+def get_working_hours():
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM working_hours ORDER BY weekday").fetchall()
+        return [dict(r) for r in rows]
+
+
+def save_working_hours(hours):
+    """Replace the whole weekly working-hours template at once -- same
+    wholesale-replace reasoning as save_location_hours."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM working_hours")
+        conn.executemany(
+            "INSERT INTO working_hours (weekday, opens, closes) VALUES (?, ?, ?)",
+            [(h["weekday"], h.get("opens"), h.get("closes")) for h in hours],
+        )
 
 
 # --- Schedule: daily capacity ---------------------------------------------------

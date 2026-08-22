@@ -15,7 +15,7 @@ import tempfile
 import threading
 import uuid
 import webbrowser
-from datetime import datetime
+from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -28,7 +28,9 @@ import colour
 import db
 import embeddings
 import graph_layout
+import ics_import
 import ingest
+import scheduling
 import style_gen
 import task_ai
 from config import ARCHIVE_API_TOKEN, REFERENCES_DIR
@@ -1877,6 +1879,138 @@ def api_delete_commitment(commitment_id):
         abort(404)
     db.delete_commitment(commitment_id)
     return jsonify({"ok": True, "id": commitment_id})
+
+
+@app.put("/api/commitments/classify")
+def api_classify_commitments():
+    """Reclassify several commitments' support_level and/or location_id at
+    once -- import can't know either reliably from a title (see
+    ics_import.py), so this is the fast way to set both together after
+    selecting a run of sessions. Survives a later re-sync, since sync_feed
+    never touches these two fields on a row it updates.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not ids:
+        return jsonify({"error": "ids must be a non-empty list"}), 400
+
+    fields = {}
+    if "support_level" in body:
+        if body["support_level"] not in db.COMMITMENT_SUPPORT_LEVELS:
+            return jsonify({
+                "error": f"support_level must be one of {', '.join(db.COMMITMENT_SUPPORT_LEVELS)}"
+            }), 400
+        fields["support_level"] = body["support_level"]
+    if "location_id" in body:
+        fields["location_id"] = body["location_id"]
+    if not fields:
+        return jsonify({"error": "support_level and/or location_id is required"}), 400
+
+    updated = []
+    for commitment_id in ids:
+        if db.get_commitment(commitment_id):
+            db.update_commitment(commitment_id, **fields)
+            updated.append(db.get_commitment(commitment_id))
+    return jsonify(updated)
+
+
+@app.post("/api/commitments/import")
+def api_import_commitments():
+    """Import, or re-sync, commitments from an ICS feed -- an uploaded .ics
+    file (multipart, field "file") or a feed URL (JSON body {"feed_url": ...}).
+
+    Sync scope is `source`: for a URL that's the URL itself; for an upload
+    it's an explicit "source" field if given, else the uploaded filename --
+    either way, re-running the same import with the same source updates and
+    prunes the same set of commitments rather than starting a second,
+    unrelated one. See ics_import.sync_feed for the update/insert/delete
+    rules.
+    """
+    if "file" in request.files:
+        upload = request.files["file"]
+        source = request.form.get("source") or upload.filename
+        try:
+            ics_text = upload.read().decode("utf-8")
+        except UnicodeDecodeError:
+            return jsonify({"error": "not a valid .ics file"}), 400
+    else:
+        body = request.get_json(force=True, silent=True) or {}
+        feed_url = (body.get("feed_url") or "").strip()
+        if not feed_url:
+            return jsonify({"error": "a file upload or feed_url is required"}), 400
+        if not feed_url.startswith(("http://", "https://")):
+            return jsonify({"error": "feed_url must be http:// or https://"}), 400
+        source = body.get("source") or feed_url
+        try:
+            ics_text = ics_import.fetch_feed(feed_url)
+        except ics_import.FeedFetchError as e:
+            return jsonify({"error": str(e)}), 502
+
+    try:
+        summary = ics_import.sync_feed(source, ics_text)
+    except ics_import.InvalidICSError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(summary)
+
+
+# --- Schedule: working hours and daily capacity -------------------------------
+
+
+@app.get("/api/working-hours")
+def api_get_working_hours():
+    return jsonify(db.get_working_hours())
+
+
+@app.put("/api/working-hours")
+def api_save_working_hours():
+    """Replace the whole weekly working-hours template at once -- see
+    db.save_working_hours for why this is wholesale, not per-day."""
+    body = request.get_json(force=True, silent=True) or {}
+    hours = body.get("hours")
+    if not isinstance(hours, list):
+        return jsonify({"error": "hours must be a list"}), 400
+    db.save_working_hours(hours)
+    return jsonify(db.get_working_hours())
+
+
+def _is_valid_date(date_str):
+    try:
+        date.fromisoformat(date_str)
+        return True
+    except ValueError:
+        return False
+
+
+@app.get("/api/capacity/<date_str>")
+def api_get_daily_capacity(date_str):
+    if not _is_valid_date(date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    row = scheduling.compute_daily_capacity(date_str)
+    row["energy"] = scheduling.effective_energy(row)
+    return jsonify(row)
+
+
+@app.put("/api/capacity/<date_str>")
+def api_set_manual_energy(date_str):
+    """Set, or clear, the manual energy override for one day -- send
+    manual_energy: null to clear it back to the inferred value. Always wins
+    over inferred_energy while set (see scheduling.effective_energy)."""
+    if not _is_valid_date(date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    body = request.get_json(force=True, silent=True) or {}
+    if "manual_energy" not in body:
+        return jsonify({"error": "manual_energy is required (null clears the override)"}), 400
+
+    row = scheduling.compute_daily_capacity(date_str)
+    db.save_daily_capacity(
+        date_str,
+        inferred_energy=row["inferred_energy"],
+        manual_energy=body["manual_energy"],
+        available_minutes=row["available_minutes"],
+    )
+    updated = db.get_daily_capacity(date_str)
+    updated["energy"] = scheduling.effective_energy(updated)
+    return jsonify(updated)
 
 
 # --- Schedule: resources -----------------------------------------------------------
