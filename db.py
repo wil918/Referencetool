@@ -2698,6 +2698,19 @@ def list_travel():
         return [dict(r) for r in rows]
 
 
+def get_travel_minutes(from_location_id, to_location_id):
+    """The stored minutes for one ordered pair, or None if no row covers it --
+    scheduling.travel_minutes checks both directions before falling back to
+    the via-home estimate, so None (not 0) is what lets it tell "no data" from
+    "measured at zero minutes"."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT minutes FROM location_travel WHERE from_location_id = ? AND to_location_id = ?",
+            (from_location_id, to_location_id),
+        ).fetchone()
+        return row["minutes"] if row else None
+
+
 def save_travel(entries):
     """Replace the whole location-to-location travel matrix at once, same
     wholesale-replace reasoning as save_location_hours -- the settings UI

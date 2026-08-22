@@ -1759,6 +1759,13 @@ def api_save_location_hours(location_id):
     return jsonify(db.get_location_hours(location_id))
 
 
+@app.get("/api/locations/<location_id>/overrides")
+def api_list_location_overrides(location_id):
+    if not db.get_location(location_id):
+        abort(404)
+    return jsonify(db.list_location_overrides(location_id))
+
+
 @app.post("/api/locations/<location_id>/overrides")
 def api_create_location_override(location_id):
     if not db.get_location(location_id):

@@ -265,6 +265,7 @@ def test_location_crud_and_deletion_clears_required_location_on_tasks(client):
     ).get_json()
     assert len(override_resp) == 1
     override_id = override_resp[0]["id"]
+    assert client.get(f"/api/locations/{location['id']}/overrides").get_json() == override_resp
     remaining = client.delete(
         f"/api/locations/{location['id']}/overrides", json={"id": override_id}
     ).get_json()

@@ -2,6 +2,7 @@ import { makeCard, markSelectable, makeBarThumb } from "./shared/cards.js";
 import * as carousel from "./shared/carousel.js";
 import * as folders from "./project/folders.js";
 import * as tasks from "./tasks.js";
+import { initLocationsManager } from "./locations.js";
 
 const SUPPORTED_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".txt", ".md", ".pdf"];
 
@@ -865,6 +866,11 @@ colourBackfillBtn.addEventListener("click", async () => {
 });
 
 // --- Init ---
+
+// Locations affect the Tasks tab's "Location" dropdowns, so a change made
+// while the manager is open (adding, renaming, deleting) refreshes the task
+// list once the overlay closes rather than leaving those selects stale.
+initLocationsManager(() => tasks.refreshTaskList());
 
 // A hash deep link picks its own tab and loads whatever that tab needs;
 // failing that, prime the archive grid so switching to it is instant. Run

@@ -205,6 +205,7 @@
       </div>
 
       <div class="task-filters">
+        <button id="manage-locations-btn" class="btn">Locations</button>
         <label>
           Project
           <select id="task-filter-project">
@@ -317,6 +318,72 @@
       <div class="modal-actions">
         <button id="new-project-cancel" class="btn">Cancel</button>
         <button id="new-project-create" class="btn primary">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="locations-overlay" class="modal-overlay" hidden>
+    <div class="modal-box locations-modal-box">
+      <div class="locations-modal-header">
+        <h3>Locations</h3>
+        <button id="locations-close-btn" class="btn">Close</button>
+      </div>
+      <div class="locations-modal-body">
+        <div class="locations-layout">
+          <div class="locations-list-panel">
+            <div class="locations-create-row">
+              <input type="text" id="new-location-name" placeholder="New location name">
+              <button id="new-location-add-btn" class="btn primary">Add</button>
+            </div>
+            <div id="locations-list" class="locations-list"></div>
+            <p id="locations-list-empty" class="muted" hidden>No locations yet.</p>
+          </div>
+          <div class="locations-detail-panel" id="locations-detail">
+            <p class="muted">Select a location to edit its details.</p>
+          </div>
+        </div>
+
+        <div class="locations-travel-section">
+          <h4>Travel between locations</h4>
+          <p class="muted">
+            Each location's "Travel from home" above covers the first and last leg of a
+            day -- home to a location and back. It can't express a trip between two
+            locations directly, so add the pairs actually travelled here. A pair with no
+            row falls back to going via home (deliberately pessimistic -- there are no
+            coordinates in this system and no routing API; if that produces a silly
+            number, add the pair instead of guessing at a distance). Travel is treated as
+            symmetric by default, so adding a pair offers to save both directions at once.
+          </p>
+          <div id="travel-list" class="travel-list"></div>
+          <p id="travel-list-empty" class="muted" hidden>No pairs on file yet -- everything falls back to via-home.</p>
+          <div class="travel-add-row">
+            <select id="travel-from-select"></select>
+            <span class="muted">to</span>
+            <select id="travel-to-select"></select>
+            <input type="number" id="travel-minutes-input" min="0" placeholder="minutes">
+            <label class="checkbox-label">
+              <input type="checkbox" id="travel-both-directions-input" checked>
+              Both directions
+            </label>
+            <button id="travel-add-btn" class="btn primary">Add</button>
+          </div>
+          <p id="travel-status" class="muted"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="delete-location-overlay" class="modal-overlay" hidden>
+    <div class="modal-box">
+      <h3>Delete location</h3>
+      <p id="delete-location-text"></p>
+      <p class="muted">
+        Its weekly hours, date overrides and any travel times involving it go too. Tasks
+        that required it keep their other details -- they just lose the location.
+      </p>
+      <div class="modal-actions">
+        <button id="delete-location-cancel" class="btn">Cancel</button>
+        <button id="delete-location-confirm" class="btn danger">Delete</button>
       </div>
     </div>
   </div>
