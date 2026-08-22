@@ -30,6 +30,7 @@ import embeddings
 import graph_layout
 import ingest
 import style_gen
+import task_ai
 from config import ARCHIVE_API_TOKEN, REFERENCES_DIR
 
 app = Flask(__name__, static_folder="static", static_url_path="")
@@ -1560,6 +1561,87 @@ def api_remove_task_dependency(task_id):
         return jsonify({"error": "depends_on_task_id is required"}), 400
     db.remove_task_dependency(task_id, depends_on_task_id)
     return jsonify({"ok": True})
+
+
+@app.post("/api/tasks/generate")
+def api_generate_task_fields():
+    """Given the one sentence a quick-added task requires, ask Claude to
+    suggest whatever else the entry form left blank. Pure generation -- this
+    persists nothing. The caller (the Tasks tab's save flow) merges the
+    result with whatever the user actually typed and posts that to
+    POST /api/tasks like any other task, tagging each field's *_source
+    accordingly. A scoped addition alongside /api/tasks, not a change to it."""
+    body = request.get_json(force=True, silent=True) or {}
+    description = (body.get("description") or "").strip()
+    if not description:
+        return jsonify({"error": "a description is required"}), 400
+    try:
+        return jsonify(task_ai.generate_task_fields(description))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/tasks/<task_id>/actual")
+def api_get_task_actual(task_id):
+    """The recorded actuals for a done task, so the Tasks tab can render them
+    as the same editable chips the estimate started as. None (not 404) when
+    the task exists but hasn't been completed yet -- absent-because-not-done
+    is a normal state, not an error."""
+    if not db.get_task(task_id):
+        abort(404)
+    return jsonify(db.get_task_actual(task_id))
+
+
+@app.post("/api/tasks/<task_id>/complete")
+def api_complete_task(task_id):
+    """One-tap completion. With no body at all, every actual defaults per the
+    rule in db.py's Schedule section (block length or estimate; the task's
+    own difficulty/importance) -- that default path is what makes Done a
+    single tap. Any of actual_minutes/actual_difficulty/actual_importance/
+    notes may be sent to correct a value, either at completion time or later;
+    a field left out of a later correction keeps what was already recorded
+    rather than falling back to the default again, so fixing one actual can
+    never silently reset another."""
+    task = db.get_task(task_id)
+    if not task:
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    existing = db.get_task_actual(task_id)
+
+    def resolve(key, default):
+        if key in body:
+            return body[key]
+        if existing and existing.get(key) is not None:
+            return existing[key]
+        return default
+
+    actual_minutes = resolve("actual_minutes", _default_actual_minutes(task))
+    actual_difficulty = resolve("actual_difficulty", task["difficulty"])
+    actual_importance = resolve("actual_importance", task["importance"])
+    notes = body.get("notes", existing["notes"] if existing else None)
+
+    db.save_task_actual(
+        task_id,
+        actual_minutes=actual_minutes,
+        actual_difficulty=actual_difficulty,
+        actual_importance=actual_importance,
+        notes=notes,
+    )
+    db.update_task(task_id, status="done")
+    return jsonify({"task": db.get_task(task_id), "actual": db.get_task_actual(task_id)})
+
+
+def _default_actual_minutes(task):
+    """The length of this task's current scheduled block, or its estimate if
+    it was never scheduled -- travel blocks the scheduler inserted around the
+    task don't count as the task's own duration."""
+    blocks = [b for b in db.list_scheduled_blocks_for_task(task["id"]) if b["kind"] == "task"]
+    if blocks:
+        block = blocks[-1]
+        start = datetime.fromisoformat(block["start"])
+        end = datetime.fromisoformat(block["end"])
+        return round((end - start).total_seconds() / 60)
+    return task["est_minutes"]
 
 
 # --- Schedule: deliverables ---------------------------------------------------

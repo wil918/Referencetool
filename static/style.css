@@ -856,6 +856,182 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 
 .selection-actions { display: flex; gap: 0.6rem; align-items: center; }
 
+/* --- Tasks ---
+   Entry is deliberately lopsided: one required sentence and a Save button
+   up top, every optional field crammed behind a closed-by-default
+   disclosure. Resist the urge to promote any of those fields back to the
+   surface -- the whole point is that most tasks are saved with the
+   disclosure never opened. */
+
+.task-entry {
+  padding: 2rem;
+  border-radius: 26px;
+  background: var(--bg);
+  box-shadow: var(--raise-md);
+  margin-bottom: 2rem;
+}
+
+.task-entry-row { display: flex; gap: 0.75rem; align-items: center; }
+.task-entry-row input[type="text"] { flex: 1; }
+
+.task-advanced { margin-top: 1.25rem; }
+
+.task-advanced summary {
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 0.8rem;
+  color: var(--muted);
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  user-select: none;
+}
+
+.task-advanced summary::-webkit-details-marker { display: none; }
+.task-advanced summary::before { content: "+"; font-size: 1rem; line-height: 1; }
+.task-advanced[open] summary::before { content: "\2212"; }
+.task-advanced summary:hover { color: var(--ink-strong); }
+
+.task-advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.85rem 1.25rem;
+  margin-top: 1.25rem;
+}
+
+.task-advanced-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.task-advanced-grid label.task-field-wide { grid-column: 1 / -1; }
+
+#task-save-status:empty { display: none; }
+#task-save-status { margin: 0.85rem 0 0; }
+
+.task-filters {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+
+.task-filters label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.task-list { display: flex; flex-direction: column; gap: 1rem; }
+
+.task-card {
+  padding: 1.25rem 1.5rem;
+  border-radius: 22px;
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+}
+
+.task-card.done { opacity: 0.65; }
+
+.task-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.task-card-header .muted { text-transform: capitalize; white-space: nowrap; }
+
+.task-title {
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  color: var(--ink-strong);
+  margin: 0;
+  padding: 0.15rem 0.4rem;
+  margin-left: -0.4rem;
+  border-radius: 8px;
+  cursor: text;
+}
+
+.task-title:hover { box-shadow: var(--press-sm); }
+.task-title:focus { outline: none; box-shadow: var(--press-sm), 0 0 0 1px var(--accent-soft); }
+
+.task-meta { font-size: 0.78rem; color: var(--muted); margin: 0.35rem 0 0; }
+
+.task-goal {
+  font-family: var(--serif);
+  font-size: 0.85rem;
+  color: var(--ink);
+  margin: 0.65rem 0 0;
+  padding: 0.1rem 0.4rem;
+  margin-left: -0.4rem;
+  border-radius: 8px;
+  cursor: text;
+}
+
+.task-goal:hover { box-shadow: var(--press-sm); }
+.task-goal:focus { outline: none; box-shadow: var(--press-sm), 0 0 0 1px var(--accent-soft); }
+
+.task-chips, .task-actuals {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+
+.task-actuals .muted { margin: 0; font-size: 0.78rem; }
+
+.task-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+  color: var(--ink);
+  cursor: pointer;
+  transition: var(--press);
+}
+
+.task-chip:hover { box-shadow: var(--raise-md); color: var(--ink-strong); }
+
+/* A chip still carrying Claude's guess gets the same small lit dot the
+   active-tab indicator uses, rather than a fill or border -- it needs to
+   read as "generated" without stopping being a chip. Editing it (see
+   tasks.js) flips the task's matching *_source to 'user' and the dot goes
+   away on the next render. */
+.task-chip.generated::after {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 5px var(--accent-soft);
+}
+
+.task-chip input[type="number"] {
+  width: 3.2rem;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.75rem;
+  border-radius: 999px;
+  box-shadow: none;
+  background: transparent;
+}
+
+.task-card-actions { display: flex; justify-content: flex-end; margin-top: 1rem; }
+
 /* --- Previous Analysis sidebar ---
    A fixed panel pinned to the right edge, sized to about half the viewport
    rather than a full-screen modal, so the project grid stays visible (and

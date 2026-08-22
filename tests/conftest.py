@@ -50,6 +50,13 @@ def archive(tmp_path, monkeypatch):
         patch("embeddings.embed_combined", return_value=[0.3] * 512),
         patch("embeddings.add_to_index"),
         patch("embeddings.remove_from_index"),
+        patch("task_ai.generate_task_fields", return_value={
+            "title": "Generated Title",
+            "est_minutes": 30,
+            "importance": 3,
+            "difficulty": 2,
+            "measurable_goal": "Generated goal",
+        }),
     ]
     for s in stubs:
         s.start()

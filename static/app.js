@@ -1,6 +1,7 @@
 import { makeCard, markSelectable, makeBarThumb } from "./shared/cards.js";
 import * as carousel from "./shared/carousel.js";
 import * as folders from "./project/folders.js";
+import * as tasks from "./tasks.js";
 
 const SUPPORTED_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".txt", ".md", ".pdf"];
 
@@ -19,6 +20,7 @@ function activateTab(name) {
 
   if (name === "archive") refreshArchive();
   if (name === "projects") showProjectsList();
+  if (name === "tasks") tasks.refreshTaskList();
   if (name === "settings") {
     refreshSimilarityStatus();
     refreshColourCoverageStatus();
