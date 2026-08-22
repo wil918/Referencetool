@@ -316,6 +316,148 @@ def test_commitment_crud_and_support_level_validation(client):
     assert client.get("/api/commitments").get_json() == []
 
 
+# --- Task field generation ---------------------------------------------------
+#
+# task_ai.generate_task_fields itself is stubbed for every test (conftest.py),
+# same as tagging.tag_image/tag_text/tag_pdf -- these exercise the route, not
+# the prompt.
+
+
+def test_generate_task_fields_requires_a_description(client):
+    resp = client.post("/api/tasks/generate", json={"description": ""})
+    assert resp.status_code == 400
+
+
+def test_generate_task_fields_returns_the_stubbed_suggestion(client):
+    resp = client.post("/api/tasks/generate", json={"description": "Sew the toile"})
+    assert resp.status_code == 200
+    assert resp.get_json() == {
+        "title": "Generated Title",
+        "est_minutes": 30,
+        "importance": 3,
+        "difficulty": 2,
+        "measurable_goal": "Generated goal",
+    }
+
+
+def test_generate_task_fields_surfaces_a_failure_as_a_500(client, monkeypatch):
+    import task_ai
+
+    def boom(description):
+        raise RuntimeError("no API key")
+
+    monkeypatch.setattr(task_ai, "generate_task_fields", boom)
+
+    resp = client.post("/api/tasks/generate", json={"description": "Sew the toile"})
+
+    assert resp.status_code == 500
+    assert "no API key" in resp.get_json()["error"]
+
+
+# --- Task completion -----------------------------------------------------------
+
+
+def test_getting_the_actual_for_a_task_not_yet_done_is_none_not_404(client):
+    task = make_task(client, "Task")
+
+    resp = client.get(f"/api/tasks/{task['id']}/actual")
+
+    assert resp.status_code == 200
+    assert resp.get_json() is None
+
+
+def test_getting_the_actual_for_a_task_that_does_not_exist_404s(client):
+    resp = client.get("/api/tasks/nonexistent/actual")
+    assert resp.status_code == 404
+
+
+def test_getting_the_actual_after_completion_returns_the_recorded_values(client):
+    task = make_task(client, "Task", est_minutes=40, importance=4, difficulty=3)
+    client.post(f"/api/tasks/{task['id']}/complete")
+
+    resp = client.get(f"/api/tasks/{task['id']}/actual")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["actual_minutes"] == 40
+    assert body["actual_difficulty"] == 3
+    assert body["actual_importance"] == 4
+
+
+def test_completing_an_unscheduled_task_defaults_actuals_to_its_own_estimate(client):
+    task = make_task(client, "Task", est_minutes=40, importance=4, difficulty=3)
+
+    resp = client.post(f"/api/tasks/{task['id']}/complete")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["task"]["status"] == "done"
+    assert body["actual"]["actual_minutes"] == 40
+    assert body["actual"]["actual_difficulty"] == 3
+    assert body["actual"]["actual_importance"] == 4
+
+
+def test_completing_a_scheduled_task_defaults_actual_minutes_to_the_blocks_length(client):
+    task = make_task(client, "Task", est_minutes=999)
+    db.create_scheduled_block(
+        str(uuid.uuid4()), task["id"], "2026-01-01T09:00:00", "2026-01-01T09:25:00"
+    )
+
+    resp = client.post(f"/api/tasks/{task['id']}/complete")
+
+    assert resp.get_json()["actual"]["actual_minutes"] == 25
+
+
+def test_completing_a_task_ignores_travel_blocks_when_defaulting_actual_minutes(client):
+    task = make_task(client, "Task", est_minutes=999)
+    db.create_scheduled_block(
+        str(uuid.uuid4()), task["id"], "2026-01-01T08:45:00", "2026-01-01T09:00:00", kind="travel"
+    )
+    db.create_scheduled_block(
+        str(uuid.uuid4()), task["id"], "2026-01-01T09:00:00", "2026-01-01T09:20:00", kind="task"
+    )
+
+    resp = client.post(f"/api/tasks/{task['id']}/complete")
+
+    assert resp.get_json()["actual"]["actual_minutes"] == 20
+
+
+def test_one_tap_completion_needs_no_body_at_all(client):
+    task = make_task(client, "Task")
+
+    resp = client.post(f"/api/tasks/{task['id']}/complete", json=None)
+
+    assert resp.status_code == 200
+    assert resp.get_json()["task"]["status"] == "done"
+
+
+def test_completing_a_task_that_does_not_exist_404s(client):
+    resp = client.post("/api/tasks/nonexistent/complete")
+    assert resp.status_code == 404
+
+
+def test_correcting_one_actual_after_completion_keeps_the_others(client):
+    task = make_task(client, "Task", est_minutes=40, importance=4, difficulty=3)
+    client.post(f"/api/tasks/{task['id']}/complete")
+
+    resp = client.post(f"/api/tasks/{task['id']}/complete", json={"actual_minutes": 55})
+
+    body = resp.get_json()["actual"]
+    assert body["actual_minutes"] == 55
+    # Not sent this time -- must keep what the first tap already recorded,
+    # not fall back to the task's own difficulty/importance again.
+    assert body["actual_difficulty"] == 3
+    assert body["actual_importance"] == 4
+
+
+def test_completing_a_task_can_record_notes(client):
+    task = make_task(client, "Task")
+
+    resp = client.post(f"/api/tasks/{task['id']}/complete", json={"notes": "went well"})
+
+    assert resp.get_json()["actual"]["notes"] == "went well"
+
+
 # --- Resources and resource items -----------------------------------------------
 
 
