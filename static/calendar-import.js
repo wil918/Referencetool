@@ -23,11 +23,29 @@ const statusEl = document.getElementById("calendar-import-status");
 
 let storedFeedUrl = null;
 
+function formatWindowDate(isoDate) {
+  return new Date(`${isoDate}T00:00:00`).toLocaleDateString("en-GB", {
+    day: "numeric", month: "short", year: "numeric",
+  });
+}
+
 // The same shape as the countable outcome of running the sync twice: the
 // second run should read "no additions", not just "it worked" -- that's
 // what makes a duplicate-on-resync bug visible instead of silently passing.
+//
+// events_found (VEVENT components in the file) and events_in_window (what
+// actually got considered for sync) are also always returned, but only
+// worth a line when they differ -- a bare "Added 0, updated 0, removed 0"
+// reads identically whether the feed genuinely had nothing new or the
+// parser or window excluded everything, and that's exactly what should
+// never happen silently.
 function describeSummary(data) {
-  return `Added ${data.created}, updated ${data.updated}, removed ${data.deleted}.`;
+  const counts = `Added ${data.created}, updated ${data.updated}, removed ${data.deleted}.`;
+  if (data.events_found === data.events_in_window) return counts;
+  const start = formatWindowDate(data.window_start);
+  const end = formatWindowDate(data.window_end);
+  return `${counts} ${data.events_found} events found, ${data.events_in_window} within the `
+    + `import window (${start} - ${end}).`;
 }
 
 async function runImport(body, { isFormData = false } = {}) {
@@ -109,7 +127,9 @@ feedResyncBtn.addEventListener("click", () => {
 openBtn.addEventListener("click", async () => {
   overlay.hidden = false;
   statusEl.textContent = "";
-  fileNameEl.textContent = "";
+  // fileNameEl is deliberately left alone -- the last file chosen this
+  // session stays visible across a close/reopen, the same as the feed URL
+  // persisting across one. Only picking a new file replaces it.
   await refreshStoredFeedUrl();
 });
 closeBtn.addEventListener("click", () => {

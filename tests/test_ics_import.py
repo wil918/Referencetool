@@ -82,6 +82,61 @@ def test_a_weekly_series_keeps_the_same_wall_clock_hour_across_the_dst_change(ar
     ]
 
 
+# --- Events found vs. events within the import window --------------------------
+#
+# A sync that places nothing must be able to say why -- a feed that's
+# genuinely empty and one whose events all fell outside the window both used
+# to report the same bare "0 created" summary.
+
+
+def test_events_found_counts_vevent_components_not_occurrences(archive):
+    ics = ics_calendar(
+        single_event("lecture-1@studio.example"),
+        weekly_series("lecture-2@studio.example", count=4),
+    )
+
+    result = sync("studio.ics", ics)
+
+    # 2 VEVENT blocks in the file, even though the series expands to 4
+    # separate commitments -- events_found is a parse-level fact, not a
+    # count of what got synced.
+    assert result["events_found"] == 2
+    assert result["events_in_window"] == 5
+
+
+def test_events_outside_the_window_are_found_but_not_placed(archive):
+    # Pinned well outside FIXED_WINDOW (2026-01-01 for 200 days).
+    ics = ics_calendar(single_event(
+        "lecture-1@studio.example", start="20300105T090000", end="20300105T110000",
+    ))
+
+    result = sync("studio.ics", ics)
+
+    assert result["events_found"] == 1
+    assert result["events_in_window"] == 0
+    assert result["created"] == 0
+    assert result["window_start"] == "2026-01-01"
+    assert result["window_end"] == (date(2026, 1, 1) + timedelta(days=200)).isoformat()
+
+
+def test_window_bounds_use_the_default_window_when_not_pinned(archive):
+    ics = ics_calendar(single_event("lecture-1@studio.example"))
+
+    result = ics_import.sync_feed("adhoc.ics", ics)  # no FIXED_WINDOW override
+
+    expected_start = date.today() - timedelta(days=ics_import.IMPORT_WINDOW_PAST_DAYS)
+    expected_days = ics_import.IMPORT_WINDOW_PAST_DAYS + ics_import.IMPORT_WINDOW_FUTURE_DAYS
+    assert result["window_start"] == expected_start.isoformat()
+    assert result["window_end"] == (expected_start + timedelta(days=expected_days)).isoformat()
+
+
+def test_a_fully_empty_feed_reports_zero_found_and_zero_in_window(archive):
+    result = sync("studio.ics", ics_calendar())
+
+    assert result["events_found"] == 0
+    assert result["events_in_window"] == 0
+
+
 # --- Re-sync: dedup, update, deletion -----------------------------------------
 
 

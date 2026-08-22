@@ -91,8 +91,19 @@ def _external_uid(uid, recurrence_id, recurring_uids):
 
 def parse_events(ics_text, window_start=None, window_days=None):
     """Every occurrence in the window -- including each instance of a
-    recurring series -- as {external_uid, title, start, end} dicts, start/end
-    already collapsed to local naive ISO strings.
+    recurring series -- plus how many events the file actually defines, so a
+    sync that places nothing can say why instead of just reporting a zero
+    that reads the same whether the feed was empty or the parser missed
+    everything.
+
+    Returns {"events": [...], "events_found", "window_start", "window_end"}.
+    Each item in `events` is {external_uid, title, start, end}, start/end
+    already collapsed to local naive ISO strings. events_found counts VEVENT
+    *components* in the file -- distinct calendar entries, including a
+    recurring series's own override components -- not occurrences: for an
+    RRULE with no UNTIL/COUNT, occurrences are unbounded and wouldn't say
+    anything meaningful about whether the file parsed sensibly. window_start
+    and window_end are date objects.
     """
     try:
         calendar = icalendar.Calendar.from_ical(ics_text)
@@ -103,6 +114,7 @@ def parse_events(ics_text, window_start=None, window_days=None):
     window_days = window_days or (IMPORT_WINDOW_PAST_DAYS + IMPORT_WINDOW_FUTURE_DAYS)
     window_end = window_start + timedelta(days=window_days)
     recurring_uids = _recurring_uids(calendar)
+    events_found = len(calendar.walk("VEVENT"))
 
     events = []
     for occurrence in recurring_ical_events.of(calendar).between(window_start, window_end):
@@ -118,7 +130,12 @@ def parse_events(ics_text, window_start=None, window_days=None):
             "start": start.isoformat(),
             "end": end.isoformat(),
         })
-    return events
+    return {
+        "events": events,
+        "events_found": events_found,
+        "window_start": window_start,
+        "window_end": window_end,
+    }
 
 
 def sync_feed(source, ics_text, window_start=None, window_days=None):
@@ -132,7 +149,8 @@ def sync_feed(source, ics_text, window_start=None, window_days=None):
     previously imported from this source that the feed no longer contains is
     deleted, so an upstream cancellation removes it here too.
     """
-    events = parse_events(ics_text, window_start, window_days)
+    parsed = parse_events(ics_text, window_start, window_days)
+    events = parsed["events"]
 
     seen_uids = set()
     created = updated = 0
@@ -162,5 +180,8 @@ def sync_feed(source, ics_text, window_start=None, window_days=None):
         "created": created,
         "updated": updated,
         "deleted": deleted,
-        "total": len(events),
+        "events_found": parsed["events_found"],
+        "events_in_window": len(events),
+        "window_start": parsed["window_start"].isoformat(),
+        "window_end": parsed["window_end"].isoformat(),
     }
