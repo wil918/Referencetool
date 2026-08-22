@@ -1941,6 +1941,9 @@ def api_import_commitments():
         if not feed_url.startswith(("http://", "https://")):
             return jsonify({"error": "feed_url must be http:// or https://"}), 400
         source = body.get("source") or feed_url
+        # Remembered as soon as the user submits it, not only once it works --
+        # a transient fetch failure shouldn't mean retyping the URL to retry.
+        db.save_ics_feed_url(feed_url)
         try:
             ics_text = ics_import.fetch_feed(feed_url)
         except ics_import.FeedFetchError as e:
@@ -1951,6 +1954,14 @@ def api_import_commitments():
     except ics_import.InvalidICSError as e:
         return jsonify({"error": str(e)}), 400
     return jsonify(summary)
+
+
+@app.get("/api/commitments/feed")
+def api_get_ics_feed():
+    """The last feed URL the user configured, if any -- lets the calendar
+    import UI prefill the field and offer Re-sync without asking the user to
+    paste the URL again."""
+    return jsonify({"feed_url": db.get_ics_feed_url()})
 
 
 # --- Schedule: working hours and daily capacity -------------------------------

@@ -492,6 +492,16 @@ CREATE TABLE IF NOT EXISTS commitments (
 );
 """
 
+# The last ICS feed URL the user configured, remembered so re-syncing it
+# doesn't mean pasting it again -- see ics_import.py. Wholesale single-row
+# storage, same delete-then-insert contract as working_hours; there's only
+# ever one, so no id column to key it on.
+ICS_FEED_SCHEMA = """
+CREATE TABLE IF NOT EXISTS ics_feed (
+    feed_url TEXT NOT NULL
+);
+"""
+
 # A place work can happen. travel_minutes_from_home is a cheap default the
 # scheduler can use before location_travel has a specific pair on file.
 LOCATIONS_SCHEMA = """
@@ -699,6 +709,7 @@ def init_db():
         conn.execute(TASK_ACTUALS_SCHEMA)
         conn.execute(SCHEDULED_BLOCKS_SCHEMA)
         conn.execute(COMMITMENTS_SCHEMA)
+        conn.execute(ICS_FEED_SCHEMA)
         conn.execute(LOCATIONS_SCHEMA)
         conn.execute(LOCATION_HOURS_SCHEMA)
         conn.execute(LOCATION_OVERRIDES_SCHEMA)
@@ -2618,6 +2629,18 @@ def update_commitment(commitment_id, **fields):
 def delete_commitment(commitment_id):
     with get_conn() as conn:
         conn.execute("DELETE FROM commitments WHERE id = ?", (commitment_id,))
+
+
+def get_ics_feed_url():
+    with get_conn() as conn:
+        row = conn.execute("SELECT feed_url FROM ics_feed LIMIT 1").fetchone()
+        return row["feed_url"] if row else None
+
+
+def save_ics_feed_url(feed_url):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM ics_feed")
+        conn.execute("INSERT INTO ics_feed (feed_url) VALUES (?)", (feed_url,))
 
 
 # --- Schedule: locations ------------------------------------------------------

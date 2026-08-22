@@ -242,6 +242,62 @@ def test_import_route_rejects_a_non_http_feed_url(client):
     assert resp.status_code == 400
 
 
+# --- Feed URL persistence -------------------------------------------------------
+#
+# The UI's whole point in remembering a feed URL is not having to paste it
+# again to re-sync, so these stub fetch_feed rather than hitting the network.
+
+
+def test_feed_route_returns_null_when_nothing_is_configured(client):
+    assert client.get("/api/commitments/feed").get_json() == {"feed_url": None}
+
+
+def test_a_successful_url_import_is_remembered_as_the_feed(client, monkeypatch):
+    ics = ics_calendar(single_event(
+        "lecture-1@studio.example",
+        start=f"{date.today():%Y%m%d}T090000", end=f"{date.today():%Y%m%d}T110000",
+    ))
+    monkeypatch.setattr(ics_import, "fetch_feed", lambda url: ics)
+
+    resp = client.post("/api/commitments/import", json={"feed_url": "https://cal.example/timetable.ics"})
+
+    assert resp.status_code == 200
+    assert client.get("/api/commitments/feed").get_json() == {
+        "feed_url": "https://cal.example/timetable.ics"
+    }
+
+
+def test_a_feed_url_is_remembered_even_if_the_fetch_then_fails(client, monkeypatch):
+    def boom(url):
+        raise ics_import.FeedFetchError("connection refused")
+
+    monkeypatch.setattr(ics_import, "fetch_feed", boom)
+
+    resp = client.post("/api/commitments/import", json={"feed_url": "https://cal.example/timetable.ics"})
+
+    assert resp.status_code == 502
+    assert client.get("/api/commitments/feed").get_json() == {
+        "feed_url": "https://cal.example/timetable.ics"
+    }
+
+
+def test_resyncing_via_the_stored_feed_url_reports_no_additions_the_second_time(client, monkeypatch):
+    ics = ics_calendar(single_event(
+        "lecture-1@studio.example",
+        start=f"{date.today():%Y%m%d}T090000", end=f"{date.today():%Y%m%d}T110000",
+    ))
+    monkeypatch.setattr(ics_import, "fetch_feed", lambda url: ics)
+
+    first = client.post(
+        "/api/commitments/import", json={"feed_url": "https://cal.example/timetable.ics"}
+    ).get_json()
+    stored = client.get("/api/commitments/feed").get_json()["feed_url"]
+    second = client.post("/api/commitments/import", json={"feed_url": stored}).get_json()
+
+    assert first["created"] == 1 and first["updated"] == 0
+    assert second["created"] == 0 and second["updated"] == 1
+
+
 def test_classify_route_sets_support_level_and_location_for_several_at_once(client):
     a = client.post("/api/commitments", json={
         "title": "Class A", "start": "2026-01-05T09:00:00", "end": "2026-01-05T11:00:00",

@@ -1173,6 +1173,25 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   .location-hours-row { grid-template-columns: 1fr; }
 }
 
+/* --- Calendar import (calendar-import.js) ---
+   Reachable from the Tasks tab, next to Locations. Short enough to stay in
+   the small centred modal-box everything else uses, just a touch wider for
+   the feed-URL row's input plus two buttons. */
+
+.modal-box.calendar-modal-box { max-width: 520px; }
+
+.calendar-import-section { margin-bottom: 1.5rem; }
+.calendar-import-section:last-of-type { margin-bottom: 0.85rem; }
+.calendar-import-section h4 { margin: 0 0 0.5rem; font-size: 1rem; }
+.calendar-import-section .muted { margin: 0 0 0.75rem; }
+
+#calendar-file-name { margin-left: 0.75rem; }
+
+.calendar-feed-row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+.calendar-feed-row input { flex: 1; min-width: 200px; margin-bottom: 0; }
+
+#calendar-import-status:empty { display: none; }
+
 /* --- Previous Analysis sidebar ---
    A fixed panel pinned to the right edge, sized to about half the viewport
    rather than a full-screen modal, so the project grid stays visible (and
