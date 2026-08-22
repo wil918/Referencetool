@@ -352,6 +352,296 @@ CAPTURE_FAILED = "failed"
 CAPTURE_PENDING_STATUSES = (CAPTURE_QUEUED, CAPTURE_PROCESSING)
 
 
+# --- Schedule -----------------------------------------------------------
+#
+# The scheduling side of a project: deliverables it owes, the tasks that get
+# there, where those tasks can happen, what else already occupies the
+# calendar, and the scheduler's own output. Unlike folders/widgets/canvas
+# above, most of this does NOT die with its project -- see the per-table notes
+# below for exactly what does and doesn't.
+
+# What a project owes, and when. `spec` is JSON rather than columns because
+# brief formats (the source a deliverable's requirements were extracted from)
+# change from year to year and course to course; forcing that into columns
+# would mean a migration every time a new brief shape shows up.
+DELIVERABLES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS deliverables (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    due_at TEXT,
+    weighting REAL,
+    spec TEXT,
+    position INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+# A unit of work. project_id is nullable ON PURPOSE: a task with no project is
+# a normal, first-class thing (errands, admin, anything not tied to
+# coursework) and it competes for the same calendar hours as project work --
+# it must never be forced to have a project.
+#
+# est_minutes/importance/difficulty each have a matching *_source column
+# ('user' or 'generated'). A duration the user typed and one Claude guessed
+# have to stay distinguishable, or a later estimator that trains on past
+# actuals would end up training on its own earlier guesses.
+#
+# support_level here is needs | prefers | independent -- a *requirement* about
+# how much this task needs another person around. That is a different
+# vocabulary from commitments.support_level (priority | ambient | none) on
+# purpose: a commitment describes a window of time, a task describes a need,
+# and conflating them would make one of the two vocabularies lie.
+#
+# recurrence_id links a task back to the recurrence_rules row that spawned it.
+# continues_task_id chains a remainder task back to the partially-done task it
+# picks up from, when a task can't be finished in one sitting. slip_count
+# counts how many times this task has been bumped to a later block by a
+# replan, for the scheduler to weigh against always deferring the same task.
+TASKS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,
+    deliverable_id TEXT,
+    title TEXT NOT NULL,
+    description TEXT,
+    measurable_goal TEXT,
+    deadline TEXT,
+    required_location_id TEXT,
+    support_level TEXT NOT NULL DEFAULT 'independent',
+    est_minutes INTEGER,
+    importance INTEGER,
+    difficulty INTEGER,
+    is_finishing INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    recurrence_id TEXT,
+    continues_task_id TEXT,
+    slip_count INTEGER NOT NULL DEFAULT 0,
+    est_minutes_source TEXT,
+    importance_source TEXT,
+    difficulty_source TEXT,
+    created_at TEXT NOT NULL
+);
+"""
+
+# A task may not be scheduled before every task it depends on is done. A plain
+# edge table rather than an ordered list column because the cycle check (see
+# task_dependency_cycle) and any future topological sort both want to walk
+# this as a graph, not parse a string.
+TASK_DEPENDENCIES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    task_id TEXT NOT NULL,
+    depends_on_task_id TEXT NOT NULL,
+    PRIMARY KEY (task_id, depends_on_task_id)
+);
+"""
+
+# How a task actually went, recorded once it's done. A separate table rather
+# than columns on tasks for the same reason colour_analysis isn't columns on
+# reference_items: it's derived, one-shot data with its own lifecycle (it
+# doesn't exist until the task is finished), not a property of the task
+# itself.
+TASK_ACTUALS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS task_actuals (
+    task_id TEXT PRIMARY KEY,
+    actual_minutes INTEGER,
+    actual_difficulty INTEGER,
+    actual_importance INTEGER,
+    completed_at TEXT NOT NULL,
+    notes TEXT
+);
+"""
+
+# The scheduler's OUTPUT, not an editable plan. Every replan regenerates this
+# table's contents wholesale for the tasks it touches -- it must never mutate
+# a task row to reflect where that task landed. kind distinguishes a block
+# that IS the task ('task') from a block the scheduler inserted around it
+# ('travel'), so the calendar can render both without the travel block being
+# mistaken for work.
+SCHEDULED_BLOCKS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS scheduled_blocks (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    start TEXT NOT NULL,
+    end TEXT NOT NULL,
+    is_locked INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL DEFAULT 'task',
+    generated_at TEXT NOT NULL
+);
+"""
+
+# Anything already on the calendar that isn't a task the scheduler placed
+# itself -- classes, shifts, appointments, imported calendar events. Its own
+# support_level vocabulary (priority | ambient | none) describes how much this
+# WINDOW demands attention, which is a different question from a task's
+# support_level (see TASKS_SCHEMA). source/external_uid identify where an
+# imported commitment came from, so a re-import can update rather than
+# duplicate it.
+COMMITMENTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS commitments (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    start TEXT NOT NULL,
+    end TEXT NOT NULL,
+    kind TEXT,
+    location_id TEXT,
+    support_level TEXT NOT NULL DEFAULT 'none',
+    source TEXT,
+    external_uid TEXT,
+    energy_cost INTEGER
+);
+"""
+
+# A place work can happen. travel_minutes_from_home is a cheap default the
+# scheduler can use before location_travel has a specific pair on file.
+LOCATIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS locations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    address TEXT,
+    travel_minutes_from_home INTEGER,
+    notes TEXT
+);
+"""
+
+# A location's regular opening hours, one row per weekday (0=Monday .. 6=Sunday,
+# same convention as Python's date.weekday()). Separate rows rather than seven
+# columns on `locations` so a location with irregular hours (e.g. closed
+# Sundays) simply has no row for that weekday instead of a null pair.
+LOCATION_HOURS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS location_hours (
+    location_id TEXT NOT NULL,
+    weekday INTEGER NOT NULL,
+    opens TEXT,
+    closes TEXT,
+    PRIMARY KEY (location_id, weekday)
+);
+"""
+
+# One-off exceptions to a location's regular hours -- a holiday closure, a
+# special late night. Looked up by date rather than folded into
+# location_hours because an override is inherently irregular: it applies once,
+# not every week.
+LOCATION_OVERRIDES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS location_overrides (
+    id TEXT PRIMARY KEY,
+    location_id TEXT NOT NULL,
+    date TEXT NOT NULL,
+    opens TEXT,
+    closes TEXT,
+    closed INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+# Measured or estimated travel time between two specific locations, overriding
+# the cheap travel_minutes_from_home default when the scheduler needs to place
+# a location-to-location trip rather than a trip from home.
+LOCATION_TRAVEL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS location_travel (
+    from_location_id TEXT NOT NULL,
+    to_location_id TEXT NOT NULL,
+    minutes INTEGER NOT NULL,
+    PRIMARY KEY (from_location_id, to_location_id)
+);
+"""
+
+# A rule that spawns recurring tasks (e.g. "water the samples every 3 days").
+# interval_days is how often; window_days is how much slack the scheduler has
+# around the ideal date before a recurrence counts as slipped, since "every 3
+# days" placed at the exact same hour every time would fight with everything
+# else on the calendar.
+RECURRENCE_RULES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS recurrence_rules (
+    id TEXT PRIMARY KEY,
+    interval_days INTEGER NOT NULL,
+    window_days INTEGER NOT NULL DEFAULT 1,
+    preferred_time TEXT,
+    active INTEGER NOT NULL DEFAULT 1
+);
+"""
+
+# A named source of material (a shop, a library, a supplier's site) worth
+# knowing about while working, global rather than per project the same way
+# styles and palettes are -- a resource discovered on one project is worth
+# keeping around for the next.
+RESOURCES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS resources (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    location_id TEXT,
+    url TEXT,
+    notes TEXT,
+    date_added TEXT NOT NULL
+);
+"""
+
+# What a resource actually has -- specific items worth remembering, each with
+# its own free-text tags. A resource is a place; its items are why it's worth
+# the trip.
+RESOURCE_ITEMS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS resource_items (
+    resource_id TEXT NOT NULL,
+    item TEXT NOT NULL,
+    tags TEXT,
+    PRIMARY KEY (resource_id, item)
+);
+"""
+
+# An imported assignment brief. `extracted` is JSON -- whatever structure the
+# extraction step produced -- kept as the durable record of what a deliverable
+# was built from, independent of deliverables.spec which is the (possibly
+# hand-edited) result.
+BRIEFS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS briefs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    filepath TEXT,
+    extracted TEXT,
+    imported_at TEXT NOT NULL
+);
+"""
+
+# One row per day: how much the scheduler thinks is available, and how much
+# energy is likely on hand -- inferred_energy from patterns in past actuals,
+# manual_energy when the user overrides that guess for a specific day (an
+# early night, a rough morning). Keyed by date rather than attached to
+# anything else because capacity is a property of the day, not of any one
+# task or commitment on it.
+DAILY_CAPACITY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS daily_capacity (
+    date TEXT PRIMARY KEY,
+    inferred_energy INTEGER,
+    manual_energy INTEGER,
+    available_minutes INTEGER
+);
+"""
+
+SCHEDULE_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_deliverable ON tasks(deliverable_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)",
+    "CREATE INDEX IF NOT EXISTS idx_scheduled_blocks_task ON scheduled_blocks(task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_scheduled_blocks_start ON scheduled_blocks(start)",
+    "CREATE INDEX IF NOT EXISTS idx_commitments_start ON commitments(start)",
+    "CREATE INDEX IF NOT EXISTS idx_deliverables_project ON deliverables(project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_location_hours_location ON location_hours(location_id)",
+)
+
+# A task is only ever in one of these states. pending: not yet scheduled.
+# scheduled: has a current scheduled_blocks row. done: finished. partial:
+# worked on but not finished (see continues_task_id). abandoned: not going to
+# happen.
+TASK_STATUSES = ("pending", "scheduled", "done", "partial", "abandoned")
+
+# See TASKS_SCHEMA above for why this is a different vocabulary from
+# COMMITMENT_SUPPORT_LEVELS.
+TASK_SUPPORT_LEVELS = ("needs", "prefers", "independent")
+COMMITMENT_SUPPORT_LEVELS = ("priority", "ambient", "none")
+
+# Every *_source column on tasks is one of these two values.
+SOURCE_KINDS = ("user", "generated")
+
+
 @contextmanager
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
@@ -386,6 +676,23 @@ def init_db():
         conn.execute(CANVAS_NODES_SCHEMA)
         conn.execute(CANVAS_EDGES_SCHEMA)
         for ddl in PROJECT_SPACE_INDEXES:
+            conn.execute(ddl)
+        conn.execute(DELIVERABLES_SCHEMA)
+        conn.execute(TASKS_SCHEMA)
+        conn.execute(TASK_DEPENDENCIES_SCHEMA)
+        conn.execute(TASK_ACTUALS_SCHEMA)
+        conn.execute(SCHEDULED_BLOCKS_SCHEMA)
+        conn.execute(COMMITMENTS_SCHEMA)
+        conn.execute(LOCATIONS_SCHEMA)
+        conn.execute(LOCATION_HOURS_SCHEMA)
+        conn.execute(LOCATION_OVERRIDES_SCHEMA)
+        conn.execute(LOCATION_TRAVEL_SCHEMA)
+        conn.execute(RECURRENCE_RULES_SCHEMA)
+        conn.execute(RESOURCES_SCHEMA)
+        conn.execute(RESOURCE_ITEMS_SCHEMA)
+        conn.execute(BRIEFS_SCHEMA)
+        conn.execute(DAILY_CAPACITY_SCHEMA)
+        for ddl in SCHEDULE_INDEXES:
             conn.execute(ddl)
         # Migrate older databases created before these columns existed.
         for ddl in (
@@ -612,6 +919,20 @@ def delete_project(project_id):
         conn.execute("DELETE FROM project_settings WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM canvas_nodes WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM canvas_edges WHERE project_id = ?", (project_id,))
+        # Schedule: deliverables and briefs only ever meant anything inside this
+        # project, so they go with it -- same reasoning as the project space
+        # above. Tasks are different (see TASKS_SCHEMA): the work may still
+        # matter with no project behind it, so a task survives with project_id
+        # cleared. Its deliverable_id has to be cleared first, before the
+        # deliverable it points at disappears out from under it.
+        conn.execute(
+            """UPDATE tasks SET deliverable_id = NULL WHERE deliverable_id IN
+                   (SELECT id FROM deliverables WHERE project_id = ?)""",
+            (project_id,),
+        )
+        conn.execute("DELETE FROM deliverables WHERE project_id = ?", (project_id,))
+        conn.execute("UPDATE tasks SET project_id = NULL WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM briefs WHERE project_id = ?", (project_id,))
 
 
 def count_project_references(project_id):
@@ -1816,3 +2137,788 @@ def _canvas_edge_to_dict(row):
     d = dict(row)
     d["style"] = json.loads(d["style"]) if d["style"] else None
     return d
+
+
+# --- Schedule: deliverables ---------------------------------------------
+
+
+def create_deliverable(deliverable_id, project_id, title, description=None, due_at=None,
+                       weighting=None, spec=None, position=None):
+    with get_conn() as conn:
+        if position is None:
+            position = _next_position(conn, "deliverables", project_id)
+        conn.execute(
+            """INSERT INTO deliverables
+                   (id, project_id, title, description, due_at, weighting, spec, position)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                deliverable_id,
+                project_id,
+                title,
+                description,
+                due_at,
+                weighting,
+                json.dumps(spec) if spec is not None else None,
+                position,
+            ),
+        )
+
+
+def list_deliverables(project_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM deliverables WHERE project_id = ? ORDER BY position, due_at",
+            (project_id,),
+        ).fetchall()
+        return [_deliverable_to_dict(r) for r in rows]
+
+
+def get_deliverable(deliverable_id):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM deliverables WHERE id = ?", (deliverable_id,)
+        ).fetchone()
+        return _deliverable_to_dict(row) if row else None
+
+
+DELIVERABLE_PATCH_COLUMNS = ("title", "description", "due_at", "weighting", "spec", "position")
+
+
+def update_deliverable(deliverable_id, **fields):
+    """Patch whichever of a deliverable's columns were actually sent."""
+    sets, params = [], []
+    for column in DELIVERABLE_PATCH_COLUMNS:
+        if column not in fields:
+            continue
+        value = fields[column]
+        if column == "spec":
+            value = json.dumps(value) if value is not None else None
+        sets.append(f"{column} = ?")
+        params.append(value)
+    if not sets:
+        return
+    with get_conn() as conn:
+        conn.execute(
+            f"UPDATE deliverables SET {', '.join(sets)} WHERE id = ?", [*params, deliverable_id]
+        )
+
+
+def delete_deliverable(deliverable_id):
+    """Delete a deliverable. Its tasks outlive it -- see TASKS_SCHEMA -- so
+    their deliverable_id is cleared rather than the tasks being removed."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE tasks SET deliverable_id = NULL WHERE deliverable_id = ?", (deliverable_id,)
+        )
+        conn.execute("DELETE FROM deliverables WHERE id = ?", (deliverable_id,))
+
+
+def _deliverable_to_dict(row):
+    d = dict(row)
+    d["spec"] = json.loads(d["spec"]) if d["spec"] else None
+    return d
+
+
+# --- Schedule: tasks ------------------------------------------------------
+
+
+def create_task(task_id, title, project_id=None, deliverable_id=None, description=None,
+                measurable_goal=None, deadline=None, required_location_id=None,
+                support_level="independent", est_minutes=None, importance=None,
+                difficulty=None, is_finishing=False, status="pending",
+                recurrence_id=None, continues_task_id=None,
+                est_minutes_source=None, importance_source=None, difficulty_source=None):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO tasks
+                   (id, project_id, deliverable_id, title, description, measurable_goal,
+                    deadline, required_location_id, support_level, est_minutes, importance,
+                    difficulty, is_finishing, status, recurrence_id, continues_task_id,
+                    slip_count, est_minutes_source, importance_source, difficulty_source,
+                    created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
+            (
+                task_id,
+                project_id,
+                deliverable_id,
+                title,
+                description,
+                measurable_goal,
+                deadline,
+                required_location_id,
+                support_level,
+                est_minutes,
+                importance,
+                difficulty,
+                1 if is_finishing else 0,
+                status,
+                recurrence_id,
+                continues_task_id,
+                est_minutes_source,
+                importance_source,
+                difficulty_source,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def get_task(task_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        return _task_to_dict(row) if row else None
+
+
+def get_tasks_by_ids(ids):
+    """Many tasks at once, e.g. to name every task in a rejected dependency
+    cycle without a query per task."""
+    if not ids:
+        return []
+    placeholders = ",".join("?" for _ in ids)
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM tasks WHERE id IN ({placeholders})", ids
+        ).fetchall()
+        return [_task_to_dict(r) for r in rows]
+
+
+def list_tasks(project_id=None, deliverable_id=None, status=None):
+    """Tasks, optionally narrowed by project, deliverable and/or status -- any
+    combination may be given at once (AND). `None` means "don't filter on
+    this"; there's no separate way to ask for exactly the unassigned
+    (project_id IS NULL) tasks here, since nothing yet needs it.
+    """
+    clauses, params = [], []
+    if project_id is not None:
+        clauses.append("project_id = ?")
+        params.append(project_id)
+    if deliverable_id is not None:
+        clauses.append("deliverable_id = ?")
+        params.append(deliverable_id)
+    if status is not None:
+        clauses.append("status = ?")
+        params.append(status)
+    query = "SELECT * FROM tasks"
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY created_at DESC"
+    with get_conn() as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [_task_to_dict(r) for r in rows]
+
+
+# The columns a PUT may touch. id and created_at are absent on purpose -- a
+# task can't change identity or backdate when it was made, only what it is and
+# where it stands. app.py filters incoming bodies against this same list, so
+# the two can't drift apart (mirrors CANVAS_NODE_PATCH_COLUMNS).
+TASK_PATCH_COLUMNS = (
+    "project_id", "deliverable_id", "title", "description", "measurable_goal",
+    "deadline", "required_location_id", "support_level", "est_minutes",
+    "importance", "difficulty", "is_finishing", "status", "recurrence_id",
+    "continues_task_id", "slip_count", "est_minutes_source", "importance_source",
+    "difficulty_source",
+)
+
+
+def update_task(task_id, **fields):
+    """Patch whichever of a task's columns were actually sent."""
+    sets, params = [], []
+    for column in TASK_PATCH_COLUMNS:
+        if column not in fields:
+            continue
+        value = fields[column]
+        if column == "is_finishing":
+            value = 1 if value else 0
+        sets.append(f"{column} = ?")
+        params.append(value)
+    if not sets:
+        return
+    with get_conn() as conn:
+        conn.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?", [*params, task_id])
+
+
+def delete_task(task_id):
+    """Delete a task and everything that only exists because of it: its
+    dependency edges (both directions -- it may depend on others and have
+    others depending on it), its recorded actuals, and its scheduled blocks.
+    Mirrors delete_reference's cleanup of everything pointing at a deleted
+    reference."""
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_task_id = ?",
+            (task_id, task_id),
+        )
+        conn.execute("DELETE FROM task_actuals WHERE task_id = ?", (task_id,))
+        conn.execute("DELETE FROM scheduled_blocks WHERE task_id = ?", (task_id,))
+        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+
+
+def _task_to_dict(row):
+    d = dict(row)
+    d["is_finishing"] = bool(d["is_finishing"])
+    return d
+
+
+# --- Schedule: task dependencies -------------------------------------------
+
+
+def list_task_dependencies(task_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ?", (task_id,)
+        ).fetchall()
+        return [r["depends_on_task_id"] for r in rows]
+
+
+def task_dependency_cycle(task_id, depends_on_task_id):
+    """The chain of existing dependencies that would close into a cycle if
+    task_id were made to depend on depends_on_task_id -- as a list of task ids
+    running from depends_on_task_id to task_id -- or None if the new edge is
+    safe to add.
+
+    Walks depends_on edges forward from depends_on_task_id, the same direction
+    the scheduler will later walk them to order work. If that walk ever
+    reaches task_id, task_id already sits somewhere upstream of
+    depends_on_task_id, so making task_id depend on it too would close a loop.
+    A direct self-dependency (task_id == depends_on_task_id) is caught by the
+    same check, since the walk starts at depends_on_task_id.
+
+    Lives here rather than only behind the /dependencies route so the future
+    scheduler can run the same check before it relies on the graph being
+    acyclic.
+    """
+    if task_id == depends_on_task_id:
+        return [task_id, depends_on_task_id]
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT task_id, depends_on_task_id FROM task_dependencies"
+        ).fetchall()
+    edges = {}
+    for row in rows:
+        edges.setdefault(row["task_id"], []).append(row["depends_on_task_id"])
+
+    parents = {depends_on_task_id: None}
+    queue = [depends_on_task_id]
+    while queue:
+        node = queue.pop(0)
+        if node == task_id:
+            path = []
+            while node is not None:
+                path.append(node)
+                node = parents[node]
+            return list(reversed(path))
+        for nxt in edges.get(node, ()):
+            if nxt not in parents:
+                parents[nxt] = node
+                queue.append(nxt)
+    return None
+
+
+def add_task_dependency(task_id, depends_on_task_id):
+    """Record that task_id depends on depends_on_task_id. Callers must check
+    task_dependency_cycle first -- this function trusts the caller and simply
+    writes the edge."""
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id) VALUES (?, ?)",
+            (task_id, depends_on_task_id),
+        )
+
+
+def remove_task_dependency(task_id, depends_on_task_id):
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_task_id = ?",
+            (task_id, depends_on_task_id),
+        )
+
+
+# --- Schedule: task actuals -------------------------------------------------
+
+
+def save_task_actual(task_id, actual_minutes=None, actual_difficulty=None,
+                     actual_importance=None, notes=None):
+    """Record (or replace) how a task actually went. One row per task,
+    upserted so correcting a mis-recorded actual updates in place rather than
+    erroring on the primary key."""
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO task_actuals
+                   (task_id, actual_minutes, actual_difficulty, actual_importance,
+                    completed_at, notes)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(task_id) DO UPDATE SET
+                   actual_minutes = excluded.actual_minutes,
+                   actual_difficulty = excluded.actual_difficulty,
+                   actual_importance = excluded.actual_importance,
+                   completed_at = excluded.completed_at,
+                   notes = excluded.notes""",
+            (
+                task_id,
+                actual_minutes,
+                actual_difficulty,
+                actual_importance,
+                datetime.now(timezone.utc).isoformat(),
+                notes,
+            ),
+        )
+
+
+def get_task_actual(task_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM task_actuals WHERE task_id = ?", (task_id,)).fetchone()
+        return dict(row) if row else None
+
+
+# --- Schedule: scheduled blocks ----------------------------------------------
+
+
+def create_scheduled_block(block_id, task_id, start, end, kind="task", is_locked=False):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO scheduled_blocks (id, task_id, start, end, is_locked, kind, generated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                block_id,
+                task_id,
+                start,
+                end,
+                1 if is_locked else 0,
+                kind,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def list_scheduled_blocks_for_task(task_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM scheduled_blocks WHERE task_id = ? ORDER BY start", (task_id,)
+        ).fetchall()
+        return [_scheduled_block_to_dict(r) for r in rows]
+
+
+def _scheduled_block_to_dict(row):
+    d = dict(row)
+    d["is_locked"] = bool(d["is_locked"])
+    return d
+
+
+# --- Schedule: commitments ---------------------------------------------------
+
+
+def create_commitment(commitment_id, title, start, end, kind=None, location_id=None,
+                      support_level="none", source=None, external_uid=None, energy_cost=None):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO commitments
+                   (id, title, start, end, kind, location_id, support_level, source,
+                    external_uid, energy_cost)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                commitment_id,
+                title,
+                start,
+                end,
+                kind,
+                location_id,
+                support_level,
+                source,
+                external_uid,
+                energy_cost,
+            ),
+        )
+
+
+def list_commitments():
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM commitments ORDER BY start").fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_commitment(commitment_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM commitments WHERE id = ?", (commitment_id,)).fetchone()
+        return dict(row) if row else None
+
+
+COMMITMENT_PATCH_COLUMNS = (
+    "title", "start", "end", "kind", "location_id", "support_level", "source",
+    "external_uid", "energy_cost",
+)
+
+
+def update_commitment(commitment_id, **fields):
+    sets, params = [], []
+    for column in COMMITMENT_PATCH_COLUMNS:
+        if column not in fields:
+            continue
+        sets.append(f"{column} = ?")
+        params.append(fields[column])
+    if not sets:
+        return
+    with get_conn() as conn:
+        conn.execute(
+            f"UPDATE commitments SET {', '.join(sets)} WHERE id = ?", [*params, commitment_id]
+        )
+
+
+def delete_commitment(commitment_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM commitments WHERE id = ?", (commitment_id,))
+
+
+# --- Schedule: locations ------------------------------------------------------
+
+
+def create_location(location_id, name, address=None, travel_minutes_from_home=None, notes=None):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO locations (id, name, address, travel_minutes_from_home, notes)
+               VALUES (?, ?, ?, ?, ?)""",
+            (location_id, name, address, travel_minutes_from_home, notes),
+        )
+
+
+def list_locations():
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM locations ORDER BY name").fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_location(location_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM locations WHERE id = ?", (location_id,)).fetchone()
+        return dict(row) if row else None
+
+
+LOCATION_PATCH_COLUMNS = ("name", "address", "travel_minutes_from_home", "notes")
+
+
+def update_location(location_id, **fields):
+    sets, params = [], []
+    for column in LOCATION_PATCH_COLUMNS:
+        if column not in fields:
+            continue
+        sets.append(f"{column} = ?")
+        params.append(fields[column])
+    if not sets:
+        return
+    with get_conn() as conn:
+        conn.execute(
+            f"UPDATE locations SET {', '.join(sets)} WHERE id = ?", [*params, location_id]
+        )
+
+
+def delete_location(location_id):
+    """Delete a location and everything that only makes sense pinned to it.
+
+    tasks.required_location_id is cleared rather than the task being removed --
+    a location disappearing doesn't mean the work does. Commitments and
+    resources that reference this location keep their location_id as it was:
+    no cascade for either is specified, so a dangling reference there is no
+    worse than an analysis whose reference_ids include a deleted reference
+    (see delete_reference).
+    """
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE tasks SET required_location_id = NULL WHERE required_location_id = ?",
+            (location_id,),
+        )
+        conn.execute("DELETE FROM location_hours WHERE location_id = ?", (location_id,))
+        conn.execute("DELETE FROM location_overrides WHERE location_id = ?", (location_id,))
+        conn.execute(
+            "DELETE FROM location_travel WHERE from_location_id = ? OR to_location_id = ?",
+            (location_id, location_id),
+        )
+        conn.execute("DELETE FROM locations WHERE id = ?", (location_id,))
+
+
+def get_location_hours(location_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM location_hours WHERE location_id = ? ORDER BY weekday", (location_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def save_location_hours(location_id, hours):
+    """Replace a location's whole weekly schedule at once. `hours` is a list
+    of {weekday, opens, closes} dicts. Wholesale rather than per-day upserts,
+    same reasoning as save_widget_layout: the settings UI always submits the
+    complete week, and a partial write could leave a stale day sitting under a
+    week that otherwise says everything changed.
+    """
+    with get_conn() as conn:
+        conn.execute("DELETE FROM location_hours WHERE location_id = ?", (location_id,))
+        conn.executemany(
+            "INSERT INTO location_hours (location_id, weekday, opens, closes) VALUES (?, ?, ?, ?)",
+            [
+                (location_id, h["weekday"], h.get("opens"), h.get("closes"))
+                for h in hours
+            ],
+        )
+
+
+def list_location_overrides(location_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM location_overrides WHERE location_id = ? ORDER BY date",
+            (location_id,),
+        ).fetchall()
+        return [_location_override_to_dict(r) for r in rows]
+
+
+def create_location_override(override_id, location_id, date, opens=None, closes=None, closed=False):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO location_overrides (id, location_id, date, opens, closes, closed)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (override_id, location_id, date, opens, closes, 1 if closed else 0),
+        )
+
+
+def delete_location_override(override_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM location_overrides WHERE id = ?", (override_id,))
+
+
+def _location_override_to_dict(row):
+    d = dict(row)
+    d["closed"] = bool(d["closed"])
+    return d
+
+
+# --- Schedule: location travel -----------------------------------------------
+
+
+def list_travel():
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM location_travel").fetchall()
+        return [dict(r) for r in rows]
+
+
+def save_travel(entries):
+    """Replace the whole location-to-location travel matrix at once, same
+    wholesale-replace reasoning as save_location_hours -- the settings UI
+    submits the complete matrix, not one pair at a time."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM location_travel")
+        conn.executemany(
+            """INSERT INTO location_travel (from_location_id, to_location_id, minutes)
+               VALUES (?, ?, ?)""",
+            [
+                (e["from_location_id"], e["to_location_id"], e["minutes"])
+                for e in entries
+            ],
+        )
+
+
+# --- Schedule: recurrence rules -----------------------------------------------
+
+
+def create_recurrence_rule(rule_id, interval_days, window_days=1, preferred_time=None, active=True):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO recurrence_rules (id, interval_days, window_days, preferred_time, active)
+               VALUES (?, ?, ?, ?, ?)""",
+            (rule_id, interval_days, window_days, preferred_time, 1 if active else 0),
+        )
+
+
+def list_recurrence_rules(active_only=False):
+    query = "SELECT * FROM recurrence_rules"
+    if active_only:
+        query += " WHERE active = 1"
+    with get_conn() as conn:
+        rows = conn.execute(query).fetchall()
+        return [_recurrence_rule_to_dict(r) for r in rows]
+
+
+def get_recurrence_rule(rule_id):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM recurrence_rules WHERE id = ?", (rule_id,)
+        ).fetchone()
+        return _recurrence_rule_to_dict(row) if row else None
+
+
+RECURRENCE_RULE_PATCH_COLUMNS = ("interval_days", "window_days", "preferred_time", "active")
+
+
+def update_recurrence_rule(rule_id, **fields):
+    sets, params = [], []
+    for column in RECURRENCE_RULE_PATCH_COLUMNS:
+        if column not in fields:
+            continue
+        value = fields[column]
+        if column == "active":
+            value = 1 if value else 0
+        sets.append(f"{column} = ?")
+        params.append(value)
+    if not sets:
+        return
+    with get_conn() as conn:
+        conn.execute(
+            f"UPDATE recurrence_rules SET {', '.join(sets)} WHERE id = ?", [*params, rule_id]
+        )
+
+
+def delete_recurrence_rule(rule_id):
+    """Delete a rule. Tasks it already spawned keep their recurrence_id as
+    written -- same reasoning as analyses keeping old reference_ids -- so a
+    deleted rule doesn't retroactively disown the tasks it made."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM recurrence_rules WHERE id = ?", (rule_id,))
+
+
+def _recurrence_rule_to_dict(row):
+    d = dict(row)
+    d["active"] = bool(d["active"])
+    return d
+
+
+# --- Schedule: resources ------------------------------------------------------
+
+
+def create_resource(resource_id, name, location_id=None, url=None, notes=None):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO resources (id, name, location_id, url, notes, date_added)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (resource_id, name, location_id, url, notes, datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def list_resources():
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM resources ORDER BY date_added DESC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_resource(resource_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM resources WHERE id = ?", (resource_id,)).fetchone()
+        return dict(row) if row else None
+
+
+RESOURCE_PATCH_COLUMNS = ("name", "location_id", "url", "notes")
+
+
+def update_resource(resource_id, **fields):
+    sets, params = [], []
+    for column in RESOURCE_PATCH_COLUMNS:
+        if column not in fields:
+            continue
+        sets.append(f"{column} = ?")
+        params.append(fields[column])
+    if not sets:
+        return
+    with get_conn() as conn:
+        conn.execute(
+            f"UPDATE resources SET {', '.join(sets)} WHERE id = ?", [*params, resource_id]
+        )
+
+
+def delete_resource(resource_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM resource_items WHERE resource_id = ?", (resource_id,))
+        conn.execute("DELETE FROM resources WHERE id = ?", (resource_id,))
+
+
+def list_resource_items(resource_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM resource_items WHERE resource_id = ?", (resource_id,)
+        ).fetchall()
+        return [_resource_item_to_dict(r) for r in rows]
+
+
+def add_resource_item(resource_id, item, tags=None):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO resource_items (resource_id, item, tags) VALUES (?, ?, ?)
+               ON CONFLICT(resource_id, item) DO UPDATE SET tags = excluded.tags""",
+            (resource_id, item, json.dumps(tags) if tags is not None else None),
+        )
+
+
+def remove_resource_item(resource_id, item):
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM resource_items WHERE resource_id = ? AND item = ?", (resource_id, item)
+        )
+
+
+def _resource_item_to_dict(row):
+    d = dict(row)
+    d["tags"] = json.loads(d["tags"]) if d["tags"] else []
+    return d
+
+
+# --- Schedule: briefs ----------------------------------------------------------
+
+
+def create_brief(brief_id, project_id, filepath=None, extracted=None):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO briefs (id, project_id, filepath, extracted, imported_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                brief_id,
+                project_id,
+                filepath,
+                json.dumps(extracted) if extracted is not None else None,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def list_briefs(project_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM briefs WHERE project_id = ? ORDER BY imported_at DESC", (project_id,)
+        ).fetchall()
+        return [_brief_to_dict(r) for r in rows]
+
+
+def get_brief(brief_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM briefs WHERE id = ?", (brief_id,)).fetchone()
+        return _brief_to_dict(row) if row else None
+
+
+def delete_brief(brief_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM briefs WHERE id = ?", (brief_id,))
+
+
+def _brief_to_dict(row):
+    d = dict(row)
+    d["extracted"] = json.loads(d["extracted"]) if d["extracted"] else None
+    return d
+
+
+# --- Schedule: daily capacity ---------------------------------------------------
+
+
+def get_daily_capacity(date):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM daily_capacity WHERE date = ?", (date,)).fetchone()
+        return dict(row) if row else None
+
+
+def save_daily_capacity(date, inferred_energy=None, manual_energy=None, available_minutes=None):
+    """Set (or replace) one day's capacity. Upserted on date, since inferring
+    energy from actuals and a manual override both write the same row rather
+    than owning separate ones."""
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO daily_capacity (date, inferred_energy, manual_energy, available_minutes)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(date) DO UPDATE SET
+                   inferred_energy = excluded.inferred_energy,
+                   manual_energy = excluded.manual_energy,
+                   available_minutes = excluded.available_minutes""",
+            (date, inferred_energy, manual_energy, available_minutes),
+        )
