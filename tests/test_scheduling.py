@@ -877,6 +877,30 @@ def test_a_prefers_task_falls_back_to_ambient_when_there_is_no_priority_window(a
     assert placed(scheduling.plan(MONDAY))["t-sew"]["start"] == f"{MONDAY}T13:00:00"
 
 
+def test_a_prefers_task_falls_back_to_ordinary_hours_when_nothing_is_supported(archive):
+    working_week()
+    task("t-sew", "Sew the toile", est_minutes=120, support_level="prefers", deadline=MONDAY)
+
+    # A preference, not a gate: unlike 'needs', a week with no session in it
+    # delays this work at worst -- it does not put it out of reach.
+    assert placed(scheduling.plan(MONDAY))["t-sew"]["start"] == f"{MONDAY}T09:00:00"
+
+
+def test_a_prefers_task_is_never_at_risk_merely_for_want_of_support(archive):
+    working_week()
+    # Only ambient help exists, and only after the deadline it would need.
+    commitment("c-ambient", "13:00", "15:00", support_level="ambient")
+    task("t-early", "Sew the toile", est_minutes=120, support_level="prefers",
+         deadline=MONDAY)
+    task("t-needs", "First welt pocket", est_minutes=120, support_level="needs",
+         deadline=MONDAY)
+
+    result = scheduling.plan(MONDAY)
+
+    assert "t-early" in placed(result)
+    assert risk(result)["t-needs"]["reason"] == scheduling.AT_RISK_NO_SUPPORT
+
+
 def test_an_independent_task_is_not_confined_to_supported_windows(archive):
     working_week()
     commitment("c-tutorial", "13:00", "15:00", support_level="priority")

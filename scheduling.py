@@ -1049,12 +1049,20 @@ def _eligible_intervals(day, info, protected):
     location's opening hours (overrides included) before anything else.
 
     SUPPORT is a match between two vocabularies, not a comparison. A task says
-    what it needs of the people around it; a window says what it offers. So
-    'needs' yields one tier per priority window, 'prefers' yields the priority
-    windows first and then the ambient ones -- the order is the preference --
-    and 'independent' yields the whole day as a single tier. A tier carries
-    the window's location because a task placed in a supported window is where
-    that support is, which is what makes the trip to it real.
+    what it needs of the people around it; a window says what it offers.
+
+    Only 'needs' makes it a requirement: it yields one tier per priority
+    window and nothing else, so work you cannot do unaided is either placed
+    against a tutor or reported as unreachable. 'prefers' is a PREFERENCE and
+    not a gate -- priority windows first, then ambient ones, then the ordinary
+    day -- so the order of the tiers is the whole of its meaning, and a week
+    with no session in it still gets the work done rather than declaring it at
+    risk. 'independent' yields the whole day as a single tier.
+
+    A supported tier carries the window's location, because a task placed in a
+    supported window is where that support is, which is what makes the trip to
+    it real. The ordinary-hours fallback carries none: it is not being placed
+    anywhere in particular.
 
     PROTECTED FINISHING TIME is subtracted from everything that isn't finishing
     work, however late that work is running. Being behind is exactly when the
@@ -1087,6 +1095,8 @@ def _eligible_intervals(day, info, protected):
             tier = _intersect(base, spans)
             if tier:
                 tiers.append((tier, location_id))
+    if info["support"] == PREFERS_SUPPORT:
+        tiers.append((base, None))  # last resort: supported was a preference
     return tiers
 
 
@@ -1425,7 +1435,11 @@ def _at_risk(tasks, placements, deps, meta, days, deliverables, anchor, protecte
             d for d in admitting
             if _intersect(d["intervals"], d["location_open"].get(info["location"], []))
         ]
-        supported = [d for d in admitting if _supports(d, info)]
+        # Only 'needs' can fail for want of support: 'prefers' falls back to
+        # ordinary hours, so a week without a tutor delays that work at worst.
+        unsupported = info["support"] == NEEDS_SUPPORT and not any(
+            _has_priority_window(d, info) for d in admitting
+        )
         # The stretches this task could genuinely have used, every constraint
         # applied -- so "needs longer in one sitting than it can get" is
         # measured against the windows it was allowed in, not against a free
@@ -1469,12 +1483,9 @@ def _at_risk(tasks, placements, deps, meta, days, deliverables, anchor, protecte
                 f"{_location_name(info['location'])} is not open during any working hours "
                 "before its deadline"
             )
-        elif info["support"] != INDEPENDENT and not supported:
+        elif unsupported:
             reason = AT_RISK_NO_SUPPORT
-            message = (
-                f"it needs a {_support_wanted(info['support'])} session and there is none "
-                "before its deadline"
-            )
+            message = "it needs a priority session and there is none before its deadline"
         elif info["finishing"] and info["buffer"]:
             reason = AT_RISK_FINISHING
             message = _finishing_message(tid, info, finishing)
@@ -1518,23 +1529,18 @@ def _at_risk(tasks, placements, deps, meta, days, deliverables, anchor, protecte
     return entries
 
 
-def _supports(day, info):
-    """Whether this day has a window offering what the task's support level
-    asks for -- matched against the vocabulary of windows, not compared with
-    it, and only counting the part of a window that is free to work in."""
-    levels = (PRIORITY, AMBIENT) if info["support"] == PREFERS_SUPPORT else (PRIORITY,)
+def _has_priority_window(day, info):
+    """Whether this day offers a tutor to a task that cannot proceed without
+    one -- counting only the part of a window that is free to work in, and
+    only windows somewhere the task is allowed to be."""
     for window in day["support"]:
-        if window["level"] not in levels:
+        if window["level"] != PRIORITY:
             continue
         if info["location"] and window["location_id"] and window["location_id"] != info["location"]:
             continue
         if _intersect(day["intervals"], [(window["start"], window["end"])]):
             return True
     return False
-
-
-def _support_wanted(support_level):
-    return "supported (priority or ambient)" if support_level == PREFERS_SUPPORT else "priority"
 
 
 def _finishing_message(task_id, info, finishing):
