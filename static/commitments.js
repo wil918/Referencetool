@@ -232,7 +232,13 @@ async function refreshCommitmentList() {
   await populateLocationOptions(locations);
   const locationsById = Object.fromEntries(locations.map((l) => [l.id, l.name]));
 
-  const sorted = [...commitments].sort((a, b) => a.start.localeCompare(b.start));
+  // /api/commitments also returns calendar-imported events (see
+  // calendar-import.js) -- this form is only for the ones added by hand.
+  // Editing or deleting an imported one here would just be reverted or
+  // recreated on the next sync (see ics_import.sync_feed), so it's excluded
+  // rather than shown and silently overridden.
+  const personal = commitments.filter((c) => !c.source);
+  const sorted = [...personal].sort((a, b) => a.start.localeCompare(b.start));
   listEl.innerHTML = "";
   emptyEl.hidden = sorted.length > 0;
   sorted.forEach((c) => listEl.appendChild(makeCommitmentCard(c, locationsById)));

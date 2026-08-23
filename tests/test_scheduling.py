@@ -682,9 +682,9 @@ def test_the_schedule_route_returns_blocks_in_range_plus_the_at_risk_list(client
     body = client.get("/api/schedule").get_json()
 
     # t-a's own two hours cross the break threshold, so its block is followed
-    # by a break -- filtered out here, since this test is about task/at-risk
-    # routing, not breaks (see BREAK_AFTER_MINUTES).
-    assert [b["task_id"] for b in body["blocks"] if b["kind"] == "task"] == ["t-a"]
+    # by a break (see BREAK_AFTER_MINUTES) -- asserted on the full list, not
+    # just the task subsequence, so an extra stray block wouldn't pass silently.
+    assert [(b["kind"], b["task_id"]) for b in body["blocks"]] == [("task", "t-a"), ("break", None)]
     assert body["blocks"][0]["granularity"] == "slot"
     assert [e["task_id"] for e in body["at_risk"]] == ["t-b"]
     assert body["start"] == today.isoformat()
@@ -1241,6 +1241,23 @@ def test_a_home_first_chain_inserts_travel_then_prep_and_ends_at_the_event_start
     assert chain[1]["end"] == chain[2]["start"]
 
 
+def test_the_leading_travel_leg_reads_the_commitment_that_ends_latest_not_starts_latest(archive):
+    studio = make_location("Studio", travel_minutes_from_home=15)
+    library = make_location("Library", travel_minutes_from_home=5)
+    # c-library STARTS after c-studio but ENDS well before it -- nothing
+    # stops two commitments overlapping, and the one that matters for "where
+    # are you right before the chain" is whichever finishes last, not
+    # whichever began last.
+    make_commitment("c-studio", f"{MONDAY}T14:00:00", f"{MONDAY}T18:00:00", location_id=studio)
+    make_commitment("c-library", f"{MONDAY}T14:30:00", f"{MONDAY}T15:00:00", location_id=library)
+    event_start = f"{MONDAY}T19:00:00"
+    c = make_commitment("c-drinks", event_start, f"{MONDAY}T21:00:00", home_first=True)
+
+    chain = scheduling.home_first_chain(db.get_commitment(c))
+
+    assert chain[0]["from_location_id"] == studio
+
+
 def test_the_leading_travel_block_is_omitted_when_already_at_home(archive):
     cinema = make_location("Cinema", travel_minutes_from_home=20)
     event_start = f"{MONDAY}T19:30:00"
@@ -1363,6 +1380,21 @@ def test_a_non_domestic_task_is_never_placed_in_domestic_hours(archive):
     assert risk(result)["t-work"]["reason"] == scheduling.AT_RISK_NO_CAPACITY
 
 
+def test_a_domestic_task_with_a_location_still_respects_that_locations_hours(archive):
+    # A food shop is domestic AND located (see SCHEDULE_SCOPE.md's own
+    # example) -- domestic hours being wide open must not let it get placed
+    # while the shop itself is shut.
+    set_domestic_hours(0, "06:00", "22:00")
+    shop = make_location("Corner shop")  # no travel_minutes_from_home -- free to reach
+    location_hours(shop, "10:00", "12:00")
+    task("t-shop", est_minutes=60, is_domestic=True, required_location_id=shop, deadline=MONDAY)
+
+    block = placed(scheduling.plan(MONDAY))["t-shop"]
+
+    assert block["start"] >= f"{MONDAY}T10:00:00"
+    assert block["end"] <= f"{MONDAY}T12:00:00"
+
+
 # --- Breaks -------------------------------------------------------------------------
 
 
@@ -1409,3 +1441,18 @@ def test_breaks_are_dropped_only_when_keeping_them_would_miss_a_deadline(archive
     assert "break" not in [b["kind"] for b in result["blocks"]]
     blocks = placed(result)
     assert blocks["t-1"]["end"] == blocks["t-2"]["start"] == f"{MONDAY}T11:30:00"
+
+
+def test_a_break_follows_a_domestic_task_placed_outside_working_hours(archive):
+    # No working hours at all today -- an evening domestic-only day. A break
+    # earned entirely inside domestic hours must still be checked against
+    # domestic hours, not against the (empty) working-hours band.
+    db.save_working_hours([])
+    set_domestic_hours(0, "18:00", "22:00")
+    task("t-chores", est_minutes=150, is_domestic=True, deadline=MONDAY)
+
+    blocks = scheduling.plan(MONDAY)["blocks"]
+
+    assert [b["kind"] for b in blocks] == ["task", "break"]
+    assert blocks[1]["start"] == f"{MONDAY}T20:30:00"
+    assert blocks[1]["end"] == f"{MONDAY}T21:00:00"

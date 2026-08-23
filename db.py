@@ -469,10 +469,11 @@ CREATE TABLE IF NOT EXISTS task_actuals (
 # and 'break' for a rest the scheduler wedged into a long run of work. Only
 # 'task' blocks are work the estimator should ever learn from.
 #
-# task_id and commitment_id are each nullable, and a row sets at most one:
-# a 'task' or task-travel block belongs to the task, a home-first 'prep' or
-# 'travel' block belongs to the commitment whose chain it's part of, and a
-# 'break' belongs to neither -- it's just reserved time between task blocks.
+# task_id and commitment_id are each nullable, and a row sets at most one
+# (enforced by the CHECK below, not just by convention): a 'task' or
+# task-travel block belongs to the task, a home-first 'prep' or 'travel'
+# block belongs to the commitment whose chain it's part of, and a 'break'
+# belongs to neither -- it's just reserved time between task blocks.
 #
 # start and end come in two shapes, because the scheduler's precision decays
 # with distance (see SLOT_DETAIL_DAYS in scheduling.py). A near-term block
@@ -494,7 +495,8 @@ CREATE TABLE IF NOT EXISTS scheduled_blocks (
     end TEXT NOT NULL,
     is_locked INTEGER NOT NULL DEFAULT 0,
     kind TEXT NOT NULL DEFAULT 'task',
-    generated_at TEXT NOT NULL
+    generated_at TEXT NOT NULL,
+    CHECK (task_id IS NULL OR commitment_id IS NULL)
 );
 """
 
@@ -793,6 +795,13 @@ def init_db():
         conn.execute(DOMESTIC_HOURS_SCHEMA)
         conn.execute(HOURS_OVERRIDES_SCHEMA)
         conn.execute(DAILY_CAPACITY_SCHEMA)
+        # Runs before SCHEDULE_INDEXES below: it rebuilds scheduled_blocks
+        # wholesale on an old database, which drops any index that already
+        # existed on it. Running the index-creation loop after this one means
+        # they're always (re)created against the table's final shape, instead
+        # of being created here and then silently lost when the rebuild
+        # replaces the table underneath them.
+        _migrate_scheduled_blocks_task_id_nullable(conn)
         for ddl in SCHEDULE_INDEXES:
             conn.execute(ddl)
         # Migrate older databases created before these columns existed.
@@ -808,7 +817,6 @@ def init_db():
             except sqlite3.OperationalError:
                 pass  # column already exists
         _migrate_text_widget_to_notepad(conn)
-        _migrate_scheduled_blocks_task_id_nullable(conn)
 
 
 # One-off: the `text` widget type was removed in favour of `notepad`, which
@@ -855,12 +863,24 @@ def _migrate_text_widget_to_notepad(conn):
 # database created from SCHEDULED_BLOCKS_SCHEMA above already has the nullable
 # column and never touches sqlite_master, so this is a no-op there.
 def _migrate_scheduled_blocks_task_id_nullable(conn):
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'scheduled_blocks'"
+    # If scheduled_blocks_old is already there, a previous run of this
+    # migration was interrupted (crash, kill, power loss) after the rename
+    # but before the old copy was dropped -- it, not whatever is currently
+    # named scheduled_blocks (which may be a half-finished rebuild), is the
+    # real data. Finish from there instead of re-detecting from scratch.
+    old_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scheduled_blocks_old'"
     ).fetchone()
-    if row is None or "task_id TEXT NOT NULL" not in row["sql"]:
-        return  # already migrated, or a fresh database
-    conn.execute("ALTER TABLE scheduled_blocks RENAME TO scheduled_blocks_old")
+    if old_exists:
+        conn.execute("DROP TABLE IF EXISTS scheduled_blocks")
+    else:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'scheduled_blocks'"
+        ).fetchone()
+        if row is None or "task_id TEXT NOT NULL" not in row["sql"]:
+            return  # already migrated, or a fresh database
+        conn.execute("ALTER TABLE scheduled_blocks RENAME TO scheduled_blocks_old")
+
     conn.execute(SCHEDULED_BLOCKS_SCHEMA)
     conn.execute(
         """INSERT INTO scheduled_blocks
