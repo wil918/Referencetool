@@ -1484,6 +1484,7 @@ def api_create_task():
         importance=body.get("importance"),
         difficulty=body.get("difficulty"),
         is_finishing=bool(body.get("is_finishing")),
+        is_domestic=bool(body.get("is_domestic")),
         status=status,
         recurrence_id=body.get("recurrence_id"),
         continues_task_id=body.get("continues_task_id"),
@@ -1861,6 +1862,8 @@ def api_create_commitment():
         source=body.get("source"),
         external_uid=body.get("external_uid"),
         energy_cost=body.get("energy_cost"),
+        home_first=bool(body.get("home_first")),
+        prep_minutes=body.get("prep_minutes"),
     )
     return jsonify(db.get_commitment(commitment_id))
 
@@ -1988,6 +1991,61 @@ def api_save_working_hours():
         return jsonify({"error": "hours must be a list"}), 400
     db.save_working_hours(hours)
     return jsonify(db.get_working_hours())
+
+
+@app.get("/api/domestic-hours")
+def api_get_domestic_hours():
+    return jsonify(db.get_domestic_hours())
+
+
+@app.put("/api/domestic-hours")
+def api_save_domestic_hours():
+    """Replace the whole weekly domestic-hours template at once -- same
+    wholesale contract as working hours, and a separate band from it."""
+    body = request.get_json(force=True, silent=True) or {}
+    hours = body.get("hours")
+    if not isinstance(hours, list):
+        return jsonify({"error": "hours must be a list"}), 400
+    db.save_domestic_hours(hours)
+    return jsonify(db.get_domestic_hours())
+
+
+@app.get("/api/hours-overrides")
+def api_list_hours_overrides():
+    """Every per-date resize on file, optionally narrowed to one band via
+    ?band=working|domestic -- the week/month views (session 9) read this to
+    render both bands' calendars."""
+    band = request.args.get("band")
+    if band is not None and band not in db.HOURS_BANDS:
+        return jsonify({"error": f"band must be one of {', '.join(db.HOURS_BANDS)}"}), 400
+    return jsonify(db.list_hours_overrides(band))
+
+
+@app.post("/api/hours-overrides")
+def api_create_hours_override():
+    body = request.get_json(force=True, silent=True) or {}
+    date_str = body.get("date")
+    band = body.get("band")
+    if not date_str or not _is_valid_date(date_str):
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    if band not in db.HOURS_BANDS:
+        return jsonify({"error": f"band must be one of {', '.join(db.HOURS_BANDS)}"}), 400
+    override_id = str(uuid.uuid4())
+    db.create_hours_override(
+        override_id,
+        date_str,
+        band,
+        opens=body.get("opens"),
+        closes=body.get("closes"),
+        off=bool(body.get("off")),
+    )
+    return jsonify(next(o for o in db.list_hours_overrides(band) if o["id"] == override_id))
+
+
+@app.delete("/api/hours-overrides/<override_id>")
+def api_delete_hours_override(override_id):
+    db.delete_hours_override(override_id)
+    return jsonify({"ok": True, "id": override_id})
 
 
 def _is_valid_date(date_str):

@@ -189,43 +189,173 @@ def _offers_support(commitment):
     return (commitment.get("support_level") or NO_SUPPORT) != NO_SUPPORT
 
 
-def free_intervals(date_str):
-    """The stretches of `date_str` that are genuinely free for work: that
-    weekday's working-hours window with every blocking commitment cut out of
-    it, as a list of (start, end) naive datetimes in order.
+# --- Personal events: home-first chains -----------------------------------------
+#
+# A home_first commitment carries a prep_minutes the user entered by hand --
+# no Claude involvement, see SCHEDULE_SCOPE.md's "Home first" section. The
+# time recorded on the commitment itself is always the START of the event,
+# never when you have to leave, so home_first_chain works backwards from it.
 
-    A commitment outside the window doesn't subtract anything -- it was never
-    available time to begin with -- and one that only partially overlaps only
-    costs the overlapping part. No working-hours row for that weekday (a day
-    off, by omission -- see WORKING_HOURS_SCHEMA) means no intervals at all,
-    same as an empty window.
+
+def home_first_chain(commitment):
+    """The immovable blocks a home_first commitment inserts before itself, in
+    chronological order, ending exactly at the commitment's own start:
+
+        [ travel to home ] -> [ get ready, prep_minutes ] -> [ travel home -> venue ]
+
+    Each is a dict with start/end (naive datetimes), kind ('travel' or
+    'prep'), commitment_id, and from_location_id/to_location_id. Empty if
+    home_first isn't set.
+
+    The venue leg is omitted when the commitment has no location -- there's
+    nothing to size it from, and the entered time still means arrival, just
+    without a costed trip in front of it (the caller is what marks the chain
+    incomplete for that reason; this function only needs to know the location
+    is missing, not why).
+
+    The leading travel-to-home leg is omitted when you're already home when
+    the chain would start -- there's nothing to travel. "Already home" is
+    read from other COMMITMENTS alone (see _location_before), never from
+    where the day's tasks end up: task placement is an output of the walk
+    that this chain feeds into as blocked time, and asking it to look ahead
+    at its own output would be circular.
+    """
+    if not commitment.get("home_first"):
+        return []
+    event_start = datetime.fromisoformat(commitment["start"])
+    prep_minutes = commitment.get("prep_minutes") or 0
+    venue = commitment.get("location_id")
+
+    blocks = []  # built latest-first (working backwards); reversed before return
+
+    venue_travel = leg_minutes(HOME, venue) if venue else 0
+    prep_end = event_start - timedelta(minutes=venue_travel)
+    if venue and venue_travel:
+        blocks.append(_chain_block(commitment, "travel", prep_end, event_start, HOME, venue))
+
+    prep_start = prep_end - timedelta(minutes=prep_minutes)
+    if prep_minutes:
+        blocks.append(_chain_block(commitment, "prep", prep_start, prep_end, None, None))
+
+    context = _location_before(prep_start, exclude_commitment_id=commitment.get("id"))
+    home_travel = leg_minutes(context, HOME)
+    if context is not HOME and home_travel:
+        travel_start = prep_start - timedelta(minutes=home_travel)
+        blocks.append(_chain_block(commitment, "travel", travel_start, prep_start, context, HOME))
+
+    blocks.reverse()
+    return blocks
+
+
+def _chain_block(commitment, kind, start, end, from_location_id, to_location_id):
+    return {
+        "commitment_id": commitment["id"],
+        "kind": kind,
+        "start": start,
+        "end": end,
+        "from_location_id": from_location_id,
+        "to_location_id": to_location_id,
+    }
+
+
+def _location_before(moment, exclude_commitment_id=None):
+    """Where you are at `moment`, read from commitments alone: the last one
+    ending at or before it that names a location, reading through any that
+    don't (an appointment with no location doesn't move you, same convention
+    _context_before later uses for placed task items). HOME if nothing does.
+    """
+    location = HOME
+    for commitment in sorted(db.list_commitments(), key=lambda c: (c["start"], c["end"], c["id"])):
+        if commitment["id"] == exclude_commitment_id:
+            continue
+        if datetime.fromisoformat(commitment["end"]) > moment:
+            continue
+        if commitment.get("location_id"):
+            location = commitment["location_id"]
+    return location
+
+
+def _home_first_blocks_between(window_start, window_end):
+    """Every prep/travel block a home_first commitment inserts before itself
+    that overlaps [window_start, window_end) at all -- these are as immovable
+    as the commitment itself, so free_intervals and domestic_free_intervals
+    cut them out exactly like a commitment.
+    """
+    blocks = []
+    for commitment in db.list_commitments():
+        if not commitment.get("home_first"):
+            continue
+        for block in home_first_chain(commitment):
+            if block["start"] < window_end and block["end"] > window_start:
+                blocks.append(block)
+    return blocks
+
+
+def _band_window(date_str, weekly_rows, band):
+    """The (start, end) window one weekly band (working or domestic hours)
+    opens for on `date_str`, or None if it's shut.
+
+    Shared arithmetic behind free_intervals and domestic_free_intervals: a
+    date override beats the weekly pattern (`off` shuts the band for the day
+    outright, and an override naming only one side keeps the other from the
+    weekly row -- same convention as location_open_intervals), and no weekly
+    row for that weekday with no override means shut, same "absence is the
+    closed case" convention as WORKING_HOURS_SCHEMA.
+    """
+    weekday = date.fromisoformat(date_str).weekday()
+    hours = next((h for h in weekly_rows if h["weekday"] == weekday), None)
+    opens = hours["opens"] if hours else None
+    closes = hours["closes"] if hours else None
+
+    overrides = sorted(
+        (o for o in db.list_hours_overrides(band) if o["date"] == date_str),
+        key=lambda o: o["id"],
+    )
+    if overrides:
+        override = overrides[0]
+        if override["off"]:
+            return None
+        opens = override["opens"] or opens
+        closes = override["closes"] or closes
+
+    if not opens or not closes:
+        return None
+    start = datetime.fromisoformat(f"{date_str}T{opens}:00")
+    end = datetime.fromisoformat(f"{date_str}T{closes}:00")
+    return (start, end) if end > start else None
+
+
+def _window_minus_commitments(window_start, window_end):
+    """`(window_start, window_end)` with every blocking commitment (see
+    _offers_support) and every home-first chain block (see home_first_chain)
+    cut out of it, as a list of (start, end) naive datetimes in order.
+
+    Shared by free_intervals and domestic_free_intervals -- the two bands
+    differ only in which window they start from, not in what blocks it. A
+    commitment or chain block outside the window doesn't subtract anything --
+    it was never available time to begin with -- and one that only partially
+    overlaps only costs the overlapping part.
 
     A commitment that offers support is not cut out at all (see
     _offers_support): it is a window you work inside, not one that stops you.
-    It still cannot create availability the working hours don't grant, because
-    the cut only ever happens inside that window -- a Saturday studio session
-    with no working hours on a Saturday is still not workable time.
+    Home-first chain blocks are never supported -- they're prep and travel,
+    not a tutor's session -- so they always cut.
 
-    Overlapping commitments are cut out as one span rather than one at a
-    time. A lunch inside a shift is a single busy stretch, and charging the
-    day for both would under-report it.
+    Overlapping busy spans are cut out as one span rather than one at a time.
+    A lunch inside a shift is a single busy stretch, and charging the window
+    for both would under-report it.
     """
-    weekday = date.fromisoformat(date_str).weekday()
-    hours = next((h for h in db.get_working_hours() if h["weekday"] == weekday), None)
-    if not hours or not hours["opens"] or not hours["closes"]:
-        return []
-
-    window_start = datetime.fromisoformat(f"{date_str}T{hours['opens']}:00")
-    window_end = datetime.fromisoformat(f"{date_str}T{hours['closes']}:00")
-    if window_end <= window_start:
-        return []
-
     busy = []
     for commitment in db.list_commitments_between(window_start.isoformat(), window_end.isoformat()):
         if _offers_support(commitment):
             continue
         overlap_start = max(datetime.fromisoformat(commitment["start"]), window_start)
         overlap_end = min(datetime.fromisoformat(commitment["end"]), window_end)
+        if overlap_end > overlap_start:
+            busy.append((overlap_start, overlap_end))
+    for block in _home_first_blocks_between(window_start, window_end):
+        overlap_start = max(block["start"], window_start)
+        overlap_end = min(block["end"], window_end)
         if overlap_end > overlap_start:
             busy.append((overlap_start, overlap_end))
     busy.sort()
@@ -239,6 +369,38 @@ def free_intervals(date_str):
     if cursor < window_end:
         intervals.append((cursor, window_end))
     return intervals
+
+
+def free_intervals(date_str):
+    """The stretches of `date_str` that are genuinely free for work: that
+    weekday's working-hours window with every blocking commitment and
+    home-first chain block cut out of it (see _band_window,
+    _window_minus_commitments), as a list of (start, end) naive datetimes in
+    order.
+
+    A day off (no working-hours row for that weekday and no override) means
+    no intervals at all, same as an empty window. Availability is never
+    created beyond what the working hours grant: the cut only ever happens
+    inside that window, so a Saturday studio session with no working hours on
+    a Saturday is still not workable time.
+    """
+    window = _band_window(date_str, db.get_working_hours(), "working")
+    if window is None:
+        return []
+    return _window_minus_commitments(*window)
+
+
+def domestic_free_intervals(date_str):
+    """The stretches of `date_str` free for domestic work: the same rule as
+    free_intervals, but against the domestic-hours band instead of working
+    hours (see _band_window). A commitment or home-first chain block during
+    what would otherwise be domestic time blocks it exactly as it blocks
+    working time -- getting ready to go out stops you doing laundry too.
+    """
+    window = _band_window(date_str, db.get_domestic_hours(), "domestic")
+    if window is None:
+        return []
+    return _window_minus_commitments(*window)
 
 
 # --- Interval arithmetic ---------------------------------------------------------
@@ -467,6 +629,20 @@ COMPARABLE_SCORE_TOLERANCE = 0.25
 # setting; when one exists this is the default it should fall back to.
 FINISHING_BUFFER_MINUTES = 24 * 60
 
+# BREAKS. A rest is due after this many minutes of UNINTERRUPTED task work --
+# consecutive task blocks only; travel, prep, a commitment, an existing break
+# or a plain gap all reset the run (see _uninterrupted_task_minutes_ending_at).
+# Named constants because both numbers are exactly the kind of thing a later
+# session (or the user) will want to tune without hunting through the walk.
+BREAK_AFTER_MINUTES = 2 * 60
+BREAK_MINUTES = 30
+
+# Breaks (like travel) are only ever inserted where there's a timeline to put
+# them on -- slot-precision days, the near-term week (see SLOT_DETAIL_DAYS). A
+# day-granularity allocation five weeks out has no real ordering between the
+# tasks assigned to it, so "uninterrupted" there would be fiction dressed up
+# as a rule.
+
 # Why a task could not be placed before its deadline. Codes rather than prose
 # so a UI can style them; every at-risk entry carries a written message too.
 AT_RISK_OVERDUE = "overdue"
@@ -532,6 +708,17 @@ def plan(now=None, finishing_buffer_minutes=None):
                                  if t["required_location_id"]})
     days = _build_days(anchor, horizon_end, required_locations)
     legs = _leg_table(days, required_locations)
+    slot_dates = {d["date"] for d in days if d["granularity"] == "slot"}
+    # Every home-first chain block that falls on a slot-precision day, for
+    # EMISSION only -- the blocking itself already happened inside
+    # free_intervals/domestic_free_intervals via _home_first_blocks_between,
+    # independent of this. Filtered the same way travel is (see _blocks):
+    # a chain block five weeks out was still made room for, but there's no
+    # timeline that far ahead to place a real row on.
+    chain_blocks = [
+        block for block in _home_first_blocks_between(anchor, _day_ceiling(horizon_end.isoformat()))
+        if block["start"].date().isoformat() in slot_dates
+    ]
 
     minutes = {t["id"]: _est_minutes(t) for t in tasks}
     difficulty = {t["id"]: _level(t["difficulty"], DEFAULT_DIFFICULTY) for t in tasks}
@@ -552,10 +739,43 @@ def plan(now=None, finishing_buffer_minutes=None):
     for tid, info in meta.items():
         info["held"] = tid in finishing["held"]
 
-    placements, travel = _walk(days, ranked, deps, meta, legs, protected)
+    no_break_dates = set()
+    placements, travel, breaks, break_dates = _walk(
+        days, ranked, deps, meta, legs, protected, no_break_dates
+    )
     at_risk = _at_risk(tasks, placements, deps, meta, days, deliverables, anchor,
                        protected, finishing, legs)
-    blocks = _blocks(placements, travel)
+    at_risk_ids = {e["task_id"] for e in at_risk}
+
+    # BREAKS ARE DROPPED ONLY WHEN KEEPING THEM WOULD COST A DEADLINE, never
+    # pre-emptively because a day looks tight (see SCHEDULE_SCOPE.md's
+    # "Breaks" section). Tried chronologically, one candidate day at a time,
+    # a full re-walk each time -- dropping one day's break can shift what
+    # fits on every day after it, so only re-running the walk tells the
+    # truth -- and a drop is kept only when it actually clears something off
+    # the at-risk list, never for a day that merely looks tight. Bounded to
+    # at most len(break_dates) extra walks, which is at most SLOT_DETAIL_DAYS
+    # since breaks are never inserted past slot precision.
+    breaks_dropped = set()
+    for day_date in sorted(break_dates):
+        if not at_risk_ids:
+            break
+        trial_no_break = no_break_dates | {day_date}
+        trial_placements, trial_travel, trial_breaks, trial_break_dates = _walk(
+            days, ranked, deps, meta, legs, protected, trial_no_break
+        )
+        trial_at_risk = _at_risk(tasks, trial_placements, deps, meta, days, deliverables, anchor,
+                                 protected, finishing, legs)
+        trial_at_risk_ids = {e["task_id"] for e in trial_at_risk}
+        if trial_at_risk_ids < at_risk_ids:  # strictly fewer at risk, nothing new added
+            no_break_dates = trial_no_break
+            placements, travel, breaks, break_dates = (
+                trial_placements, trial_travel, trial_breaks, trial_break_dates
+            )
+            at_risk, at_risk_ids = trial_at_risk, trial_at_risk_ids
+            breaks_dropped.add(day_date)
+
+    blocks = _blocks(placements, travel, breaks, chain_blocks)
 
     slot_days = [d for d in days if d["granularity"] == "slot"]
     return {
@@ -567,6 +787,10 @@ def plan(now=None, finishing_buffer_minutes=None):
         "blocks": blocks,
         "at_risk": at_risk,
         "at_risk_by_deliverable": _at_risk_by_deliverable(at_risk, tasks, deliverables),
+        # A day loses its break ONLY to save something on the at-risk list --
+        # this is how that trade says so, rather than the break just quietly
+        # not being there (see SCHEDULE_SCOPE.md's "Breaks" section).
+        "breaks_dropped": sorted(breaks_dropped),
         "summary": {
             "tasks": len(tasks),
             "placed": len(placements),
@@ -580,6 +804,7 @@ def plan(now=None, finishing_buffer_minutes=None):
             # are too far out to be given a time of day (see _blocks).
             "planned_minutes": sum(p["minutes"] for p in placements.values()),
             "travel_minutes": sum(leg["minutes"] for leg in travel),
+            "break_minutes": len(breaks) * BREAK_MINUTES,
             "capacity_minutes": sum(d["capacity"] for d in days),
         },
     }
@@ -897,6 +1122,7 @@ def _task_meta(tasks, deliverables, minutes, difficulty, deadlines, scores, prot
             "location": task.get("required_location_id") or None,
             "support": task.get("support_level") or INDEPENDENT,
             "finishing": finishing,
+            "domestic": bool(task.get("is_domestic")),
             # Only a REAL deadline earns a protected window. An undated task
             # is treated as due at the end of the horizon for scoring, but
             # protecting time before a date nobody set would reserve the far
@@ -992,8 +1218,12 @@ def _build_days(anchor, horizon_end, location_ids):
     while current <= horizon_end:
         date_str = current.isoformat()
         intervals = free_intervals(date_str)
+        domestic_intervals = domestic_free_intervals(date_str)
         if current == anchor.date():
             intervals = [(max(start, anchor), end) for start, end in intervals if end > anchor]
+            domestic_intervals = [
+                (max(start, anchor), end) for start, end in domestic_intervals if end > anchor
+            ]
         energy = day_energy(date_str)
         longest = max((_interval_minutes(s, e) for s, e in intervals), default=0)
         days.append({
@@ -1004,6 +1234,7 @@ def _build_days(anchor, horizon_end, location_ids):
             "capacity": sum(_interval_minutes(s, e) for s, e in intervals),
             "longest_interval": longest,
             "intervals": intervals,
+            "domestic_intervals": domestic_intervals,
             "location_open": {
                 location_id: location_open_intervals(location_id, date_str)
                 for location_id in location_ids
@@ -1114,6 +1345,67 @@ def _windows_by_location(day, level):
     return merged
 
 
+def _domestic_tiers(day, away_remains, protected):
+    """Where a domestic task is allowed today, as (intervals, location) tiers
+    in the order they should be tried -- see SCHEDULE_SCOPE.md's "Domestic
+    tasks" section.
+
+    Domestic hours are always available. Working hours are a FALLBACK tier,
+    added only when nothing away from home is left to compete for them
+    (`away_remains` is False -- see _away_work_remains). Neither tier
+    considers required_location_id or support -- domestic work doesn't have a
+    tutor to match, and isn't expected to name a location of its own.
+
+    A finer rule -- "or the schedule already has you at home for THIS
+    stretch" -- reads naturally out of SCHEDULE_SCOPE.md too, but a forward
+    greedy walk can't answer it honestly: whether a given morning stays
+    home-only depends on where an away-from-home task lands later that same
+    day, which isn't decided until it's walked, and domestic work is commonly
+    the higher-scoring (nearer-deadline) side of that pair. Gating on the
+    whole day being clear is the version that can't be fooled by evaluating
+    the domestic task first.
+
+    Protected finishing time is subtracted from both tiers, same rule as
+    _eligible_intervals: a domestic task is ordinary work for that purpose,
+    never entitled to the buffer.
+    """
+    domestic = _subtract(day["domestic_intervals"], protected)
+    tiers = [(domestic, None)]
+    if not away_remains:
+        working = _subtract(day["intervals"], protected)
+        if working:
+            tiers.append((working, None))
+    return tiers
+
+
+def _away_work_remains(day, ranked, meta, placements, protected):
+    """Whether any unplaced, non-domestic task that needs a location could
+    still use this day at all -- energy and location-hours checked, the same
+    gates _eligible_intervals applies, but not weighed against what else is
+    competing for the day's time.
+
+    Deliberately conservative: the question domestic placement asks is "is
+    this day still needed for away-from-home work", not "will it definitely
+    get some", and answering the sharper question would mean re-running the
+    walk's own contention to answer the walk's own question. Erring towards
+    "yes, it's still needed" is the safer default -- it keeps a domestic task
+    out of working hours, which is exactly the outcome SCHEDULE_SCOPE.md's
+    "stops a food shop being wedged between two studio blocks" describes.
+    """
+    for task in ranked:
+        tid = task["id"]
+        if tid in placements:
+            continue
+        info = meta[tid]
+        if info["domestic"] or not info["location"]:
+            continue
+        if info["difficulty"] > day["max_difficulty"]:
+            continue
+        if _eligible_intervals(day, info, protected):
+            return True
+    return False
+
+
 def _context_before(items, moment):
     """Where you are at `moment`, given what is already placed on the day.
 
@@ -1143,6 +1435,7 @@ def _day_layout(free, items, legs):
     """
     legs_out = []
     context = HOME
+    context_task_id = None
     previous_finish = None
     for item in items:
         minutes = 0 if item["location"] is None else legs[(context, item["location"])]
@@ -1156,6 +1449,7 @@ def _day_layout(free, items, legs):
                                  context, item["location"], minutes))
         if item["location"] is not None:
             context = item["location"]
+            context_task_id = item["task_id"]
         previous_finish = item["finish"]
 
     if context is not HOME:
@@ -1164,7 +1458,10 @@ def _day_layout(free, items, legs):
             end = previous_finish + timedelta(minutes=minutes)
             if not _contains(free, previous_finish, end):
                 return None
-            legs_out.append(_leg(items[-1]["task_id"], previous_finish, end,
+            # Attributed to the task that put you at `context`, not
+            # necessarily items[-1] -- a break sitting last in the day has no
+            # location of its own, so it never becomes the trip home's owner.
+            legs_out.append(_leg(context_task_id, previous_finish, end,
                                  context, HOME, minutes))
     return legs_out
 
@@ -1180,7 +1477,7 @@ def _leg(task_id, start, end, from_location_id, to_location_id, minutes):
     }
 
 
-def _try_place(day, items, info, task_id, not_before, legs, protected):
+def _try_place(day, items, info, task_id, not_before, legs, protected, away_remains=False):
     """Where this task could go on this day, travel included, or None.
 
     First fit, not best fit, same as before: the point is to start work as
@@ -1189,6 +1486,10 @@ def _try_place(day, items, info, task_id, not_before, legs, protected):
     to survive the whole day being laid out again with the new placement in
     it -- the trip to get there has to fit in front of it, and the trip home
     or on to the next thing has to fit after.
+
+    A domestic task draws its tiers from _domestic_tiers instead of
+    _eligible_intervals -- see SCHEDULE_SCOPE.md's "Domestic tasks" section;
+    `away_remains` is only consulted there.
     """
     by_day = day["granularity"] == "day"
     deadline = info["deadline"]
@@ -1198,7 +1499,11 @@ def _try_place(day, items, info, task_id, not_before, legs, protected):
     duration = timedelta(minutes=info["minutes"])
     occupied = [(item["start"], item["finish"]) for item in items]
 
-    for tier, tier_location in _eligible_intervals(day, info, protected):
+    tiers = (
+        _domestic_tiers(day, away_remains, protected) if info["domestic"]
+        else _eligible_intervals(day, info, protected)
+    )
+    for tier, tier_location in tiers:
         location = info["location"] or tier_location
         for stretch_start, stretch_end in _subtract(tier, occupied):
             travel_in = 0 if location is None else legs[
@@ -1219,9 +1524,9 @@ def _try_place(day, items, info, task_id, not_before, legs, protected):
                 if not by_day and finish > deadline:
                     continue
                 candidate = {"task_id": task_id, "start": begin, "finish": finish,
-                             "location": location}
+                             "location": location, "kind": "task"}
                 merged = sorted(items + [candidate],
-                                key=lambda item: (item["start"], item["task_id"]))
+                                key=lambda item: (item["start"], item["task_id"] or ""))
                 day_legs = _day_layout(day["intervals"], merged, legs)
                 if day_legs is None:
                     continue
@@ -1230,7 +1535,64 @@ def _try_place(day, items, info, task_id, not_before, legs, protected):
     return None
 
 
-def _walk(days, ranked, deps, meta, legs, protected):
+def _uninterrupted_task_minutes_ending_at(items, moment):
+    """Minutes of back-to-back TASK work ending exactly at `moment`, walking
+    backward through `items` (sorted by start) until something that isn't
+    task work -- travel, prep, a commitment's absence being a gap, an
+    existing break, or simply not touching -- breaks the run.
+
+    A live counter over the day's actual timeline rather than a lookback
+    search: the very first item checked has to touch `moment` by construction
+    (it's the block that was just placed), and the loop only continues
+    through items that touch the one before them, so nothing here has to ask
+    what "interrupted" means for a stretch that was never contiguous.
+    """
+    total = 0
+    cursor = moment
+    for item in reversed(items):
+        if item["finish"] != cursor or item.get("kind") != "task":
+            break
+        total += _interval_minutes(item["start"], item["finish"])
+        cursor = item["start"]
+    return total
+
+
+def _maybe_insert_break(day, items, legs):
+    """If the task just added to `items` pushed this day's run of
+    uninterrupted work to BREAK_AFTER_MINUTES or more, insert a BREAK_MINUTES
+    break right after it and return the day's travel relaid out around it --
+    or None if nothing was inserted.
+
+    The trip home (or on to whatever comes next) has to shift too, since it's
+    no longer allowed to start until the break ends -- so this isn't just an
+    append: _day_layout is rerun over the candidate day, and the break is only
+    kept if that still lays out cleanly. Returns None -- doing nothing --
+    if the run is short of the threshold, if there's no room for the break
+    itself, or if laying the day out with it fails (the trip home no longer
+    fits before the working day closes): a day that runs out of room at
+    exactly this point interrupts the run on its own, and forcing a break
+    that breaks the day around it would trade one problem for a worse one.
+    """
+    items.sort(key=lambda item: (item["start"], item["task_id"] or ""))
+    last = items[-1]
+    if last.get("kind") != "task":
+        return None
+    if _uninterrupted_task_minutes_ending_at(items, last["finish"]) < BREAK_AFTER_MINUTES:
+        return None
+    start = last["finish"]
+    end = start + timedelta(minutes=BREAK_MINUTES)
+    if not _contains(day["intervals"], start, end):
+        return None
+    candidate = items + [{"task_id": None, "start": start, "finish": end, "location": None,
+                          "kind": "break"}]
+    day_legs = _day_layout(day["intervals"], candidate, legs)
+    if day_legs is None:
+        return None
+    items.append(candidate[-1])
+    return day_legs
+
+
+def _walk(days, ranked, deps, meta, legs, protected, no_break_dates=frozenset()):
     """Walk the days forward, filling each with the best work it can take.
 
     For every day: what is free on it is already known, so the eligible set is
@@ -1264,15 +1626,28 @@ def _walk(days, ranked, deps, meta, legs, protected):
     the day, so it counts as running from the start of the day to the end of
     it -- which comes to the same thing as "the day after", conservatively and
     without a second rule.
+
+    BREAKS are inserted as the walk goes, not retrofitted: after every task
+    commit on a slot-precision day (see BREAK_AFTER_MINUTES), a break is
+    appended to that day's items if the run just crossed the threshold and
+    there's room right there (_maybe_insert_break) -- so later placements in
+    the SAME day see it as occupied and schedule around it exactly like a
+    task or a trip. `no_break_dates` suppresses this for specific dates: plan()
+    retries a day without breaks when keeping them would cost something on
+    the at-risk list, and this is how that retry asks for a clean pass.
     """
     placements = {}
     completion = {}
     travel = []
+    breaks = []
+    break_dates = set()
     for day in days:
         floor, ceiling = _day_floor(day["date"]), _day_ceiling(day["date"])
         by_day = day["granularity"] == "day"
+        allow_breaks = not by_day and day["date"] not in no_break_dates
         items, day_legs = [], []
         while True:
+            away_remains = _away_work_remains(day, ranked, meta, placements, protected)
             candidates = []
             best_score = None
             for rank, task in enumerate(ranked):  # score order, ties by id
@@ -1295,7 +1670,8 @@ def _walk(days, ranked, deps, meta, legs, protected):
                     continue  # the day IS the block, so its dependencies had to end before it
                 not_before = floor if by_day else last_dependency
 
-                attempt = _try_place(day, items, info, tid, not_before, legs, protected)
+                attempt = _try_place(day, items, info, tid, not_before, legs, protected,
+                                     away_remains=away_remains)
                 if attempt is None:
                     continue
                 if best_score is None:
@@ -1319,14 +1695,22 @@ def _walk(days, ranked, deps, meta, legs, protected):
                 "location_id": attempt["location"],
             }
             completion[tid] = ceiling if by_day else attempt["finish"]
+            if allow_breaks:
+                new_day_legs = _maybe_insert_break(day, items, legs)
+                if new_day_legs is not None:
+                    day_legs = new_day_legs
+                    break_dates.add(day["date"])
         for leg in day_legs:
             leg["granularity"] = day["granularity"]
             leg["date"] = day["date"]
         travel.extend(day_legs)
-    return placements, travel
+        for item in items:
+            if item.get("kind") == "break":
+                breaks.append({**item, "granularity": day["granularity"], "date": day["date"]})
+    return placements, travel, breaks, break_dates
 
 
-def _blocks(placements, travel):
+def _blocks(placements, travel, breaks, chain_blocks):
     """The plan's blocks, in the order they happen.
 
     A day-granularity block carries the date alone in start and end, with no
@@ -1335,14 +1719,15 @@ def _blocks(placements, travel):
     "2026-03-15" precedes "2026-03-15T09:00:00" as a string, and it is what
     a caller tests to tell the two apart (see block_granularity).
 
-    TRAVEL IS EMITTED ONLY WHERE THERE IS A TIME OF DAY TO EMIT IT AT. On the
-    near days a leg is a real row with a real start and end, visible in the
-    calendar, so a day that is full because of three trips looks full and says
-    why. Further out, where the task itself only claims a date, its legs were
-    still made room for -- the walk laid them out and they consumed the day's
-    capacity, and the summary counts their minutes -- but writing them as rows
-    would put two legs on one date with nothing to order or distinguish them,
-    which claims a precision the day allocation itself refuses to.
+    TRAVEL, BREAKS AND HOME-FIRST CHAIN BLOCKS ARE EMITTED ONLY WHERE THERE IS
+    A TIME OF DAY TO EMIT THEM AT. On the near days a leg (or a break, or a
+    prep block) is a real row with a real start and end, visible in the
+    calendar, so a day that is full because of three trips -- or a rest, or
+    getting ready to go out -- looks full and says why. Further out, where a
+    task itself only claims a date, none of these were even computed for that
+    day (breaks and chain blocks aren't inserted past slot precision; see
+    BREAK_AFTER_MINUTES and the caller for why chain_blocks is pre-filtered),
+    so there's nothing here to skip the way travel's own check still has to.
     """
     rows = []
     for tid, placement in placements.items():
@@ -1373,7 +1758,34 @@ def _blocks(placements, travel):
             "from_location_id": leg["from_location_id"],
             "to_location_id": leg["to_location_id"],
         })
-    rows.sort(key=lambda b: (b["start"], b["kind"], b["task_id"]))
+    for br in breaks:
+        start, end = br["start"].isoformat(), br["finish"].isoformat()
+        rows.append({
+            "id": _block_id(None, start, end, kind="break"),
+            "task_id": None,
+            "start": start,
+            "end": end,
+            "kind": "break",
+            "is_locked": False,
+            "granularity": "slot",
+            "minutes": BREAK_MINUTES,
+        })
+    for block in chain_blocks:
+        start, end = block["start"].isoformat(), block["end"].isoformat()
+        rows.append({
+            "id": _block_id(block["commitment_id"], start, end, kind=block["kind"]),
+            "task_id": None,
+            "commitment_id": block["commitment_id"],
+            "start": start,
+            "end": end,
+            "kind": block["kind"],
+            "is_locked": False,
+            "granularity": "slot",
+            "minutes": _interval_minutes(block["start"], block["end"]),
+            "from_location_id": block["from_location_id"],
+            "to_location_id": block["to_location_id"],
+        })
+    rows.sort(key=lambda b: (b["start"], b["kind"], b["task_id"] or ""))
     return rows
 
 

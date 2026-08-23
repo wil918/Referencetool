@@ -398,6 +398,13 @@ CREATE TABLE IF NOT EXISTS deliverables (
 # picks up from, when a task can't be finished in one sitting. slip_count
 # counts how many times this task has been bumped to a later block by a
 # replan, for the scheduler to weigh against always deferring the same task.
+#
+# is_domestic marks chores (laundry, a food shop) -- ordinary tasks in every
+# other respect, but placed differently: domestic hours by default, working
+# hours only when the schedule already has you at home or there's no
+# away-from-home work left that day (see scheduling._domestic_tiers). A flag
+# rather than a separate table because nothing else about a domestic task
+# differs -- estimate, actuals and dependencies all apply the same way.
 TASKS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
@@ -413,6 +420,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     importance INTEGER,
     difficulty INTEGER,
     is_finishing INTEGER NOT NULL DEFAULT 0,
+    is_domestic INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'pending',
     recurrence_id TEXT,
     continues_task_id TEXT,
@@ -455,9 +463,16 @@ CREATE TABLE IF NOT EXISTS task_actuals (
 # The scheduler's OUTPUT, not an editable plan. Every replan regenerates this
 # table's contents wholesale for the tasks it touches -- it must never mutate
 # a task row to reflect where that task landed. kind distinguishes a block
-# that IS the task ('task') from a block the scheduler inserted around it
-# ('travel'), so the calendar can render both without the travel block being
-# mistaken for work.
+# that IS the task ('task') from a block the scheduler inserted around it:
+# 'travel' for a trip (to a task's location, or as part of a commitment's
+# home-first chain -- see below), 'prep' for a home-first getting-ready block,
+# and 'break' for a rest the scheduler wedged into a long run of work. Only
+# 'task' blocks are work the estimator should ever learn from.
+#
+# task_id and commitment_id are each nullable, and a row sets at most one:
+# a 'task' or task-travel block belongs to the task, a home-first 'prep' or
+# 'travel' block belongs to the commitment whose chain it's part of, and a
+# 'break' belongs to neither -- it's just reserved time between task blocks.
 #
 # start and end come in two shapes, because the scheduler's precision decays
 # with distance (see SLOT_DETAIL_DAYS in scheduling.py). A near-term block
@@ -467,10 +482,14 @@ CREATE TABLE IF NOT EXISTS task_actuals (
 # length lives on the task's est_minutes rather than in the row, and
 # scheduling.block_granularity is what tells the two apart. Both sort
 # correctly in a range query, since "2026-03-15" precedes "2026-03-15T09:00".
+# Breaks and home-first chain blocks are only ever emitted at slot precision
+# (see scheduling._blocks) -- a day-granularity allocation has no timeline for
+# either to attach to.
 SCHEDULED_BLOCKS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS scheduled_blocks (
     id TEXT PRIMARY KEY,
-    task_id TEXT NOT NULL,
+    task_id TEXT,
+    commitment_id TEXT,
     start TEXT NOT NULL,
     end TEXT NOT NULL,
     is_locked INTEGER NOT NULL DEFAULT 0,
@@ -480,12 +499,19 @@ CREATE TABLE IF NOT EXISTS scheduled_blocks (
 """
 
 # Anything already on the calendar that isn't a task the scheduler placed
-# itself -- classes, shifts, appointments, imported calendar events. Its own
-# support_level vocabulary (priority | ambient | none) describes how much this
-# WINDOW demands attention, which is a different question from a task's
-# support_level (see TASKS_SCHEMA). source/external_uid identify where an
-# imported commitment came from, so a re-import can update rather than
-# duplicate it.
+# itself -- classes, shifts, appointments, imported calendar events, and
+# personal events added by hand. Its own support_level vocabulary
+# (priority | ambient | none) describes how much this WINDOW demands
+# attention, which is a different question from a task's support_level (see
+# TASKS_SCHEMA). source/external_uid identify where an imported commitment
+# came from, so a re-import can update rather than duplicate it -- both are
+# NULL for a commitment added by hand through the plain personal-event form.
+#
+# home_first and prep_minutes describe a chain of immovable prep/travel
+# blocks the scheduler inserts working backwards from this commitment's own
+# start (see scheduling.home_first_chain) -- prep_minutes is only meaningful
+# when home_first is set. Neither goes through Claude: personal events are a
+# plain form, not the task-estimation flow in task_ai.py.
 COMMITMENTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS commitments (
     id TEXT PRIMARY KEY,
@@ -497,7 +523,9 @@ CREATE TABLE IF NOT EXISTS commitments (
     support_level TEXT NOT NULL DEFAULT 'none',
     source TEXT,
     external_uid TEXT,
-    energy_cost INTEGER
+    energy_cost INTEGER,
+    home_first INTEGER NOT NULL DEFAULT 0,
+    prep_minutes INTEGER
 );
 """
 
@@ -634,6 +662,40 @@ CREATE TABLE IF NOT EXISTS working_hours (
 );
 """
 
+# A second weekly band, same shape and same "absence means no hours that day"
+# convention as working_hours, for chores rather than project/university work
+# (see TASKS_SCHEMA.is_domestic). Kept as its own table rather than a second
+# pair of columns on working_hours because the two are resized independently
+# -- widening Saturday's working hours says nothing about Saturday's domestic
+# hours.
+DOMESTIC_HOURS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS domestic_hours (
+    weekday INTEGER PRIMARY KEY,
+    opens TEXT,
+    closes TEXT
+);
+"""
+
+# A per-date resize of either weekly band -- a working day that runs late, a
+# domestic morning lost to a delivery. `band` is 'working' or 'domestic',
+# naming which weekly table this row narrows or widens for one date; `off`
+# closes the band outright for that date, the same closed-for-the-day
+# convention LOCATION_OVERRIDES_SCHEMA uses. One table for both bands rather
+# than two, since a date override is otherwise identical either way and a
+# UI editing one band's calendar has no reason to know the other exists.
+HOURS_OVERRIDES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS hours_overrides (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL,
+    band TEXT NOT NULL,
+    opens TEXT,
+    closes TEXT,
+    off INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+HOURS_BANDS = ("working", "domestic")
+
 # One row per day: how much the scheduler thinks is available, and how much
 # energy is likely on hand -- inferred_energy from patterns in past actuals,
 # manual_energy when the user overrides that guess for a specific day (an
@@ -728,6 +790,8 @@ def init_db():
         conn.execute(RESOURCE_ITEMS_SCHEMA)
         conn.execute(BRIEFS_SCHEMA)
         conn.execute(WORKING_HOURS_SCHEMA)
+        conn.execute(DOMESTIC_HOURS_SCHEMA)
+        conn.execute(HOURS_OVERRIDES_SCHEMA)
         conn.execute(DAILY_CAPACITY_SCHEMA)
         for ddl in SCHEDULE_INDEXES:
             conn.execute(ddl)
@@ -735,12 +799,16 @@ def init_db():
         for ddl in (
             "ALTER TABLE reference_items ADD COLUMN content_hash TEXT",
             "ALTER TABLE reference_items ADD COLUMN is_own_work INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE tasks ADD COLUMN is_domestic INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE commitments ADD COLUMN home_first INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE commitments ADD COLUMN prep_minutes INTEGER",
         ):
             try:
                 conn.execute(ddl)
             except sqlite3.OperationalError:
                 pass  # column already exists
         _migrate_text_widget_to_notepad(conn)
+        _migrate_scheduled_blocks_task_id_nullable(conn)
 
 
 # One-off: the `text` widget type was removed in favour of `notepad`, which
@@ -774,6 +842,33 @@ def _migrate_text_widget_to_notepad(conn):
             "UPDATE canvas_nodes SET config = ? WHERE id = ?",
             (json.dumps(config), row["id"]),
         )
+
+
+# One-off: scheduled_blocks.task_id used to be NOT NULL, from back when every
+# block was either a task or a trip to one. A home-first prep/travel block
+# belongs to a commitment instead, and a break belongs to neither, so both
+# task_id and the new commitment_id have to be optional (see
+# SCHEDULED_BLOCKS_SCHEMA). SQLite can't relax a NOT NULL constraint with
+# ALTER TABLE, so an old table is rebuilt: renamed aside, recreated from the
+# current schema, its rows copied across with commitment_id NULL (nothing
+# before this session ever set it), then the old copy dropped. A fresh
+# database created from SCHEDULED_BLOCKS_SCHEMA above already has the nullable
+# column and never touches sqlite_master, so this is a no-op there.
+def _migrate_scheduled_blocks_task_id_nullable(conn):
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'scheduled_blocks'"
+    ).fetchone()
+    if row is None or "task_id TEXT NOT NULL" not in row["sql"]:
+        return  # already migrated, or a fresh database
+    conn.execute("ALTER TABLE scheduled_blocks RENAME TO scheduled_blocks_old")
+    conn.execute(SCHEDULED_BLOCKS_SCHEMA)
+    conn.execute(
+        """INSERT INTO scheduled_blocks
+               (id, task_id, commitment_id, start, end, is_locked, kind, generated_at)
+           SELECT id, task_id, NULL, start, end, is_locked, kind, generated_at
+           FROM scheduled_blocks_old"""
+    )
+    conn.execute("DROP TABLE scheduled_blocks_old")
 
 
 def insert_reference(
@@ -2275,7 +2370,7 @@ def _deliverable_to_dict(row):
 def create_task(task_id, title, project_id=None, deliverable_id=None, description=None,
                 measurable_goal=None, deadline=None, required_location_id=None,
                 support_level="independent", est_minutes=None, importance=None,
-                difficulty=None, is_finishing=False, status="pending",
+                difficulty=None, is_finishing=False, is_domestic=False, status="pending",
                 recurrence_id=None, continues_task_id=None,
                 est_minutes_source=None, importance_source=None, difficulty_source=None):
     with get_conn() as conn:
@@ -2283,10 +2378,10 @@ def create_task(task_id, title, project_id=None, deliverable_id=None, descriptio
             """INSERT INTO tasks
                    (id, project_id, deliverable_id, title, description, measurable_goal,
                     deadline, required_location_id, support_level, est_minutes, importance,
-                    difficulty, is_finishing, status, recurrence_id, continues_task_id,
-                    slip_count, est_minutes_source, importance_source, difficulty_source,
-                    created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
+                    difficulty, is_finishing, is_domestic, status, recurrence_id,
+                    continues_task_id, slip_count, est_minutes_source, importance_source,
+                    difficulty_source, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
             (
                 task_id,
                 project_id,
@@ -2301,6 +2396,7 @@ def create_task(task_id, title, project_id=None, deliverable_id=None, descriptio
                 importance,
                 difficulty,
                 1 if is_finishing else 0,
+                1 if is_domestic else 0,
                 status,
                 recurrence_id,
                 continues_task_id,
@@ -2363,7 +2459,7 @@ def list_tasks(project_id=None, deliverable_id=None, status=None):
 TASK_PATCH_COLUMNS = (
     "project_id", "deliverable_id", "title", "description", "measurable_goal",
     "deadline", "required_location_id", "support_level", "est_minutes",
-    "importance", "difficulty", "is_finishing", "status", "recurrence_id",
+    "importance", "difficulty", "is_finishing", "is_domestic", "status", "recurrence_id",
     "continues_task_id", "slip_count", "est_minutes_source", "importance_source",
     "difficulty_source",
 )
@@ -2376,7 +2472,7 @@ def update_task(task_id, **fields):
         if column not in fields:
             continue
         value = fields[column]
-        if column == "is_finishing":
+        if column in ("is_finishing", "is_domestic"):
             value = 1 if value else 0
         sets.append(f"{column} = ?")
         params.append(value)
@@ -2405,6 +2501,7 @@ def delete_task(task_id):
 def _task_to_dict(row):
     d = dict(row)
     d["is_finishing"] = bool(d["is_finishing"])
+    d["is_domestic"] = bool(d["is_domestic"])
     return d
 
 
@@ -2533,14 +2630,17 @@ def get_task_actual(task_id):
 # --- Schedule: scheduled blocks ----------------------------------------------
 
 
-def create_scheduled_block(block_id, task_id, start, end, kind="task", is_locked=False):
+def create_scheduled_block(block_id, task_id, start, end, kind="task", is_locked=False,
+                           commitment_id=None):
     with get_conn() as conn:
         conn.execute(
-            """INSERT INTO scheduled_blocks (id, task_id, start, end, is_locked, kind, generated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO scheduled_blocks
+                   (id, task_id, commitment_id, start, end, is_locked, kind, generated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 block_id,
                 task_id,
+                commitment_id,
                 start,
                 end,
                 1 if is_locked else 0,
@@ -2589,12 +2689,14 @@ def replace_scheduled_blocks(blocks):
     with get_conn() as conn:
         conn.execute("DELETE FROM scheduled_blocks")
         conn.executemany(
-            """INSERT INTO scheduled_blocks (id, task_id, start, end, is_locked, kind, generated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO scheduled_blocks
+                   (id, task_id, commitment_id, start, end, is_locked, kind, generated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
                     b["id"],
-                    b["task_id"],
+                    b.get("task_id"),
+                    b.get("commitment_id"),
                     b["start"],
                     b["end"],
                     1 if b.get("is_locked") else 0,
@@ -2616,13 +2718,14 @@ def _scheduled_block_to_dict(row):
 
 
 def create_commitment(commitment_id, title, start, end, kind=None, location_id=None,
-                      support_level="none", source=None, external_uid=None, energy_cost=None):
+                      support_level="none", source=None, external_uid=None, energy_cost=None,
+                      home_first=False, prep_minutes=None):
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO commitments
                    (id, title, start, end, kind, location_id, support_level, source,
-                    external_uid, energy_cost)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    external_uid, energy_cost, home_first, prep_minutes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 commitment_id,
                 title,
@@ -2634,6 +2737,8 @@ def create_commitment(commitment_id, title, start, end, kind=None, location_id=N
                 source,
                 external_uid,
                 energy_cost,
+                1 if home_first else 0,
+                prep_minutes,
             ),
         )
 
@@ -2641,13 +2746,13 @@ def create_commitment(commitment_id, title, start, end, kind=None, location_id=N
 def list_commitments():
     with get_conn() as conn:
         rows = conn.execute("SELECT * FROM commitments ORDER BY start").fetchall()
-        return [dict(r) for r in rows]
+        return [_commitment_to_dict(r) for r in rows]
 
 
 def get_commitment(commitment_id):
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM commitments WHERE id = ?", (commitment_id,)).fetchone()
-        return dict(row) if row else None
+        return _commitment_to_dict(row) if row else None
 
 
 def get_commitment_by_external_uid(external_uid):
@@ -2658,7 +2763,7 @@ def get_commitment_by_external_uid(external_uid):
         row = conn.execute(
             "SELECT * FROM commitments WHERE external_uid = ?", (external_uid,)
         ).fetchone()
-        return dict(row) if row else None
+        return _commitment_to_dict(row) if row else None
 
 
 def list_commitments_by_source(source):
@@ -2669,7 +2774,7 @@ def list_commitments_by_source(source):
         rows = conn.execute(
             "SELECT * FROM commitments WHERE source = ?", (source,)
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_commitment_to_dict(r) for r in rows]
 
 
 def list_commitments_between(range_start, range_end):
@@ -2682,12 +2787,12 @@ def list_commitments_between(range_start, range_end):
             "SELECT * FROM commitments WHERE start < ? AND end > ? ORDER BY start",
             (range_end, range_start),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_commitment_to_dict(r) for r in rows]
 
 
 COMMITMENT_PATCH_COLUMNS = (
     "title", "start", "end", "kind", "location_id", "support_level", "source",
-    "external_uid", "energy_cost",
+    "external_uid", "energy_cost", "home_first", "prep_minutes",
 )
 
 
@@ -2696,14 +2801,23 @@ def update_commitment(commitment_id, **fields):
     for column in COMMITMENT_PATCH_COLUMNS:
         if column not in fields:
             continue
+        value = fields[column]
+        if column == "home_first":
+            value = 1 if value else 0
         sets.append(f"{column} = ?")
-        params.append(fields[column])
+        params.append(value)
     if not sets:
         return
     with get_conn() as conn:
         conn.execute(
             f"UPDATE commitments SET {', '.join(sets)} WHERE id = ?", [*params, commitment_id]
         )
+
+
+def _commitment_to_dict(row):
+    d = dict(row)
+    d["home_first"] = bool(d["home_first"])
+    return d
 
 
 def delete_commitment(commitment_id):
@@ -3085,6 +3199,65 @@ def save_working_hours(hours):
             "INSERT INTO working_hours (weekday, opens, closes) VALUES (?, ?, ?)",
             [(h["weekday"], h.get("opens"), h.get("closes")) for h in hours],
         )
+
+
+# --- Schedule: domestic hours -------------------------------------------------
+
+
+def get_domestic_hours():
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM domestic_hours ORDER BY weekday").fetchall()
+        return [dict(r) for r in rows]
+
+
+def save_domestic_hours(hours):
+    """Replace the whole weekly domestic-hours template at once -- same
+    wholesale-replace reasoning as save_working_hours, and independent of it:
+    the two bands are resized separately."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM domestic_hours")
+        conn.executemany(
+            "INSERT INTO domestic_hours (weekday, opens, closes) VALUES (?, ?, ?)",
+            [(h["weekday"], h.get("opens"), h.get("closes")) for h in hours],
+        )
+
+
+# --- Schedule: hours overrides -------------------------------------------------
+
+
+def list_hours_overrides(band=None):
+    """Every per-date resize on file, optionally narrowed to one band --
+    scheduling._band_window filters by date itself (see
+    location_open_intervals for why: matching the existing per-lookup
+    convention rather than adding a second, date-keyed query path)."""
+    with get_conn() as conn:
+        if band is not None:
+            rows = conn.execute(
+                "SELECT * FROM hours_overrides WHERE band = ? ORDER BY date", (band,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM hours_overrides ORDER BY date").fetchall()
+        return [_hours_override_to_dict(r) for r in rows]
+
+
+def create_hours_override(override_id, date, band, opens=None, closes=None, off=False):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO hours_overrides (id, date, band, opens, closes, off)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (override_id, date, band, opens, closes, 1 if off else 0),
+        )
+
+
+def delete_hours_override(override_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM hours_overrides WHERE id = ?", (override_id,))
+
+
+def _hours_override_to_dict(row):
+    d = dict(row)
+    d["off"] = bool(d["off"])
+    return d
 
 
 # --- Schedule: daily capacity ---------------------------------------------------

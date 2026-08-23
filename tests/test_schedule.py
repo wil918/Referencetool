@@ -197,6 +197,17 @@ def test_a_task_can_move_through_every_real_status(client):
         assert resp.get_json()["status"] == status
 
 
+def test_is_domestic_round_trips_through_the_api(client):
+    created = client.post("/api/tasks", json={"title": "Laundry", "is_domestic": True}).get_json()
+    assert created["is_domestic"] is True
+
+    updated = client.put(f"/api/tasks/{created['id']}", json={"is_domestic": False}).get_json()
+    assert updated["is_domestic"] is False
+
+    default = make_task(client, "Ordinary")
+    assert default["is_domestic"] is False
+
+
 # --- Listing and filtering ------------------------------------------------
 
 
@@ -304,6 +315,9 @@ def test_commitment_crud_and_support_level_validation(client):
         "support_level": "priority",
     }).get_json()
     assert created["support_level"] == "priority"
+    # A plain event, not routed through Claude: home_first defaults off.
+    assert created["home_first"] is False
+    assert created["prep_minutes"] is None
 
     bad = client.post("/api/commitments", json={
         "title": "Bad", "start": "x", "end": "y", "support_level": "nonsense"
@@ -315,6 +329,24 @@ def test_commitment_crud_and_support_level_validation(client):
 
     assert client.delete(f"/api/commitments/{created['id']}").status_code == 200
     assert client.get("/api/commitments").get_json() == []
+
+
+def test_a_home_first_personal_event_round_trips_through_the_api(client):
+    created = client.post("/api/commitments", json={
+        "title": "Drinks out",
+        "start": "2026-01-05T19:00:00",
+        "end": "2026-01-05T21:00:00",
+        "home_first": True,
+        "prep_minutes": 30,
+    }).get_json()
+    assert created["home_first"] is True
+    assert created["prep_minutes"] == 30
+
+    updated = client.put(f"/api/commitments/{created['id']}", json={
+        "home_first": False, "prep_minutes": None,
+    }).get_json()
+    assert updated["home_first"] is False
+    assert updated["prep_minutes"] is None
 
 
 # --- Working hours and daily capacity -----------------------------------------
@@ -384,6 +416,78 @@ def test_manual_energy_override_can_be_cleared_back_to_inferred(client):
 def test_capacity_override_route_requires_manual_energy_key(client):
     resp = client.put("/api/capacity/2026-01-06", json={})
     assert resp.status_code == 400
+
+
+# --- Domestic hours and hours overrides -----------------------------------------
+#
+# Data and routes only -- session 9 builds the week/month UI that lets someone
+# actually drag these. See scheduling.py's domestic_free_intervals and
+# _band_window for the placement rules that read them.
+
+
+def test_domestic_hours_round_trip_wholesale(client):
+    resp = client.put("/api/domestic-hours", json={
+        "hours": [{"weekday": 5, "opens": "10:00", "closes": "14:00"}]
+    })
+    assert resp.status_code == 200
+    assert client.get("/api/domestic-hours").get_json() == [
+        {"weekday": 5, "opens": "10:00", "closes": "14:00"}
+    ]
+
+    client.put("/api/domestic-hours", json={"hours": []})
+    assert client.get("/api/domestic-hours").get_json() == []
+
+
+def test_domestic_hours_are_independent_of_working_hours(client):
+    client.put("/api/working-hours", json={
+        "hours": [{"weekday": 0, "opens": "09:00", "closes": "17:00"}]
+    })
+    client.put("/api/domestic-hours", json={
+        "hours": [{"weekday": 0, "opens": "18:00", "closes": "20:00"}]
+    })
+
+    assert client.get("/api/working-hours").get_json() == [
+        {"weekday": 0, "opens": "09:00", "closes": "17:00"}
+    ]
+    assert client.get("/api/domestic-hours").get_json() == [
+        {"weekday": 0, "opens": "18:00", "closes": "20:00"}
+    ]
+
+
+def test_hours_overrides_crud_and_band_validation(client):
+    bad_band = client.post("/api/hours-overrides", json={
+        "date": "2026-01-05", "band": "nonsense",
+    })
+    assert bad_band.status_code == 400
+
+    bad_date = client.post("/api/hours-overrides", json={
+        "date": "not-a-date", "band": "working",
+    })
+    assert bad_date.status_code == 400
+
+    created = client.post("/api/hours-overrides", json={
+        "date": "2026-01-05", "band": "domestic", "opens": "08:00", "closes": "10:00",
+    }).get_json()
+    assert created["band"] == "domestic"
+    assert created["off"] is False
+
+    all_overrides = client.get("/api/hours-overrides").get_json()
+    assert [o["id"] for o in all_overrides] == [created["id"]]
+
+    by_band = client.get("/api/hours-overrides?band=working").get_json()
+    assert by_band == []
+
+    assert client.get("/api/hours-overrides?band=nonsense").status_code == 400
+
+    assert client.delete(f"/api/hours-overrides/{created['id']}").status_code == 200
+    assert client.get("/api/hours-overrides").get_json() == []
+
+
+def test_an_off_hours_override_shuts_the_band_for_that_date(client):
+    resp = client.post("/api/hours-overrides", json={
+        "date": "2026-01-05", "band": "working", "off": True,
+    }).get_json()
+    assert resp["off"] is True
 
 
 # --- Task field generation ---------------------------------------------------

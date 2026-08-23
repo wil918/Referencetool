@@ -5,6 +5,7 @@ fallback, and a missing location never raises -- plus daily capacity
 itself.
 """
 import json
+import uuid
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -680,7 +681,10 @@ def test_the_schedule_route_returns_blocks_in_range_plus_the_at_risk_list(client
 
     body = client.get("/api/schedule").get_json()
 
-    assert [b["task_id"] for b in body["blocks"]] == ["t-a"]
+    # t-a's own two hours cross the break threshold, so its block is followed
+    # by a break -- filtered out here, since this test is about task/at-risk
+    # routing, not breaks (see BREAK_AFTER_MINUTES).
+    assert [b["task_id"] for b in body["blocks"] if b["kind"] == "task"] == ["t-a"]
     assert body["blocks"][0]["granularity"] == "slot"
     assert [e["task_id"] for e in body["at_risk"]] == ["t-b"]
     assert body["start"] == today.isoformat()
@@ -939,13 +943,16 @@ def test_the_first_leg_of_a_day_comes_from_home_and_the_last_returns_to_it(archi
 
     blocks = scheduling.plan(MONDAY)["blocks"]
 
+    # Two hours of cutting crosses the break threshold, so a break sits
+    # between the work and the trip home (see BREAK_AFTER_MINUTES).
     assert [(b["kind"], b["start"], b["end"]) for b in blocks] == [
         ("travel", f"{MONDAY}T09:00:00", f"{MONDAY}T09:15:00"),
         ("task", f"{MONDAY}T09:15:00", f"{MONDAY}T11:15:00"),
-        ("travel", f"{MONDAY}T11:15:00", f"{MONDAY}T11:30:00"),
+        ("break", f"{MONDAY}T11:15:00", f"{MONDAY}T11:45:00"),
+        ("travel", f"{MONDAY}T11:45:00", f"{MONDAY}T12:00:00"),
     ]
     assert blocks[0]["from_location_id"] is None and blocks[0]["to_location_id"] == studio
-    assert blocks[2]["from_location_id"] == studio and blocks[2]["to_location_id"] is None
+    assert blocks[3]["from_location_id"] == studio and blocks[3]["to_location_id"] is None
 
 
 def test_travel_is_counted_against_the_day_but_never_folded_into_the_task(archive):
@@ -1130,7 +1137,11 @@ def test_finishing_work_that_overflows_its_buffer_is_at_risk(archive):
     result = scheduling.plan(MONDAY)
     at_risk = risk(result)
 
-    assert len(result["blocks"]) == 1
+    # The one placed task's six hours cross the break threshold, so a break
+    # follows it -- dropping that break wouldn't free enough room for a
+    # second six-hour task either, so it stays (see BREAK_AFTER_MINUTES).
+    assert [b["kind"] for b in result["blocks"]] == ["task", "break"]
+    assert result["breaks_dropped"] == []
     assert len(at_risk) == 2
     assert all(e["reason"] == scheduling.AT_RISK_FINISHING for e in at_risk.values())
     assert all("protected" in e["message"] for e in at_risk.values())
@@ -1173,10 +1184,228 @@ def test_a_travel_block_never_becomes_the_tasks_recorded_duration(client):
     task("t-cut", "Pattern cutting", est_minutes=120, required_location_id=studio)
 
     body = client.post("/api/schedule/plan", json={"now": today}).get_json()
-    assert [b["kind"] for b in body["blocks"]] == ["travel", "task", "travel"]
+    # The two-hour task itself crosses the break threshold, so a break sits
+    # between the work and the trip home (see BREAK_AFTER_MINUTES).
+    assert [b["kind"] for b in body["blocks"]] == ["travel", "task", "break", "travel"]
 
     resp = client.post("/api/tasks/t-cut/complete")
 
     # Two hours of cutting and half an hour of travelling, recorded as two
     # hours of cutting.
     assert resp.get_json()["actual"]["actual_minutes"] == 120
+
+
+# --- Personal events: immovability, independent of working hours -----------------
+
+
+def make_commitment(commitment_id, start, end, **fields):
+    db.create_commitment(commitment_id, commitment_id, start, end, **fields)
+    return commitment_id
+
+
+def test_a_personal_event_outside_working_hours_survives_working_hours_narrowing(archive):
+    db.save_working_hours([{"weekday": 0, "opens": "09:00", "closes": "17:00"}])
+    make_commitment("c-dinner", f"{MONDAY}T19:00:00", f"{MONDAY}T21:00:00")
+
+    # Working hours shrink well away from the evening -- setting them must
+    # never dislodge a commitment that was never inside them to begin with.
+    db.save_working_hours([{"weekday": 0, "opens": "09:00", "closes": "12:00"}])
+
+    commitment_row = db.get_commitment("c-dinner")
+    assert commitment_row["start"] == f"{MONDAY}T19:00:00"
+    assert commitment_row["end"] == f"{MONDAY}T21:00:00"
+
+
+# --- Home-first chains -------------------------------------------------------------
+
+
+def test_a_home_first_chain_inserts_travel_then_prep_and_ends_at_the_event_start(archive):
+    studio = make_location("Studio", travel_minutes_from_home=15)
+    cinema = make_location("Cinema", travel_minutes_from_home=20)
+    # Away from home (at the studio) right up until the chain needs to start
+    # working backwards -- so the leading travel-to-home leg has somewhere
+    # real to travel from.
+    make_commitment("c-studio", f"{MONDAY}T15:00:00", f"{MONDAY}T18:00:00", location_id=studio)
+    event_start = f"{MONDAY}T19:30:00"
+    c = make_commitment("c-cinema", event_start, f"{MONDAY}T22:00:00",
+                        home_first=True, prep_minutes=30, location_id=cinema)
+
+    chain = scheduling.home_first_chain(db.get_commitment(c))
+
+    assert [b["kind"] for b in chain] == ["travel", "prep", "travel"]
+    assert chain[-1]["end"] == datetime.fromisoformat(event_start)
+    assert chain[0]["from_location_id"] == studio and chain[0]["to_location_id"] is None
+    assert chain[-1]["from_location_id"] is None and chain[-1]["to_location_id"] == cinema
+    # Contiguous: each block ends exactly where the next begins.
+    assert chain[0]["end"] == chain[1]["start"]
+    assert chain[1]["end"] == chain[2]["start"]
+
+
+def test_the_leading_travel_block_is_omitted_when_already_at_home(archive):
+    cinema = make_location("Cinema", travel_minutes_from_home=20)
+    event_start = f"{MONDAY}T19:30:00"
+    # Nothing else on the calendar -- there's nowhere to have travelled from,
+    # so home is assumed (see scheduling._location_before).
+    c = make_commitment("c-cinema", event_start, f"{MONDAY}T22:00:00",
+                        home_first=True, prep_minutes=30, location_id=cinema)
+
+    chain = scheduling.home_first_chain(db.get_commitment(c))
+
+    assert [b["kind"] for b in chain] == ["prep", "travel"]
+    assert chain[-1]["end"] == datetime.fromisoformat(event_start)
+
+
+def test_a_venueless_event_omits_the_final_leg_but_still_means_arrival(archive):
+    event_start = f"{MONDAY}T19:00:00"
+    c = make_commitment("c-drinks", event_start, f"{MONDAY}T21:00:00",
+                        home_first=True, prep_minutes=20)  # no location_id
+
+    chain = scheduling.home_first_chain(db.get_commitment(c))
+
+    assert [b["kind"] for b in chain] == ["prep"]
+    # The entered time is still arrival -- the prep block ends exactly there,
+    # just without a costed trip in front of it.
+    assert chain[-1]["end"] == datetime.fromisoformat(event_start)
+
+
+def test_work_is_displaced_rather_than_overlapping_a_home_first_chain(archive):
+    db.save_working_hours([
+        {"weekday": 0, "opens": "17:00", "closes": "19:30"},  # MONDAY: narrow, evening-only
+        {"weekday": 1, "opens": "09:00", "closes": "17:00"},  # TUESDAY: a normal day
+    ])
+    venue = make_location("Venue", travel_minutes_from_home=15)
+    make_commitment("c-out", f"{MONDAY}T19:00:00", f"{MONDAY}T21:00:00",
+                    home_first=True, prep_minutes=30, location_id=venue)
+    # 90 minutes would easily fit inside Monday's nominal 17:00-19:30 window
+    # if the chain (18:15-19:00, working backwards from the 19:00 event) were
+    # ignored -- but only 75 minutes of it (17:00-18:15) are actually free.
+    task("t-work", est_minutes=90, deadline=TUESDAY)
+
+    block = placed(scheduling.plan(MONDAY))["t-work"]
+
+    assert block["start"].startswith(TUESDAY)
+    chain_start = datetime.fromisoformat(f"{MONDAY}T18:15:00")
+    task_start = datetime.fromisoformat(block["start"])
+    task_end = datetime.fromisoformat(block["end"])
+    assert task_end <= chain_start or task_start >= datetime.fromisoformat(f"{MONDAY}T21:00:00")
+
+
+# --- Domestic tasks -----------------------------------------------------------------
+
+
+def set_domestic_hours(weekday, opens="18:00", closes="20:00"):
+    db.save_domestic_hours([{"weekday": weekday, "opens": opens, "closes": closes}])
+
+
+def test_a_domestic_task_lands_in_domestic_hours_by_default(archive):
+    working_week()
+    set_domestic_hours(0)  # Monday, 18:00-20:00
+
+    task("t-laundry", est_minutes=60, is_domestic=True)
+
+    block = placed(scheduling.plan(MONDAY))["t-laundry"]
+
+    assert block["start"] == f"{MONDAY}T18:00:00"
+
+
+def test_a_domestic_task_may_use_working_hours_when_no_away_from_home_work_remains(archive):
+    working_week()  # 09:00-17:00
+    set_domestic_hours(0, "20:00", "21:00")  # only an hour -- not enough alone
+    # No required_location_id, so it doesn't count as away-from-home work.
+    task("t-admin", est_minutes=60, deadline=MONDAY)
+    task("t-laundry", est_minutes=120, is_domestic=True, deadline=MONDAY)
+
+    block = placed(scheduling.plan(MONDAY))["t-laundry"]
+
+    # Too long for the domestic window alone; with nothing away from home
+    # left to compete for it, working hours were available as a fallback.
+    assert datetime.fromisoformat(block["start"]) < datetime.fromisoformat(f"{MONDAY}T18:00:00")
+
+
+def test_a_domestic_task_does_not_use_working_hours_while_away_from_home_work_remains(archive):
+    working_week()
+    set_domestic_hours(0, "20:00", "21:00")
+    studio = make_location("Studio", travel_minutes_from_home=15)
+    location_hours(studio, "09:00", "17:00")
+    # Away-from-home work still outstanding all week.
+    task("t-cut", est_minutes=6 * 60, required_location_id=studio, deadline=FRIDAY)
+    task("t-laundry", est_minutes=120, is_domestic=True, deadline=MONDAY)
+
+    result = scheduling.plan(MONDAY)
+
+    # The domestic task's own window is only an hour, and working hours
+    # aren't offered as a fallback while t-cut still needs the day -- so it
+    # can't be placed on Monday at all.
+    assert "t-laundry" not in placed(result)
+
+
+def test_a_date_override_narrows_domestic_hours_independently_of_working_hours(archive):
+    set_domestic_hours(0, "18:00", "21:00")  # Monday, normally three hours
+    override_id = str(uuid.uuid4())
+    db.create_hours_override(override_id, MONDAY, "domestic", closes="19:00")
+
+    assert scheduling.domestic_free_intervals(MONDAY) == [
+        (datetime.fromisoformat(f"{MONDAY}T18:00:00"), datetime.fromisoformat(f"{MONDAY}T19:00:00"))
+    ]
+    # The working band's own hours (set separately, or not at all here) are
+    # untouched by a domestic override.
+    assert scheduling.free_intervals(MONDAY) == []
+
+
+def test_a_non_domestic_task_is_never_placed_in_domestic_hours(archive):
+    db.save_working_hours([])  # no working hours anywhere
+    set_domestic_hours(0)
+    task("t-work", est_minutes=60)
+
+    result = scheduling.plan(MONDAY)
+
+    assert result["blocks"] == []
+    assert risk(result)["t-work"]["reason"] == scheduling.AT_RISK_NO_CAPACITY
+
+
+# --- Breaks -------------------------------------------------------------------------
+
+
+def test_a_break_appears_after_two_hours_of_consecutive_task_blocks(archive):
+    working_week()
+    task("t-a", est_minutes=90)
+    task("t-b", est_minutes=90)
+
+    blocks = scheduling.plan(MONDAY)["blocks"]
+
+    assert [b["kind"] for b in blocks] == ["task", "task", "break"]
+    assert blocks[2]["start"] == f"{MONDAY}T12:00:00"
+    assert blocks[2]["end"] == f"{MONDAY}T12:30:00"
+
+
+def test_travel_between_two_work_blocks_resets_the_break_counter(archive):
+    working_week()
+    studio = make_location("Studio", travel_minutes_from_home=15)
+    location_hours(studio, "09:00", "17:00")
+    task("t-home", "At home", est_minutes=70)
+    task("t-studio", "At studio", est_minutes=70, required_location_id=studio)
+
+    blocks = scheduling.plan(MONDAY)["blocks"]
+
+    # 70 + 70 = 140 minutes, over the threshold combined -- but a trip
+    # separates them, so neither run alone crosses it.
+    assert "break" not in [b["kind"] for b in blocks]
+
+
+def test_breaks_are_dropped_only_when_keeping_them_would_miss_a_deadline(archive):
+    # The only working hours there are -- four hours, on the only day either
+    # task's deadline allows.
+    db.save_working_hours([{"weekday": 0, "opens": "09:00", "closes": "13:00"}])
+    task("t-1", est_minutes=150, deadline=MONDAY)
+    task("t-2", est_minutes=90, deadline=MONDAY)
+
+    result = scheduling.plan(MONDAY)
+
+    # With the break t-1 earns kept, t-2's 90 minutes don't fit in what's left
+    # (60 of the remaining 90 minutes) -- so the break is dropped instead, and
+    # the day says so.
+    assert result["at_risk"] == []
+    assert result["breaks_dropped"] == [MONDAY]
+    assert "break" not in [b["kind"] for b in result["blocks"]]
+    blocks = placed(result)
+    assert blocks["t-1"]["end"] == blocks["t-2"]["start"] == f"{MONDAY}T11:30:00"
