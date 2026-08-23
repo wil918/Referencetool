@@ -1,10 +1,11 @@
 """The scheduler, and the helpers it stands on.
 
 Two layers live here. The first sits on top of the locations and commitments
-data in db.py -- travel_minutes, and daily capacity (free_intervals,
-available_minutes, inferred energy). The second is the scheduler proper:
-plan() turns tasks, deadlines, commitments and capacity into placed blocks
-and an at-risk list, and replan() commits that plan to scheduled_blocks.
+data in db.py -- travel_minutes, location opening hours, supported windows,
+and daily capacity (free_intervals, available_minutes, inferred energy). The
+second is the scheduler proper: plan() turns tasks, deadlines, commitments,
+locations and capacity into placed blocks and an at-risk list, and replan()
+commits that plan to scheduled_blocks.
 
 Every date this module takes or returns is a "YYYY-MM-DD" string, and every
 datetime is the naive local-wall-clock form commitments.start/end are stored
@@ -27,6 +28,27 @@ LOW_ENERGY = 2
 # anything tuned or learned: an obvious guess is one the user can correct.
 HIGH_ENERGY_COST = 4
 LATE_HOUR = 20
+
+# HOME IS NOT A ROW IN `locations`. It is the absence of one, so it is spelled
+# None -- and the same None does double duty as "this task doesn't care where
+# it happens". The two readings never collide because they appear in different
+# positions: a *context* of None means you are at home, an *item's* location of
+# None means the item doesn't move you, so the context carries through it.
+HOME = None
+
+# A commitment's support_level, from COMMITMENT_SUPPORT_LEVELS. 'priority' is
+# your timetabled session (a tutor whose attention you have first claim on),
+# 'ambient' is staff usually being around, NO_SUPPORT is everything else.
+PRIORITY = "priority"
+AMBIENT = "ambient"
+NO_SUPPORT = "none"
+
+# ...and a task's, from TASK_SUPPORT_LEVELS. A different vocabulary describing
+# a different thing -- what the WORK needs, not what the WINDOW offers -- which
+# is why the two are matched by _eligible_intervals rather than compared.
+NEEDS_SUPPORT = "needs"
+PREFERS_SUPPORT = "prefers"
+INDEPENDENT = "independent"
 
 
 def travel_minutes(from_location_id, to_location_id):
@@ -63,10 +85,114 @@ def travel_minutes(from_location_id, to_location_id):
     return from_minutes + to_minutes
 
 
+def leg_minutes(from_location_id, to_location_id):
+    """Minutes for one leg of a day's travel, where either end may be HOME.
+
+    travel_minutes() deliberately cannot express home: it reads a missing side
+    as "there is nothing to travel" and returns 0, which is right for a task
+    with no required location but wrong for the first and last leg of a day,
+    which really do start and end at home and really do cost the time recorded
+    in locations.travel_minutes_from_home.
+    """
+    if from_location_id == to_location_id:
+        return 0
+    if from_location_id is HOME:
+        return _minutes_from_home(to_location_id)
+    if to_location_id is HOME:
+        return _minutes_from_home(from_location_id)
+    return travel_minutes(from_location_id, to_location_id)
+
+
+def _minutes_from_home(location_id):
+    location = db.get_location(location_id) or {}
+    return location.get("travel_minutes_from_home") or 0
+
+
+def location_open_intervals(location_id, date_str):
+    """When `location_id` is open on `date_str`, as (start, end) datetimes.
+
+    A date override beats the weekly pattern: `closed` shuts the place for the
+    day outright, and an override naming only one side keeps the other from
+    the weekly row -- otherwise "the studio closes at 16:00 today" would have
+    to restate the opening time as well or be read as closed all day.
+
+    A location with no hours for that weekday and no override is shut, same
+    convention as a missing working_hours row (see free_intervals).
+    """
+    if not location_id:
+        return []
+    weekday = date.fromisoformat(date_str).weekday()
+    hours = next(
+        (h for h in db.get_location_hours(location_id) if h["weekday"] == weekday), None
+    )
+    opens = hours["opens"] if hours else None
+    closes = hours["closes"] if hours else None
+
+    # Sorted by id so two overrides recorded for one date resolve the same way
+    # on every run rather than in whatever order the query happened to return.
+    overrides = sorted(
+        (o for o in db.list_location_overrides(location_id) if o["date"] == date_str),
+        key=lambda o: o["id"],
+    )
+    if overrides:
+        override = overrides[0]
+        if override["closed"]:
+            return []
+        opens = override["opens"] or opens
+        closes = override["closes"] or closes
+
+    if not opens or not closes:
+        return []
+    start = datetime.fromisoformat(f"{date_str}T{opens}:00")
+    end = datetime.fromisoformat(f"{date_str}T{closes}:00")
+    return [(start, end)] if end > start else []
+
+
+def support_windows(date_str):
+    """The supported stretches of `date_str`: every commitment that offers a
+    tutor or staff, as {start, end, level, location_id} in time order.
+
+    These are the windows a task's own support_level is matched against, and
+    the reason a supported commitment is not subtracted from free time -- see
+    free_intervals.
+    """
+    windows = []
+    for commitment in _commitments_on(date_str):
+        if _offers_support(commitment):
+            windows.append({
+                "start": datetime.fromisoformat(commitment["start"]),
+                "end": datetime.fromisoformat(commitment["end"]),
+                "level": commitment["support_level"],
+                "location_id": commitment["location_id"],
+                "id": commitment["id"],
+            })
+    windows.sort(key=lambda w: (w["start"], w["end"], w["id"]))
+    return windows
+
+
+def _commitments_on(date_str):
+    following = (date.fromisoformat(date_str) + timedelta(days=1)).isoformat()
+    return db.list_commitments_between(f"{date_str}T00:00:00", f"{following}T00:00:00")
+
+
+def _offers_support(commitment):
+    """Whether this commitment is a window you can work inside.
+
+    A COMMITMENT BLOCKS THE DAY UNLESS IT OFFERS SUPPORT. A lecture, a shift or
+    a dentist appointment is time you cannot work in; a timetabled studio
+    session is time you spend working on your own project with a tutor to hand.
+    Subtracting the second along with the first would leave a 'needs' task
+    nowhere to go -- the only windows it is allowed in would be the ones the
+    day had already declared busy -- and would under-report every supported day
+    by the length of its own sessions.
+    """
+    return (commitment.get("support_level") or NO_SUPPORT) != NO_SUPPORT
+
+
 def free_intervals(date_str):
     """The stretches of `date_str` that are genuinely free for work: that
-    weekday's working-hours window with every commitment cut out of it, as a
-    list of (start, end) naive datetimes in order.
+    weekday's working-hours window with every blocking commitment cut out of
+    it, as a list of (start, end) naive datetimes in order.
 
     A commitment outside the window doesn't subtract anything -- it was never
     available time to begin with -- and one that only partially overlaps only
@@ -74,9 +200,15 @@ def free_intervals(date_str):
     off, by omission -- see WORKING_HOURS_SCHEMA) means no intervals at all,
     same as an empty window.
 
+    A commitment that offers support is not cut out at all (see
+    _offers_support): it is a window you work inside, not one that stops you.
+    It still cannot create availability the working hours don't grant, because
+    the cut only ever happens inside that window -- a Saturday studio session
+    with no working hours on a Saturday is still not workable time.
+
     Overlapping commitments are cut out as one span rather than one at a
-    time. A lunch inside a studio session is a single busy stretch, and
-    charging the day for both would under-report it.
+    time. A lunch inside a shift is a single busy stretch, and charging the
+    day for both would under-report it.
     """
     weekday = date.fromisoformat(date_str).weekday()
     hours = next((h for h in db.get_working_hours() if h["weekday"] == weekday), None)
@@ -90,6 +222,8 @@ def free_intervals(date_str):
 
     busy = []
     for commitment in db.list_commitments_between(window_start.isoformat(), window_end.isoformat()):
+        if _offers_support(commitment):
+            continue
         overlap_start = max(datetime.fromisoformat(commitment["start"]), window_start)
         overlap_end = min(datetime.fromisoformat(commitment["end"]), window_end)
         if overlap_end > overlap_start:
@@ -105,6 +239,67 @@ def free_intervals(date_str):
     if cursor < window_end:
         intervals.append((cursor, window_end))
     return intervals
+
+
+# --- Interval arithmetic ---------------------------------------------------------
+#
+# Every constraint in the walk narrows the same thing: a list of (start, end)
+# stretches, kept sorted and non-overlapping. Working hours minus commitments
+# gives the day; intersecting with the location's opening hours makes it a day
+# at the studio; intersecting again with a priority window makes it a day at
+# the studio with a tutor. Three functions do all of it.
+
+
+def _merge(spans):
+    """Overlapping or touching spans folded into one list of disjoint ones."""
+    merged = []
+    for start, end in sorted(spans):
+        if end <= start:
+            continue
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _intersect(left, right):
+    """The stretches covered by both lists. Both must be sorted and disjoint."""
+    result, i, j = [], 0, 0
+    while i < len(left) and j < len(right):
+        start = max(left[i][0], right[j][0])
+        end = min(left[i][1], right[j][1])
+        if end > start:
+            result.append((start, end))
+        if left[i][1] <= right[j][1]:
+            i += 1
+        else:
+            j += 1
+    return result
+
+
+def _subtract(intervals, spans):
+    """`intervals` with every span in `spans` cut out of it."""
+    remaining = list(intervals)
+    for cut_start, cut_end in _merge(spans):
+        next_remaining = []
+        for start, end in remaining:
+            if cut_end <= start or cut_start >= end:
+                next_remaining.append((start, end))
+                continue
+            if start < cut_start:
+                next_remaining.append((start, cut_start))
+            if cut_end < end:
+                next_remaining.append((cut_end, end))
+        remaining = next_remaining
+    return remaining
+
+
+def _contains(intervals, start, end):
+    """Whether one stretch sits wholly inside a single one of `intervals`."""
+    if end <= start:
+        return True
+    return any(i_start <= start and end <= i_end for i_start, i_end in intervals)
 
 
 def available_minutes(date_str):
@@ -184,11 +379,13 @@ def day_energy(date_str):
     return infer_energy(date_str)
 
 
+
+
 # --- The scheduler ------------------------------------------------------------
 #
-# plan() is PURE: it reads tasks, dependencies, deadlines, commitments, hours
-# and capacity, and returns a plan. It writes nothing. replan() is what
-# commits that plan to scheduled_blocks. The split is what makes the
+# plan() is PURE: it reads tasks, dependencies, deadlines, commitments, hours,
+# locations and capacity, and returns a plan. It writes nothing. replan() is
+# what commits that plan to scheduled_blocks. The split is what makes the
 # determinism requirement testable -- two plan() calls over unchanged data
 # return byte-identical dicts, block ids included -- and it keeps the promise
 # that the scheduler's only output is blocks: no task row is ever mutated
@@ -255,6 +452,21 @@ SLACK_HALF_LIFE_MINUTES = 7 * MINUTES_PER_DAY
 # tidying, not the sleeve heads.
 ENERGY_MAX_DIFFICULTY = {1: 1, 2: 3, 3: 5, 4: 5, 5: 5}
 
+# HOW CLOSE TWO SCORES HAVE TO BE to count as the same for the same-location
+# tie-break. Scores run 0-5 (urgency 0-1 x importance 1-5), so this is a
+# twentieth of the range: wide enough that two comparably pressing tasks are
+# actually grouped -- with exact equality the tie-break would almost never
+# fire, since scores are floats out of a decay curve -- and narrow enough that
+# a materially more urgent task is never displaced by a merely convenient one.
+COMPARABLE_SCORE_TOLERANCE = 0.25
+
+# HOW MUCH TIME BEFORE A DEADLINE IS RESERVED FOR FINISHING. A day, so the
+# deadline's own working hours are the protected window (deadlines are read as
+# the end of their day -- see _parse_moment). Overridable per plan() call
+# rather than stored, since nothing yet has a place to store a scheduler
+# setting; when one exists this is the default it should fall back to.
+FINISHING_BUFFER_MINUTES = 24 * 60
+
 # Why a task could not be placed before its deadline. Codes rather than prose
 # so a UI can style them; every at-risk entry carries a written message too.
 AT_RISK_OVERDUE = "overdue"
@@ -262,6 +474,9 @@ AT_RISK_BLOCKED = "blocked"
 AT_RISK_ENERGY = "energy"
 AT_RISK_TOO_LONG = "too_long"
 AT_RISK_NO_CAPACITY = "no_capacity"
+AT_RISK_LOCATION = "location"
+AT_RISK_NO_SUPPORT = "no_support"
+AT_RISK_FINISHING = "finishing"
 
 
 class DependencyCycleError(Exception):
@@ -279,7 +494,7 @@ class DependencyCycleError(Exception):
         super().__init__(f"dependency cycle: {' -> '.join(chain)}")
 
 
-def plan(now=None):
+def plan(now=None, finishing_buffer_minutes=None):
     """Work out where everything outstanding goes between now and the
     furthest deadline in play, and what cannot be reached at all.
 
@@ -289,10 +504,17 @@ def plan(now=None):
     Tests pass it explicitly, which is what makes the whole thing reproducible
     offline.
 
+    `finishing_buffer_minutes` overrides how much time before each deadline is
+    protected for finishing work (see FINISHING_BUFFER_MINUTES).
+
     Returns the plan; writes nothing. See replan() to commit it.
     """
     anchor = _anchor(now)
     today = anchor.date()
+    buffer_minutes = (
+        FINISHING_BUFFER_MINUTES if finishing_buffer_minutes is None
+        else max(int(finishing_buffer_minutes), 0)
+    )
 
     tasks = sorted(
         (t for t in db.list_tasks() if t["status"] in SCHEDULABLE_STATUSES),
@@ -306,7 +528,10 @@ def plan(now=None):
     deliverables = {d["id"]: d for d in db.get_deliverables_by_ids(deliverable_ids)}
 
     horizon_end = _horizon_end(today, tasks, deliverables)
-    days = _build_days(anchor, horizon_end)
+    required_locations = sorted({t["required_location_id"] for t in tasks
+                                 if t["required_location_id"]})
+    days = _build_days(anchor, horizon_end, required_locations)
+    legs = _leg_table(days, required_locations)
 
     minutes = {t["id"]: _est_minutes(t) for t in tasks}
     difficulty = {t["id"]: _level(t["difficulty"], DEFAULT_DIFFICULTY) for t in tasks}
@@ -321,10 +546,16 @@ def plan(now=None):
     # that genuinely rank the same never swap places between replans.
     ranked = sorted(tasks, key=lambda t: (-scores[t["id"]], t["id"]))
 
-    placements = _walk(days, ranked, deps, deadlines, minutes, difficulty)
-    at_risk = _at_risk(tasks, placements, deps, deadlines, minutes, difficulty, days,
-                       deliverables, anchor)
-    blocks = _blocks(placements)
+    protected = _protected_spans(tasks, deliverables, buffer_minutes)
+    meta = _task_meta(tasks, deliverables, minutes, difficulty, deadlines, scores, protected)
+    finishing = _finishing_plan(ranked, meta, days, protected, buffer_minutes)
+    for tid, info in meta.items():
+        info["held"] = tid in finishing["held"]
+
+    placements, travel = _walk(days, ranked, deps, meta, legs, protected)
+    at_risk = _at_risk(tasks, placements, deps, meta, days, deliverables, anchor,
+                       protected, finishing, legs)
+    blocks = _blocks(placements, travel)
 
     slot_days = [d for d in days if d["granularity"] == "slot"]
     return {
@@ -332,6 +563,7 @@ def plan(now=None):
         "today": today.isoformat(),
         "horizon_end": horizon_end.isoformat(),
         "slot_detail_until": slot_days[-1]["date"] if slot_days else today.isoformat(),
+        "finishing_buffer_minutes": buffer_minutes,
         "blocks": blocks,
         "at_risk": at_risk,
         "at_risk_by_deliverable": _at_risk_by_deliverable(at_risk, tasks, deliverables),
@@ -339,20 +571,28 @@ def plan(now=None):
             "tasks": len(tasks),
             "placed": len(placements),
             "at_risk": len(at_risk),
-            "planned_minutes": sum(b["minutes"] for b in blocks),
+            # TRAVEL IS NOT WORK, so it is counted separately and never added
+            # into a task's minutes. The estimator learns from what a task
+            # actually took; a duration padded with the trip to get there
+            # would teach it that pattern cutting takes an hour longer at the
+            # studio than at home. This total covers every leg the walk had to
+            # make room for, including the ones on day-granularity days that
+            # are too far out to be given a time of day (see _blocks).
+            "planned_minutes": sum(p["minutes"] for p in placements.values()),
+            "travel_minutes": sum(leg["minutes"] for leg in travel),
             "capacity_minutes": sum(d["capacity"] for d in days),
         },
     }
 
 
-def replan(now=None):
+def replan(now=None, finishing_buffer_minutes=None):
     """Run the scheduler and replace scheduled_blocks with its output.
 
     Wholesale, not a merge: the blocks table is the plan, and a plan that
     kept fragments of an older one would drift out of step with the tasks it
     claims to place. Task rows are untouched -- blocks are the only output.
     """
-    result = plan(now)
+    result = plan(now, finishing_buffer_minutes)
     db.replace_scheduled_blocks(result["blocks"])
     return result
 
@@ -634,13 +874,114 @@ def _score(task, deadline, critical, anchor, rate):
     return _urgency(slack) * _level(task.get("importance"), DEFAULT_IMPORTANCE)
 
 
+# --- What the walk needs to know about each task ---------------------------------
+
+
+def _task_meta(tasks, deliverables, minutes, difficulty, deadlines, scores, protected):
+    """Everything the walk asks of a task, gathered once.
+
+    A bundle rather than eight parallel dicts threaded through every helper:
+    location, support, finishing and the protected window it belongs to are
+    all consulted together at each placement, and passing them separately made
+    the signatures longer than the bodies.
+    """
+    meta = {}
+    for task in tasks:
+        own = _own_deadline(task, deliverables)
+        finishing = bool(task.get("is_finishing"))
+        meta[task["id"]] = {
+            "minutes": minutes[task["id"]],
+            "difficulty": difficulty[task["id"]],
+            "deadline": deadlines[task["id"]],
+            "score": scores[task["id"]],
+            "location": task.get("required_location_id") or None,
+            "support": task.get("support_level") or INDEPENDENT,
+            "finishing": finishing,
+            # Only a REAL deadline earns a protected window. An undated task
+            # is treated as due at the end of the horizon for scoring, but
+            # protecting time before a date nobody set would reserve the far
+            # end of the horizon against work that has nowhere else to go.
+            "buffer": _span_containing(protected, own) if finishing else None,
+            "held": False,
+        }
+    return meta
+
+
+def _protected_spans(tasks, deliverables, buffer_minutes):
+    """The finishing time reserved before each deadline that has finishing
+    work waiting on it.
+
+    ONLY A DEADLINE WITH FINISHING WORK EARNS A PROTECTED WINDOW. The window
+    exists to stop finishing work being squeezed; where nothing is flagged
+    is_finishing there is nothing to squeeze, and reserving the hours anyway
+    would idle the day before every deadline in the system against work that
+    does not exist. The flag is the input, and this is what it buys.
+
+    Merged, so two deliverables due the same week produce one protected
+    stretch rather than two overlapping ones that would each be measured
+    separately and between them reserve the same hours twice.
+    """
+    if buffer_minutes <= 0:
+        return []
+    spans = []
+    for task in tasks:
+        if not task.get("is_finishing"):
+            continue
+        moment = _own_deadline(task, deliverables)
+        if moment:
+            spans.append((moment - timedelta(minutes=buffer_minutes), moment))
+    return _merge(spans)
+
+
+def _span_containing(spans, moment):
+    if moment is None:
+        return None
+    return next((s for s in spans if s[0] <= moment <= s[1]), None)
+
+
+def _finishing_plan(ranked, meta, days, protected, buffer_minutes):
+    """Which finishing tasks the walk holds back for their protected window.
+
+    A PROTECTED WINDOW IS ONLY WORTH ANYTHING IF IT GETS USED. The walk is
+    greedy and forward-only: it places a finishing task the first moment it
+    fits, which is days before the window reserved for it, leaving that window
+    empty and the protection pointless. Holding the task back for it is what
+    "if the buffer is empty and finishing tasks exist elsewhere, pull them in"
+    amounts to in a walk that never revisits its own output.
+
+    Held greedily in score order against the window's real free time, so when
+    finishing work overflows the window the most pressing of it gets the
+    protected hours and the rest competes for ordinary time like anything
+    else -- and says so on the at-risk list if it cannot find any.
+    """
+    capacity = {}
+    for span in protected:
+        capacity[span] = sum(
+            _interval_minutes(start, end)
+            for day in days
+            for start, end in _intersect(day["intervals"], [span])
+        )
+    used = {span: 0 for span in protected}
+    held = set()
+    for task in ranked:
+        info = meta[task["id"]]
+        span = info["buffer"]
+        if not info["finishing"] or span is None:
+            continue
+        if used[span] + info["minutes"] <= capacity[span]:
+            used[span] += info["minutes"]
+            held.add(task["id"])
+    return {"held": held, "capacity": capacity, "buffer_minutes": buffer_minutes}
+
+
 # --- The day walk --------------------------------------------------------------
 
 
-def _build_days(anchor, horizon_end):
+def _build_days(anchor, horizon_end, location_ids):
     """One record per day from the anchor to the horizon: what is free on it,
-    what energy it is expected to carry, and whether it is close enough to be
-    planned to the slot.
+    what energy it is expected to carry, when the locations the work needs are
+    open, which of its windows come with support, and whether it is close
+    enough to be planned to the slot.
 
     Today is clipped to the anchor. Planning work into hours that have already
     passed is the fastest way to make a schedule look like it isn't paying
@@ -663,9 +1004,28 @@ def _build_days(anchor, horizon_end):
             "capacity": sum(_interval_minutes(s, e) for s, e in intervals),
             "longest_interval": longest,
             "intervals": intervals,
+            "location_open": {
+                location_id: location_open_intervals(location_id, date_str)
+                for location_id in location_ids
+            },
+            "support": support_windows(date_str),
         })
         current += timedelta(days=1)
     return days
+
+
+def _leg_table(days, location_ids):
+    """Every home-to-place and place-to-place travel time the walk can need,
+    priced once. The walk asks for a leg on every candidate placement it tries
+    and most of them are rejected, so pricing them on demand would be dozens
+    of queries per placed task."""
+    places = set(location_ids)
+    for day in days:
+        for window in day["support"]:
+            if window["location_id"]:
+                places.add(window["location_id"])
+    ends = [HOME] + sorted(places)
+    return {(a, b): leg_minutes(a, b) for a in ends for b in ends}
 
 
 def admissible_difficulty(energy):
@@ -676,41 +1036,212 @@ def admissible_difficulty(energy):
     return ENERGY_MAX_DIFFICULTY[max(1, min(5, int(energy)))]
 
 
-def _first_fit(intervals, minutes, not_before):
-    """(index, start) of the first free stretch that can hold `minutes` at or
-    after `not_before`, or None. First fit, not best fit: the point is to
-    start work as early as the day allows, and a best-fit search would leave
-    the morning empty to pack an afternoon gap more neatly."""
-    needed = timedelta(minutes=minutes)
-    for index, (start, end) in enumerate(intervals):
-        begin = max(start, not_before)
-        if end - begin >= needed:
-            return index, begin
+def _eligible_intervals(day, info, protected):
+    """The stretches of `day` this task is allowed in, as (intervals, location)
+    tiers in the order they should be tried.
+
+    Four constraints narrow the day's free time, and they are different kinds
+    of thing:
+
+    REQUIRED LOCATION is hard and has nothing to do with travel cost. Pattern
+    cutting cannot happen at home at 22:00 because the studio is shut, not
+    because the studio is far away, so the day is intersected with the
+    location's opening hours (overrides included) before anything else.
+
+    SUPPORT is a match between two vocabularies, not a comparison. A task says
+    what it needs of the people around it; a window says what it offers. So
+    'needs' yields one tier per priority window, 'prefers' yields the priority
+    windows first and then the ambient ones -- the order is the preference --
+    and 'independent' yields the whole day as a single tier. A tier carries
+    the window's location because a task placed in a supported window is where
+    that support is, which is what makes the trip to it real.
+
+    PROTECTED FINISHING TIME is subtracted from everything that isn't finishing
+    work, however late that work is running. Being behind is exactly when the
+    buffer would get taken, and that is exactly how finishing work gets
+    squeezed out -- so this is a hard cut, not a preference.
+    """
+    base = day["intervals"]
+    if info["location"]:
+        base = _intersect(base, day["location_open"].get(info["location"], []))
+    if info["finishing"]:
+        if info["held"] and info["buffer"]:
+            base = _intersect(base, [info["buffer"]])
+    else:
+        base = _subtract(base, protected)
+    if not base:
+        return []
+
+    if info["support"] == INDEPENDENT:
+        return [(base, None)]
+
+    levels = (PRIORITY, AMBIENT) if info["support"] == PREFERS_SUPPORT else (PRIORITY,)
+    tiers = []
+    for level in levels:
+        for location_id, spans in _windows_by_location(day, level):
+            # A supported window somewhere else is no use to work that has to
+            # happen at the studio; a window with no location recorded is
+            # taken to be wherever the task already needs to be.
+            if info["location"] and location_id and location_id != info["location"]:
+                continue
+            tier = _intersect(base, spans)
+            if tier:
+                tiers.append((tier, location_id))
+    return tiers
+
+
+def _windows_by_location(day, level):
+    """This day's support windows at one level, grouped and merged per
+    location so two back-to-back sessions in the same room read as one
+    stretch rather than two a task cannot span."""
+    grouped = {}
+    for window in day["support"]:
+        if window["level"] != level:
+            continue
+        grouped.setdefault(window["location_id"], []).append((window["start"], window["end"]))
+    merged = [(location_id, _merge(spans)) for location_id, spans in grouped.items()]
+    merged.sort(key=lambda entry: (entry[1][0][0], entry[0] or ""))
+    return merged
+
+
+def _context_before(items, moment):
+    """Where you are at `moment`, given what is already placed on the day.
+
+    An item with no location doesn't move you -- writing up notes happens
+    wherever you already are -- so the context reads through it to the last
+    placement that actually names a place, and home when there is none.
+    """
+    for item in reversed(items):
+        if item["finish"] <= moment and item["location"] is not None:
+            return item["location"]
+    return HOME
+
+
+def _day_layout(free, items, legs):
+    """The travel the day's placements imply, or None if it doesn't fit.
+
+    Derived from the placements rather than tracked alongside them, and
+    rederived from scratch each time one is added, so travel can never fall
+    out of step with the work it connects: inserting a task between two others
+    replaces the leg that used to join them instead of leaving it stranded.
+
+    Each leg sits immediately before the placement it delivers you to, and the
+    day closes with the leg home from wherever you ended up. THE FIRST LEG OF
+    A DAY COMES FROM HOME AND THE LAST RETURNS TO IT. Both have to fit inside
+    the day's genuinely free time -- travel consumes capacity like anything
+    else, which is the whole point of making it visible.
+    """
+    legs_out = []
+    context = HOME
+    previous_finish = None
+    for item in items:
+        minutes = 0 if item["location"] is None else legs[(context, item["location"])]
+        if minutes:
+            start = item["start"] - timedelta(minutes=minutes)
+            if previous_finish is not None and start < previous_finish:
+                return None
+            if not _contains(free, start, item["start"]):
+                return None
+            legs_out.append(_leg(item["task_id"], start, item["start"],
+                                 context, item["location"], minutes))
+        if item["location"] is not None:
+            context = item["location"]
+        previous_finish = item["finish"]
+
+    if context is not HOME:
+        minutes = legs[(context, HOME)]
+        if minutes:
+            end = previous_finish + timedelta(minutes=minutes)
+            if not _contains(free, previous_finish, end):
+                return None
+            legs_out.append(_leg(items[-1]["task_id"], previous_finish, end,
+                                 context, HOME, minutes))
+    return legs_out
+
+
+def _leg(task_id, start, end, from_location_id, to_location_id, minutes):
+    return {
+        "task_id": task_id,
+        "start": start,
+        "end": end,
+        "from_location_id": from_location_id,
+        "to_location_id": to_location_id,
+        "minutes": minutes,
+    }
+
+
+def _try_place(day, items, info, task_id, not_before, legs, protected):
+    """Where this task could go on this day, travel included, or None.
+
+    First fit, not best fit, same as before: the point is to start work as
+    early as the day allows, and a best-fit search would leave the morning
+    empty to pack an afternoon gap more neatly. What is new is that a fit has
+    to survive the whole day being laid out again with the new placement in
+    it -- the trip to get there has to fit in front of it, and the trip home
+    or on to the next thing has to fit after.
+    """
+    by_day = day["granularity"] == "day"
+    deadline = info["deadline"]
+    if date.fromisoformat(day["date"]) > deadline.date():
+        return None
+
+    duration = timedelta(minutes=info["minutes"])
+    occupied = [(item["start"], item["finish"]) for item in items]
+
+    for tier, tier_location in _eligible_intervals(day, info, protected):
+        location = info["location"] or tier_location
+        for stretch_start, stretch_end in _subtract(tier, occupied):
+            travel_in = 0 if location is None else legs[
+                (_context_before(items, stretch_start), location)
+            ]
+            # Two candidate starts: as early as the stretch allows, and far
+            # enough in to hold the trip there. The first is usually right --
+            # the trip fits in free time before the stretch begins, because a
+            # location's opening hours or a tutor's session start later than
+            # the working day does -- and the second is the fallback for a
+            # stretch that starts where the free time itself does.
+            starts = [max(stretch_start, not_before),
+                      max(stretch_start + timedelta(minutes=travel_in), not_before)]
+            for begin in dict.fromkeys(starts):
+                finish = begin + duration
+                if finish > stretch_end:
+                    continue
+                if not by_day and finish > deadline:
+                    continue
+                candidate = {"task_id": task_id, "start": begin, "finish": finish,
+                             "location": location}
+                merged = sorted(items + [candidate],
+                                key=lambda item: (item["start"], item["task_id"]))
+                day_legs = _day_layout(day["intervals"], merged, legs)
+                if day_legs is None:
+                    continue
+                return {"start": begin, "finish": finish, "location": location,
+                        "items": merged, "legs": day_legs}
     return None
 
 
-def _consume(intervals, index, start, minutes):
-    """Take `minutes` out of one free stretch from `start`, leaving whatever
-    is still free either side of it."""
-    stretch_start, stretch_end = intervals[index]
-    finish = start + timedelta(minutes=minutes)
-    remainder = []
-    if start > stretch_start:
-        remainder.append((stretch_start, start))
-    if finish < stretch_end:
-        remainder.append((finish, stretch_end))
-    intervals[index:index + 1] = remainder
-    return finish
-
-
-def _walk(days, ranked, deps, deadlines, minutes, difficulty):
+def _walk(days, ranked, deps, meta, legs, protected):
     """Walk the days forward, filling each with the best work it can take.
 
     For every day: what is free on it is already known, so the eligible set is
-    whatever is still unplaced, whose difficulty the day's energy admits, and
-    whose dependencies are all finished by the time the new block would start.
-    The highest-scoring eligible task takes the first slot that fits, and the
-    day is offered round again until nothing else can be squeezed in.
+    whatever is still unplaced, whose difficulty the day's energy admits,
+    whose dependencies are all finished by the time the new block would start,
+    and which has somewhere on the day it is allowed to sit -- a location open
+    with the support it needs, outside anyone's protected finishing time (see
+    _eligible_intervals). The day is offered round again until nothing else
+    can be squeezed in.
+
+    AMONG ELIGIBLE TASKS OF COMPARABLE SCORE, THE ONE THAT MOVES YOU LEAST
+    WINS. A strictly greedy urgency-first walk will send you studio -> shop ->
+    studio in a day and split two fabric-shop errands across two days when one
+    trip would do, which is the kind of output that makes a scheduler stop
+    being believed. So the choice is made over everything within
+    COMPARABLE_SCORE_TOLERANCE of the best placeable score, and the winner is
+    whichever adds the least travel to the day -- a task at the location you
+    are already at adds none -- with rank breaking the tie after that. Only
+    tasks not yet placed are considered: nothing already placed is ever pulled
+    forward to join a trip, because that would need the walk to reconsider its
+    own output.
 
     A task is never split across days. It is one block or it is at risk --
     which is what makes "this doesn't fit anywhere" a thing the plan can say
@@ -726,18 +1257,25 @@ def _walk(days, ranked, deps, deadlines, minutes, difficulty):
     """
     placements = {}
     completion = {}
+    travel = []
     for day in days:
-        day_date = date.fromisoformat(day["date"])
         floor, ceiling = _day_floor(day["date"]), _day_ceiling(day["date"])
         by_day = day["granularity"] == "day"
-        intervals = day["intervals"]
+        items, day_legs = [], []
         while True:
-            placed = False
-            for task in ranked:
+            candidates = []
+            best_score = None
+            for rank, task in enumerate(ranked):  # score order, ties by id
                 tid = task["id"]
                 if tid in placements:
                     continue
-                if difficulty[tid] > day["max_difficulty"]:
+                info = meta[tid]
+                # ranked is score-descending, so once something placeable has
+                # been found, anything scoring materially below it can no
+                # longer win the tie-break and nor can anything after it.
+                if best_score is not None and best_score - info["score"] > COMPARABLE_SCORE_TOLERANCE:
+                    break
+                if info["difficulty"] > day["max_difficulty"]:
                     continue
                 if any(dep not in completion for dep in deps[tid]):
                     continue
@@ -747,31 +1285,38 @@ def _walk(days, ranked, deps, deadlines, minutes, difficulty):
                     continue  # the day IS the block, so its dependencies had to end before it
                 not_before = floor if by_day else last_dependency
 
-                fit = _first_fit(intervals, minutes[tid], not_before)
-                if fit is None:
+                attempt = _try_place(day, items, info, tid, not_before, legs, protected)
+                if attempt is None:
                     continue
-                index, start = fit
-                finish = start + timedelta(minutes=minutes[tid])
-                if day_date > deadlines[tid].date() or (not by_day and finish > deadlines[tid]):
-                    continue
+                if best_score is None:
+                    best_score = info["score"]
+                candidates.append((rank, tid, attempt))
 
-                _consume(intervals, index, start, minutes[tid])
-                placements[tid] = {
-                    "date": day["date"],
-                    "granularity": day["granularity"],
-                    "start": day["date"] if by_day else start.isoformat(),
-                    "end": day["date"] if by_day else finish.isoformat(),
-                    "minutes": minutes[tid],
-                }
-                completion[tid] = ceiling if by_day else finish
-                placed = True
+            if not candidates:
                 break
-            if not placed:
-                break
-    return placements
+            travelled = sum(leg["minutes"] for leg in day_legs)
+            rank, tid, attempt = min(
+                candidates,
+                key=lambda c: (sum(leg["minutes"] for leg in c[2]["legs"]) - travelled, c[0]),
+            )
+            items, day_legs = attempt["items"], attempt["legs"]
+            placements[tid] = {
+                "date": day["date"],
+                "granularity": day["granularity"],
+                "start": day["date"] if by_day else attempt["start"].isoformat(),
+                "end": day["date"] if by_day else attempt["finish"].isoformat(),
+                "minutes": meta[tid]["minutes"],
+                "location_id": attempt["location"],
+            }
+            completion[tid] = ceiling if by_day else attempt["finish"]
+        for leg in day_legs:
+            leg["granularity"] = day["granularity"]
+            leg["date"] = day["date"]
+        travel.extend(day_legs)
+    return placements, travel
 
 
-def _blocks(placements):
+def _blocks(placements, travel):
     """The plan's blocks, in the order they happen.
 
     A day-granularity block carries the date alone in start and end, with no
@@ -779,9 +1324,18 @@ def _blocks(placements):
     when". It sorts correctly against timed blocks either way, since
     "2026-03-15" precedes "2026-03-15T09:00:00" as a string, and it is what
     a caller tests to tell the two apart (see block_granularity).
+
+    TRAVEL IS EMITTED ONLY WHERE THERE IS A TIME OF DAY TO EMIT IT AT. On the
+    near days a leg is a real row with a real start and end, visible in the
+    calendar, so a day that is full because of three trips looks full and says
+    why. Further out, where the task itself only claims a date, its legs were
+    still made room for -- the walk laid them out and they consumed the day's
+    capacity, and the summary counts their minutes -- but writing them as rows
+    would put two legs on one date with nothing to order or distinguish them,
+    which claims a precision the day allocation itself refuses to.
     """
     rows = []
-    for tid, placement in sorted(placements.items(), key=lambda kv: (kv[1]["start"], kv[0])):
+    for tid, placement in placements.items():
         rows.append({
             "id": _block_id(tid, placement["start"], placement["end"]),
             "task_id": tid,
@@ -791,17 +1345,42 @@ def _blocks(placements):
             "is_locked": False,
             "granularity": placement["granularity"],
             "minutes": placement["minutes"],
+            "location_id": placement["location_id"],
         })
+    for leg in travel:
+        if leg["granularity"] != "slot":
+            continue
+        start, end = leg["start"].isoformat(), leg["end"].isoformat()
+        rows.append({
+            "id": _block_id(leg["task_id"], start, end, kind="travel"),
+            "task_id": leg["task_id"],
+            "start": start,
+            "end": end,
+            "kind": "travel",
+            "is_locked": False,
+            "granularity": "slot",
+            "minutes": leg["minutes"],
+            "from_location_id": leg["from_location_id"],
+            "to_location_id": leg["to_location_id"],
+        })
+    rows.sort(key=lambda b: (b["start"], b["kind"], b["task_id"]))
     return rows
 
 
-def _block_id(task_id, start, end):
+def _block_id(task_id, start, end, kind="task"):
     """Derived from what the block is, not drawn from uuid4. Two runs over
     unchanged data have to produce byte-identical output, and it means a
     placement that did not move keeps its id across replans -- so what changed
-    between two plans is something a caller can actually see."""
-    material = f"{task_id}|{start}|{end}".encode("utf-8")
-    return hashlib.blake2b(material, digest_size=16).hexdigest()
+    between two plans is something a caller can actually see.
+
+    Only a non-task kind is named in the material, so a task block's id is the
+    same value it was before travel blocks existed and an unmoved block keeps
+    its id across the change.
+    """
+    material = f"{task_id}|{start}|{end}"
+    if kind != "task":
+        material = f"{kind}|{material}"
+    return hashlib.blake2b(material.encode("utf-8"), digest_size=16).hexdigest()
 
 
 def block_granularity(block):
@@ -814,8 +1393,8 @@ def block_granularity(block):
 # --- At risk --------------------------------------------------------------------
 
 
-def _at_risk(tasks, placements, deps, deadlines, minutes, difficulty, days, deliverables,
-             anchor):
+def _at_risk(tasks, placements, deps, meta, days, deliverables, anchor, protected, finishing,
+             legs):
     """Everything that could not be placed before its deadline, and why.
 
     THIS IS THE POINT. A plan that quietly drops what it cannot fit is worse
@@ -824,18 +1403,50 @@ def _at_risk(tasks, placements, deps, deadlines, minutes, difficulty, days, deli
     first-class return value, one entry per task, each with a reason a person
     can act on -- and the reasons are checked in a fixed order, most
     fundamental first, so the same failure always reports the same cause.
+
+    "No priority window before the deadline" and "no time before the deadline"
+    are deliberately different answers. The first is fixed by asking for a
+    session; the second by moving a deadline or dropping something. Reporting
+    both as "it didn't fit" would hide which.
     """
     entries = []
     for task in tasks:  # id-sorted, so the list is stable run to run
         tid = task["id"]
         if tid in placements:
             continue
-        deadline = deadlines[tid]
+        info = meta[tid]
+        deadline = info["deadline"]
         window = [d for d in days if date.fromisoformat(d["date"]) <= deadline.date()]
         workable = [d for d in window if d["capacity"] > 0]
-        admitting = [d for d in workable if difficulty[tid] <= d["max_difficulty"]]
+        admitting = [d for d in workable if info["difficulty"] <= d["max_difficulty"]]
         blocked_by = [dep for dep in deps[tid] if dep not in placements]
-        longest = max((d["longest_interval"] for d in admitting), default=0)
+
+        open_days = [
+            d for d in admitting
+            if _intersect(d["intervals"], d["location_open"].get(info["location"], []))
+        ]
+        supported = [d for d in admitting if _supports(d, info)]
+        # The stretches this task could genuinely have used, every constraint
+        # applied -- so "needs longer in one sitting than it can get" is
+        # measured against the windows it was allowed in, not against a free
+        # afternoon it was never eligible for.
+        eligible = [
+            span
+            for d in admitting
+            for tier, _location in _eligible_intervals(d, info, protected)
+            for span in tier
+        ]
+        longest = max((_interval_minutes(s, e) for s, e in eligible), default=0)
+        # The cheapest trip that could ever include this task: out from home
+        # and back again. Work at a location cannot have the whole stretch,
+        # and a day that looks long enough until the travel is paid for should
+        # say so rather than fall through to "everything was already full".
+        # A lower bound, since a task sharing a trip with another at the same
+        # location pays less -- but this is only ever reached for a task that
+        # already failed to be placed, so it picks the wording, not the verdict.
+        round_trip = 0
+        if info["location"]:
+            round_trip = legs[(HOME, info["location"])] + legs[(info["location"], HOME)]
 
         if deadline < anchor:
             reason = AT_RISK_OVERDUE
@@ -850,13 +1461,33 @@ def _at_risk(tasks, placements, deps, deadlines, minutes, difficulty, days, deli
         elif not admitting:
             reason = AT_RISK_ENERGY
             message = (
-                f"no day before its deadline has the energy for difficulty {difficulty[tid]}"
+                f"no day before its deadline has the energy for difficulty {info['difficulty']}"
             )
-        elif minutes[tid] > longest:
-            reason = AT_RISK_TOO_LONG
+        elif info["location"] and not open_days:
+            reason = AT_RISK_LOCATION
             message = (
-                f"needs {_hours(minutes[tid])} in one sitting; the longest free stretch on "
-                f"any usable day before its deadline is {_hours(longest)}"
+                f"{_location_name(info['location'])} is not open during any working hours "
+                "before its deadline"
+            )
+        elif info["support"] != INDEPENDENT and not supported:
+            reason = AT_RISK_NO_SUPPORT
+            message = (
+                f"it needs a {_support_wanted(info['support'])} session and there is none "
+                "before its deadline"
+            )
+        elif info["finishing"] and info["buffer"]:
+            reason = AT_RISK_FINISHING
+            message = _finishing_message(tid, info, finishing)
+        elif info["minutes"] + round_trip > longest:
+            reason = AT_RISK_TOO_LONG
+            needed = _hours(info["minutes"])
+            if round_trip:
+                needed = f"{needed} in one sitting plus {_hours(round_trip)} getting there and back"
+            else:
+                needed = f"{needed} in one sitting"
+            message = (
+                f"needs {needed}; the longest stretch it is allowed in before its deadline "
+                f"is {_hours(longest)}"
             )
         else:
             reason = AT_RISK_NO_CAPACITY
@@ -868,11 +1499,14 @@ def _at_risk(tasks, placements, deps, deadlines, minutes, difficulty, days, deli
             "title": task["title"],
             "reason": reason,
             "message": message,
-            "est_minutes": minutes[tid],
-            "difficulty": difficulty[tid],
+            "est_minutes": info["minutes"],
+            "difficulty": info["difficulty"],
             "importance": _level(task.get("importance"), DEFAULT_IMPORTANCE),
             "deadline": task.get("deadline"),
             "effective_deadline": deadline.isoformat(),
+            "required_location_id": info["location"],
+            "support_level": info["support"],
+            "is_finishing": info["finishing"],
             "project_id": task.get("project_id"),
             "deliverable_id": task.get("deliverable_id"),
             "deliverable_title": deliverable["title"] if deliverable else None,
@@ -882,6 +1516,48 @@ def _at_risk(tasks, placements, deps, deadlines, minutes, difficulty, days, deli
     # id, so the list itself stays stable run to run.
     entries.sort(key=lambda e: (e["effective_deadline"], e["task_id"]))
     return entries
+
+
+def _supports(day, info):
+    """Whether this day has a window offering what the task's support level
+    asks for -- matched against the vocabulary of windows, not compared with
+    it, and only counting the part of a window that is free to work in."""
+    levels = (PRIORITY, AMBIENT) if info["support"] == PREFERS_SUPPORT else (PRIORITY,)
+    for window in day["support"]:
+        if window["level"] not in levels:
+            continue
+        if info["location"] and window["location_id"] and window["location_id"] != info["location"]:
+            continue
+        if _intersect(day["intervals"], [(window["start"], window["end"])]):
+            return True
+    return False
+
+
+def _support_wanted(support_level):
+    return "supported (priority or ambient)" if support_level == PREFERS_SUPPORT else "priority"
+
+
+def _finishing_message(task_id, info, finishing):
+    """Why the protected finishing window could not take this task.
+
+    Two different failures, and the fix differs: the window is full of other
+    finishing work, or the window is not long enough for this task at all.
+    """
+    available = finishing["capacity"].get(info["buffer"], 0)
+    if task_id in finishing["held"]:
+        return (
+            f"the {_hours(available)} of protected finishing time before its deadline "
+            "could not take it"
+        )
+    return (
+        f"the finishing work due then needs more than the {_hours(available)} protected "
+        "before the deadline"
+    )
+
+
+def _location_name(location_id):
+    location = db.get_location(location_id) or {}
+    return location.get("name") or location_id
 
 
 def _at_risk_by_deliverable(at_risk, tasks, deliverables):

@@ -224,8 +224,12 @@ def task(task_id, title=None, **fields):
 
 
 def placed(result):
-    """Blocks by task id -- what the plan actually committed to."""
-    return {b["task_id"]: b for b in result["blocks"]}
+    """Task blocks by task id -- what the plan actually committed to.
+
+    Travel blocks carry the task id of the leg's destination, so they have to
+    be filtered out here or a task's trip home would overwrite the task.
+    """
+    return {b["task_id"]: b for b in result["blocks"] if b["kind"] == "task"}
 
 
 def risk(result):
@@ -724,3 +728,431 @@ def test_the_at_risk_list_reads_soonest_deadline_first(archive):
     result = scheduling.plan(MONDAY)
 
     assert [e["task_id"] for e in result["at_risk"]] == ["t-z-soon", "t-a-later"]
+
+
+# --- Required location ------------------------------------------------------------
+#
+# A hard constraint, and a different thing from travel cost: pattern cutting
+# cannot happen at home at 22:00 because the studio is shut, not because it is
+# far away. Travel is priced separately, further down.
+
+
+def location_hours(location_id, opens="10:00", closes="18:00", weekdays=range(7)):
+    db.save_location_hours(
+        location_id, [{"weekday": w, "opens": opens, "closes": closes} for w in weekdays]
+    )
+
+
+def test_a_studio_task_is_never_placed_outside_studio_hours(archive):
+    # A working day running long past the studio's, so a scheduler that only
+    # looked at working hours would start this at 08:00 and finish it at 22:00.
+    db.save_working_hours([{"weekday": 0, "opens": "08:00", "closes": "23:00"}])
+    studio = make_location("Studio")
+    location_hours(studio, "10:00", "13:00")
+    task("t-cut", "Pattern cutting", est_minutes=120, required_location_id=studio,
+         deadline=MONDAY)
+
+    block = placed(scheduling.plan(MONDAY))["t-cut"]
+
+    assert block["start"] == f"{MONDAY}T10:00:00"
+    assert block["end"] == f"{MONDAY}T12:00:00"
+
+
+def test_an_override_closing_the_studio_early_moves_the_work(archive):
+    working_week(closes="18:00")
+    studio = make_location("Studio")
+    location_hours(studio, "10:00", "18:00")
+    db.create_location_override("o-early", studio, MONDAY, closes="12:00")
+    task("t-cut", "Pattern cutting", est_minutes=180, required_location_id=studio)
+
+    block = placed(scheduling.plan(MONDAY))["t-cut"]
+
+    # Monday's two remaining hours cannot hold three hours of work.
+    assert block["start"] == f"{TUESDAY}T10:00:00"
+
+
+def test_a_location_override_closes_the_day_outright(archive):
+    studio = make_location("Studio")
+    location_hours(studio, "10:00", "18:00")
+    db.create_location_override("o-shut", studio, MONDAY, closed=True)
+
+    assert scheduling.location_open_intervals(studio, MONDAY) == []
+
+
+def test_an_override_naming_only_a_closing_time_keeps_the_weekly_opening(archive):
+    studio = make_location("Studio")
+    location_hours(studio, "10:00", "18:00")
+    db.create_location_override("o-early", studio, MONDAY, closes="12:00")
+
+    assert scheduling.location_open_intervals(studio, MONDAY) == [
+        (datetime.fromisoformat(f"{MONDAY}T10:00:00"),
+         datetime.fromisoformat(f"{MONDAY}T12:00:00"))
+    ]
+
+
+def test_a_task_with_no_required_location_is_not_bound_by_any_location_hours(archive):
+    working_week(closes="18:00")
+    studio = make_location("Studio")
+    location_hours(studio, "14:00", "16:00")
+    task("t-notes", "Write up notes", est_minutes=60)
+
+    assert placed(scheduling.plan(MONDAY))["t-notes"]["start"] == f"{MONDAY}T09:00:00"
+
+
+def test_a_task_is_at_risk_when_its_location_never_opens_before_the_deadline(archive):
+    working_week()  # Monday to Friday
+    shop = make_location("Fabric Shop")
+    location_hours(shop, "10:00", "16:00", weekdays=(5, 6))  # weekends only
+    task("t-buy", "Buy calico", est_minutes=60, required_location_id=shop, deadline=WEDNESDAY)
+
+    entry = risk(scheduling.plan(MONDAY))["t-buy"]
+
+    assert entry["reason"] == scheduling.AT_RISK_LOCATION
+    assert "Fabric Shop" in entry["message"]
+
+
+# --- Support matching -------------------------------------------------------------
+#
+# A window says what it OFFERS, a task says what it NEEDS, and the two are
+# different vocabularies -- so these are matched, never compared.
+
+
+def commitment(commitment_id, start, end, support_level="none", location_id=None):
+    db.create_commitment(
+        commitment_id, commitment_id, f"{MONDAY}T{start}:00", f"{MONDAY}T{end}:00",
+        support_level=support_level, location_id=location_id,
+    )
+
+
+def test_a_supported_commitment_is_time_you_work_in_not_time_that_blocks_you(archive):
+    set_working_hours(0)  # Monday, 09:00-18:00
+    commitment("c-studio", "10:00", "13:00", support_level="priority")
+    commitment("c-lecture", "14:00", "15:00")
+
+    # Only the lecture is subtracted. A timetabled studio session does not
+    # create availability, but nor does it consume it -- it is where the work
+    # happens, and cutting it out would leave a 'needs' task nowhere to go.
+    assert scheduling.available_minutes(MONDAY) == 9 * 60 - 60
+
+
+def test_a_needs_task_refuses_an_ambient_window(archive):
+    working_week()
+    commitment("c-ambient", "09:00", "13:00", support_level="ambient")
+    task("t-welt", "First welt pocket", est_minutes=120, support_level="needs",
+         deadline=MONDAY)
+
+    result = scheduling.plan(MONDAY)
+
+    assert result["blocks"] == []
+    entry = risk(result)["t-welt"]
+    assert entry["reason"] == scheduling.AT_RISK_NO_SUPPORT
+    assert "priority" in entry["message"]
+
+
+def test_a_needs_task_takes_the_priority_window_and_nothing_else(archive):
+    working_week()
+    commitment("c-ambient", "09:00", "11:00", support_level="ambient")
+    commitment("c-tutorial", "13:00", "15:00", support_level="priority")
+    task("t-welt", "First welt pocket", est_minutes=120, support_level="needs",
+         deadline=MONDAY)
+
+    assert placed(scheduling.plan(MONDAY))["t-welt"]["start"] == f"{MONDAY}T13:00:00"
+
+
+def test_a_prefers_task_takes_a_priority_window_over_an_earlier_ambient_one(archive):
+    working_week()
+    commitment("c-ambient", "09:00", "11:00", support_level="ambient")
+    commitment("c-tutorial", "13:00", "15:00", support_level="priority")
+    task("t-sew", "Sew the toile", est_minutes=120, support_level="prefers", deadline=MONDAY)
+
+    # First fit would take the ambient morning; preferring priority does not.
+    assert placed(scheduling.plan(MONDAY))["t-sew"]["start"] == f"{MONDAY}T13:00:00"
+
+
+def test_a_prefers_task_falls_back_to_ambient_when_there_is_no_priority_window(archive):
+    working_week()
+    commitment("c-ambient", "13:00", "15:00", support_level="ambient")
+    task("t-sew", "Sew the toile", est_minutes=120, support_level="prefers", deadline=MONDAY)
+
+    assert placed(scheduling.plan(MONDAY))["t-sew"]["start"] == f"{MONDAY}T13:00:00"
+
+
+def test_an_independent_task_is_not_confined_to_supported_windows(archive):
+    working_week()
+    commitment("c-tutorial", "13:00", "15:00", support_level="priority")
+    task("t-admin", "Admin", est_minutes=60)
+
+    assert placed(scheduling.plan(MONDAY))["t-admin"]["start"] == f"{MONDAY}T09:00:00"
+
+
+def test_a_supported_window_somewhere_else_is_no_use_to_located_work(archive):
+    working_week()
+    studio = make_location("Studio")
+    annexe = make_location("Annexe")
+    location_hours(studio, "09:00", "17:00")
+    commitment("c-annexe", "10:00", "16:00", support_level="priority", location_id=annexe)
+    task("t-welt", "First welt pocket", est_minutes=60, support_level="needs",
+         required_location_id=studio, deadline=MONDAY)
+
+    result = scheduling.plan(MONDAY)
+
+    assert result["blocks"] == []
+    assert risk(result)["t-welt"]["reason"] == scheduling.AT_RISK_NO_SUPPORT
+
+
+# --- Travel -----------------------------------------------------------------------
+#
+# Real rows in the plan, not minutes deducted invisibly, and never added to the
+# duration of the task they deliver you to.
+
+
+def test_the_first_leg_of_a_day_comes_from_home_and_the_last_returns_to_it(archive):
+    working_week()
+    studio = make_location("Studio", travel_minutes_from_home=15)
+    location_hours(studio, "09:00", "17:00")
+    task("t-cut", "Pattern cutting", est_minutes=120, required_location_id=studio,
+         deadline=MONDAY)
+
+    blocks = scheduling.plan(MONDAY)["blocks"]
+
+    assert [(b["kind"], b["start"], b["end"]) for b in blocks] == [
+        ("travel", f"{MONDAY}T09:00:00", f"{MONDAY}T09:15:00"),
+        ("task", f"{MONDAY}T09:15:00", f"{MONDAY}T11:15:00"),
+        ("travel", f"{MONDAY}T11:15:00", f"{MONDAY}T11:30:00"),
+    ]
+    assert blocks[0]["from_location_id"] is None and blocks[0]["to_location_id"] == studio
+    assert blocks[2]["from_location_id"] == studio and blocks[2]["to_location_id"] is None
+
+
+def test_travel_is_counted_against_the_day_but_never_folded_into_the_task(archive):
+    working_week()
+    studio = make_location("Studio", travel_minutes_from_home=15)
+    location_hours(studio, "09:00", "17:00")
+    task("t-cut", "Pattern cutting", est_minutes=120, required_location_id=studio,
+         deadline=MONDAY)
+
+    result = scheduling.plan(MONDAY)
+
+    # The estimator learns from task durations; padding one with the trip to
+    # get there would teach it that cutting takes longer at the studio.
+    assert result["summary"]["planned_minutes"] == 120
+    assert result["summary"]["travel_minutes"] == 30
+    task_block = next(b for b in result["blocks"] if b["kind"] == "task")
+    assert task_block["minutes"] == 120
+
+
+def test_a_trip_between_two_locations_uses_the_pair_rather_than_going_via_home(archive):
+    working_week(closes="18:00")
+    studio = make_location("Studio", travel_minutes_from_home=30)
+    shop = make_location("Fabric Shop", travel_minutes_from_home=30)
+    db.save_travel([{"from_location_id": studio, "to_location_id": shop, "minutes": 10}])
+    location_hours(studio, "09:00", "12:00")
+    location_hours(shop, "13:00", "18:00")
+    task("t-cut", "Pattern cutting", est_minutes=60, required_location_id=studio,
+         deadline=MONDAY)
+    task("t-buy", "Buy calico", est_minutes=60, required_location_id=shop, deadline=MONDAY)
+
+    legs = [b for b in scheduling.plan(MONDAY)["blocks"] if b["kind"] == "travel"]
+    middle = next(b for b in legs
+                  if b["from_location_id"] == studio and b["to_location_id"] == shop)
+
+    # Not 60, which is what studio -> home -> shop would have cost.
+    assert middle["minutes"] == 10
+
+
+def test_the_trip_home_has_to_fit_inside_the_working_day(archive):
+    # Three hours of working time and half an hour each way: two hours of work
+    # fits exactly, filling the day to the minute.
+    db.save_working_hours([{"weekday": 0, "opens": "09:00", "closes": "12:00"}])
+    studio = make_location("Studio", travel_minutes_from_home=30)
+    location_hours(studio, "09:00", "12:00")
+    task("t-fits", "Two hours of cutting", est_minutes=120, required_location_id=studio,
+         deadline=MONDAY)
+
+    result = scheduling.plan(MONDAY)
+
+    assert placed(result)["t-fits"]["start"] == f"{MONDAY}T09:30:00"
+    assert result["summary"]["travel_minutes"] == 60
+
+
+def test_work_that_leaves_no_room_for_the_trip_home_does_not_fit(archive):
+    db.save_working_hours([{"weekday": 0, "opens": "09:00", "closes": "12:00"}])
+    studio = make_location("Studio", travel_minutes_from_home=30)
+    location_hours(studio, "09:00", "12:00")
+    task("t-long", "Two hours and five minutes", est_minutes=125,
+         required_location_id=studio, deadline=MONDAY)
+
+    result = scheduling.plan(MONDAY)
+
+    assert result["blocks"] == []
+    entry = risk(result)["t-long"]
+    assert entry["reason"] == scheduling.AT_RISK_TOO_LONG
+    assert "getting there and back" in entry["message"]
+
+
+def test_travel_blocks_are_not_emitted_where_there_is_no_time_of_day_to_put_them(archive):
+    # Beyond the slot horizon a task claims a date and nothing more, so its
+    # legs cannot be positioned -- but they were still made room for, and the
+    # summary still counts them.
+    working_week(weekdays=range(7))
+    studio = make_location("Studio", travel_minutes_from_home=30)
+    location_hours(studio, "09:00", "17:00")
+    for n in range(9):
+        task(f"t-{n}", f"Cutting {n}", est_minutes=7 * 60, required_location_id=studio)
+
+    result = scheduling.plan(MONDAY)
+    day_blocks = [b for b in result["blocks"] if b["granularity"] == "day"]
+
+    assert day_blocks and all(b["kind"] == "task" for b in day_blocks)
+    # Every placed day, near or far, paid for its round trip.
+    assert result["summary"]["travel_minutes"] == 60 * result["summary"]["placed"]
+
+
+# --- The same-location tie-break ---------------------------------------------------
+
+
+def two_shops_and_a_studio():
+    """Three comparable errands, two of them at the same place. Ranked on
+    score alone the studio one sits between the two shop ones."""
+    working_week(closes="18:00")
+    studio = make_location("Studio", travel_minutes_from_home=15)
+    shop = make_location("Fabric Shop", travel_minutes_from_home=15)
+    db.save_travel([{"from_location_id": studio, "to_location_id": shop, "minutes": 30}])
+    location_hours(studio, "09:00", "18:00")
+    location_hours(shop, "09:00", "18:00")
+    return studio, shop
+
+
+def test_two_tasks_at_the_same_location_are_grouped_into_one_trip(archive):
+    studio, shop = two_shops_and_a_studio()
+    task("t-a-shop", "Buy calico", est_minutes=60, required_location_id=shop)
+    task("t-b-studio", "Toile fitting", est_minutes=60, required_location_id=studio)
+    # A shorter estimate, so this scores slightly BELOW the studio task rather
+    # than tying with it -- which is the case exact equality would miss and
+    # COMPARABLE_SCORE_TOLERANCE is there to catch.
+    task("t-c-shop", "Buy thread", est_minutes=30, required_location_id=shop)
+
+    order = [b["task_id"] for b in scheduling.plan(MONDAY)["blocks"] if b["kind"] == "task"]
+
+    assert order == ["t-a-shop", "t-c-shop", "t-b-studio"]
+
+
+def test_a_materially_more_urgent_task_is_not_displaced_by_a_convenient_one(archive):
+    studio, shop = two_shops_and_a_studio()
+    task("t-a-shop", "Buy calico", est_minutes=60, required_location_id=shop,
+         importance=5, deadline=MONDAY)
+    task("t-b-studio", "Toile fitting", est_minutes=60, required_location_id=studio,
+         importance=4, deadline=TUESDAY)
+    task("t-c-shop", "Buy thread", est_minutes=60, required_location_id=shop, importance=1)
+
+    order = [b["task_id"] for b in scheduling.plan(MONDAY)["blocks"] if b["kind"] == "task"]
+
+    # The second shop errand is convenient but nowhere near comparable, so the
+    # tie-break leaves the ranking alone.
+    assert order[:2] == ["t-a-shop", "t-b-studio"]
+
+
+# --- Protected finishing time -------------------------------------------------------
+
+
+def test_ordinary_work_cannot_enter_the_finishing_buffer_even_when_everything_is_late(archive):
+    working_week()  # eight-hour days
+    # Five days of ordinary work due Wednesday with three days to do it in --
+    # as far behind as it is possible to be, which is exactly when the buffer
+    # would otherwise be the first thing taken.
+    for n in range(5):
+        task(f"t-ordinary-{n}", f"Ordinary {n}", est_minutes=8 * 60, deadline=WEDNESDAY)
+    task("t-press", "Press and photograph", est_minutes=120, deadline=WEDNESDAY,
+         is_finishing=True)
+
+    blocks = placed(scheduling.plan(MONDAY))
+
+    assert blocks["t-press"]["start"].startswith(WEDNESDAY)
+    assert [tid for tid, b in blocks.items() if b["start"].startswith(WEDNESDAY)] == ["t-press"]
+
+
+def test_finishing_work_is_held_for_its_buffer_rather_than_done_early(archive):
+    working_week()
+    task("t-press", "Press and photograph", est_minutes=120, deadline=FRIDAY,
+         is_finishing=True)
+
+    # Nothing else is competing, so a purely greedy walk would do this on
+    # Monday morning and leave the protected window empty.
+    assert placed(scheduling.plan(MONDAY))["t-press"]["start"].startswith(FRIDAY)
+
+
+def test_a_deadline_with_no_finishing_work_reserves_nothing(archive):
+    working_week()
+    for n in range(3):
+        task(f"t-{n}", f"Task {n}", est_minutes=8 * 60, deadline=WEDNESDAY)
+
+    blocks = placed(scheduling.plan(MONDAY))
+
+    # The flag is the input. With nothing to protect the time for, reserving
+    # it would idle the day before every deadline in the system.
+    assert len(blocks) == 3
+    assert blocks["t-2"]["start"].startswith(WEDNESDAY)
+
+
+def test_finishing_work_that_overflows_its_buffer_is_at_risk(archive):
+    # The deadline is the only working day there is, so the protected window
+    # is all the time there is -- and three six-hour jobs do not fit in eight
+    # hours however they are arranged.
+    db.save_working_hours([{"weekday": 2, "opens": "09:00", "closes": "17:00"}])
+    for n in range(3):
+        task(f"t-finish-{n}", f"Finish {n}", est_minutes=6 * 60, deadline=WEDNESDAY,
+             is_finishing=True)
+
+    result = scheduling.plan(MONDAY)
+    at_risk = risk(result)
+
+    assert len(result["blocks"]) == 1
+    assert len(at_risk) == 2
+    assert all(e["reason"] == scheduling.AT_RISK_FINISHING for e in at_risk.values())
+    assert all("protected" in e["message"] for e in at_risk.values())
+
+
+def test_the_finishing_buffer_is_configurable(archive):
+    working_week()
+    task("t-press", "Press and photograph", est_minutes=120, deadline=FRIDAY,
+         is_finishing=True)
+
+    blocks = placed(scheduling.plan(MONDAY, finishing_buffer_minutes=0))
+
+    assert blocks["t-press"]["start"].startswith(MONDAY)
+
+
+def test_a_plan_with_every_constraint_at_once_is_still_reproducible(archive):
+    working_week(closes="18:00")
+    studio = make_location("Studio", travel_minutes_from_home=15)
+    shop = make_location("Fabric Shop", travel_minutes_from_home=25)
+    location_hours(studio, "10:00", "18:00")
+    location_hours(shop, "09:00", "17:00")
+    commitment("c-tutorial", "13:00", "15:00", support_level="priority", location_id=studio)
+    task("t-welt", "First welt pocket", est_minutes=60, support_level="needs",
+         required_location_id=studio)
+    task("t-buy", "Buy calico", est_minutes=60, required_location_id=shop)
+    task("t-press", "Press and photograph", est_minutes=60, deadline=FRIDAY, is_finishing=True)
+
+    first = scheduling.plan(MONDAY)
+    second = scheduling.plan(MONDAY)
+
+    assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+    assert first["summary"]["placed"] == 3
+
+
+def test_a_travel_block_never_becomes_the_tasks_recorded_duration(client):
+    any_day_working_hours()
+    today = date.today().isoformat()
+    studio = make_location("Studio", travel_minutes_from_home=15)
+    location_hours(studio, "09:00", "17:00")
+    task("t-cut", "Pattern cutting", est_minutes=120, required_location_id=studio)
+
+    body = client.post("/api/schedule/plan", json={"now": today}).get_json()
+    assert [b["kind"] for b in body["blocks"]] == ["travel", "task", "travel"]
+
+    resp = client.post("/api/tasks/t-cut/complete")
+
+    # Two hours of cutting and half an hour of travelling, recorded as two
+    # hours of cutting.
+    assert resp.get_json()["actual"]["actual_minutes"] == 120
