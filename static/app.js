@@ -4,6 +4,7 @@ import * as folders from "./project/folders.js";
 import * as tasks from "./tasks.js";
 import { initLocationsManager } from "./locations.js";
 import { initCalendarImport } from "./calendar-import.js";
+import { initCommitments } from "./commitments.js";
 
 const SUPPORTED_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".txt", ".md", ".pdf"];
 
@@ -873,6 +874,7 @@ colourBackfillBtn.addEventListener("click", async () => {
 // list once the overlay closes rather than leaving those selects stale.
 initLocationsManager(() => tasks.refreshTaskList());
 initCalendarImport();
+initCommitments();
 
 // A hash deep link picks its own tab and loads whatever that tab needs;
 // failing that, prime the archive grid so switching to it is instant. Run

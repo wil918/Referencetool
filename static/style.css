@@ -1032,6 +1032,67 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 
 .task-card-actions { display: flex; justify-content: flex-end; margin-top: 1rem; }
 
+/* --- Personal events (commitments.js) ---
+   Reachable from the Tasks tab, same as Locations and Calendar. A plain
+   form and a plain list -- no generated chips, nothing Claude touched (see
+   CLAUDE.md's session prompt: commitments never go through task_ai.py). */
+
+.modal-box.commitments-modal-box {
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+}
+
+.commitment-entry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.85rem 1.25rem;
+  margin-top: 0.5rem;
+}
+
+.commitment-entry-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.commitment-entry-grid label.commitment-field-wide { grid-column: 1 / -1; }
+.commitment-entry-grid label.checkbox-label { justify-content: center; }
+
+/* display:flex above beats the UA [hidden] rule on specificity -- same issue
+   .modal-overlay[hidden] exists to fix -- so the prep field's own hide (see
+   commitments.js) needs the same explicit override. */
+.commitment-entry-grid label[hidden] { display: none; }
+
+#commitment-save-status:empty { display: none; }
+#commitment-save-status { margin: 0.6rem 0 0; }
+
+.commitment-list { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 1.5rem; }
+
+.commitment-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1.1rem;
+  border-radius: 18px;
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+}
+
+.commitment-card-main { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.commitment-card-title { font-family: var(--serif); font-size: 0.95rem; color: var(--ink-strong); }
+.commitment-card-meta { font-size: 0.75rem; color: var(--muted); }
+
+/* No colour outside the existing palette -- the same accent the generated-
+   chip dot already uses for "this needs a look". */
+.commitment-card-warning { color: var(--accent); }
+
+.commitment-card-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
+
 /* --- Locations manager (locations.js) ---
    Reachable from the Tasks tab. Wide and internally scrollable rather than
    the small centred modal-box everything else uses -- there's a list, a

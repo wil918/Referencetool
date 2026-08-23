@@ -207,6 +207,7 @@
       <div class="task-filters">
         <button id="manage-locations-btn" class="btn">Locations</button>
         <button id="manage-calendar-btn" class="btn">Calendar</button>
+        <button id="manage-commitments-btn" class="btn">Personal events</button>
         <label>
           Project
           <select id="task-filter-project">
@@ -424,6 +425,58 @@
       </div>
 
       <p id="calendar-import-status" class="muted"></p>
+    </div>
+  </div>
+
+  <div id="commitments-overlay" class="modal-overlay" hidden>
+    <div class="modal-box commitments-modal-box">
+      <div class="locations-modal-header">
+        <h3>Personal events</h3>
+        <button id="commitments-close-btn" class="btn">Close</button>
+      </div>
+      <div class="locations-modal-body">
+        <p class="muted">
+          Going out, a haircut, a train -- time that's simply taken, not work to schedule.
+          No estimate, nothing generated: a title, when, and optionally where. They're immovable,
+          and may sit anywhere, including outside working hours.
+        </p>
+        <div class="commitment-entry-grid">
+          <label class="commitment-field-wide">
+            Title
+            <input type="text" id="commitment-title-input" placeholder="What is it?">
+          </label>
+          <label>
+            Start
+            <input type="datetime-local" id="commitment-start-input">
+          </label>
+          <label>
+            End
+            <input type="datetime-local" id="commitment-end-input">
+          </label>
+          <label>
+            Location
+            <select id="commitment-location-select">
+              <option value="" selected>None</option>
+            </select>
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="commitment-home-first-input">
+            Home first
+          </label>
+          <label id="commitment-prep-field" hidden>
+            Prep time (minutes)
+            <input type="number" id="commitment-prep-input" min="0" placeholder="e.g. 30">
+          </label>
+        </div>
+        <p id="commitment-save-status" class="muted"></p>
+        <div class="modal-actions">
+          <button id="commitment-cancel-btn" class="btn" hidden>Cancel edit</button>
+          <button id="commitment-save-btn" class="btn primary">Save</button>
+        </div>
+
+        <div id="commitment-list" class="commitment-list"></div>
+        <p id="commitment-list-empty" class="muted" hidden>No personal events yet.</p>
+      </div>
     </div>
   </div>
 
