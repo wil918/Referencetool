@@ -26,6 +26,9 @@ That last one is the point. On the Construction module the marks lost were finis
 | Travel | Per-location typical minutes |
 | Project link | Optional — standalone tasks compete for the same hours |
 | Views | Week first, then day, then month |
+| Time bands | Working and domestic hours, both visible and resizable per day |
+| Personal events | Commitments, not tasks. No Claude involvement. Immovable, allowed outside working hours |
+| Home first | Optional per event: travel home, then a user-set prep block, both immovable |
 | Deliverables | First-class: project → deliverable → task |
 | Brief parsing | Claude suggests; nothing enters the schedule unapproved |
 | Finishing time | Automatic and protected before each deadline |
@@ -46,7 +49,7 @@ tasks              id, project_id (nullable), deliverable_id (nullable),
                    required_location_id (nullable), support_level,
                    est_minutes, importance, difficulty, is_finishing,
                    status, recurrence_id (nullable), continues_task_id (nullable),
-                   slip_count, created_at
+                   slip_count, is_domestic, created_at
                    -- status: pending | scheduled | done | partial | abandoned
                    -- continues_task_id chains a remainder back to what it continues
                    -- plus a *_source flag per estimated field: user | generated
@@ -59,13 +62,19 @@ task_actuals       task_id PK, actual_minutes, actual_difficulty,
 scheduled_blocks   id, task_id, start, end, is_locked, generated_at
 
 commitments        id, title, start, end, kind, location_id (nullable),
-                   support_level, source, external_uid, energy_cost
+                   support_level, source, external_uid, energy_cost,
+                   home_first, prep_minutes
 
 locations          id, name, address, travel_minutes_from_home, notes
 
 location_hours     location_id, weekday, opens, closes    PK (location_id, weekday)
 
 location_overrides id, location_id, date, opens, closes, closed
+
+domestic_hours     weekday, opens, closes                 PK (weekday)
+
+hours_overrides    id, date, band, opens, closes, off
+                   -- band: working | domestic. A per-date resize of either.
 
 location_travel    from_location_id, to_location_id, minutes
                    PK (from_location_id, to_location_id)
@@ -112,6 +121,52 @@ The scheduler matches the two. Work you already know how to do fills ordinary st
 `travel_minutes_from_home` covers home→X and X→home, which is the first and last leg of any day. It cannot express studio→fabric shop, so `location_travel` records the handful of pairs you actually make. A pair with no row falls back to via-home, which is honest but pessimistic — if it produces a silly number, add the pair.
 
 Travel is **scheduled as visible blocks**, not deducted invisibly. A day that is full because of three trips should look full, and you should be able to see why.
+
+---
+
+## Time bands, personal events and domestic work
+
+### Three bands, not one
+
+Availability is not a single window. There are three, each a weekly pattern with per-date overrides:
+
+- **working hours** — when you will do project and university work
+- **domestic hours** — when you will do chores
+- **everything else** — free, or asleep
+
+`working_hours` is when *you* are willing to work. `location_hours` is when a *place* is open. Both constrain placement and neither substitutes for the other; a later session will try to merge them.
+
+Both bands are **visible and resizable in the week and month views** — set a default weekly pattern, then drag a particular day or week wider or narrower when reality differs. Overrides live in `hours_overrides` keyed by date and band.
+
+### Personal events are commitments, not tasks
+
+Going out, a haircut, a train — these block time and nothing more. They have no difficulty, no importance, no deliverable, and **nothing about them should go through Claude**. Adding one is a plain form: title, start, end, optional location. No estimation, no generated chips, no labelling.
+
+They are immovable, and they may sit **anywhere**, including outside working hours. Setting working hours later must not dislodge an evening already committed to.
+
+### Home first
+
+An event can be marked **home first**, with a user-entered preparation time — say 30 minutes.
+
+The time you enter is the **start of the event itself**. Working backwards from it, the scheduler inserts immovable blocks:
+
+```
+[ travel to home ] → [ get ready, 30 min ] → [ travel home → venue ] → event starts
+```
+
+The final leg only exists if the event has a location; an event with none omits it. **If you are already at home when the chain begins, the first travel block is omitted** — there is nothing to travel.
+
+These derived blocks are as immovable as the event. Work schedules around them, which is the point: a work block must not end at 19:00 when you are due somewhere at 19:30 having not been home.
+
+### Domestic tasks
+
+A task can be tagged **domestic** — cleaning, laundry, a food shop. Domestic tasks are ordinary tasks in every other respect, but they are placed differently:
+
+- normally into **domestic hours**
+- into **working hours** only when one of two things is true: the schedule already has you at home, or there is no remaining away-from-home work that day
+
+The second rule is what stops a food shop being wedged between two studio blocks. Domestic work fills the gaps that working time cannot usefully use, rather than competing with project work for the same hours.
+
 
 ---
 

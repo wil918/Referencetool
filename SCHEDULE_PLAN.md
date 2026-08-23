@@ -2,7 +2,9 @@
 
 Nineteen sessions. Scope, data model and reasoning live in `SCHEDULE_SCOPE.md`; read that first if anything here seems arbitrary. Conventions come from `CLAUDE.md`, which Claude Code loads automatically.
 
-**Status: not started. Next up: session 1.**
+**Status: sessions 1–5 complete. Next up: session 6, then the new 6b.**
+
+**Known gap, deferred to session 9:** session 4 says to compute `available_minutes` "from working hours minus commitments" but never defines where working hours come from, and the scope document's data model omits them entirely. Session 4 correctly inferred a `working_hours` table and `GET/PUT /api/working-hours`, but nothing told it to build a UI, so there isn't one — and with no rows, every weekday has zero capacity and everything lands on the at-risk list. Not a deviation; my omission. Do not confuse this with `location_hours`, which is when a *place* is open; `working_hours` is when *you* are willing to work.
 
 ---
 
@@ -12,12 +14,23 @@ Same loop as `DEVELOPMENT_PLAN.md`: commit any doc changes on `test-widget-dock`
 
 Do not give Claude Code this file or the scope document. The prompts are self-contained and name what to read.
 
+### Models and levels
+
+Two different levers. **Thinking level buys care** — working through edge cases rather than rushing. **A stronger model buys the ability to hold many interacting constraints in mind at once** and get the shape right in one pass. Most sessions below have their shape fixed by the prompt, so the level does the useful work and Sonnet is right.
+
+| Model | Sessions | Why |
+|---|---|---|
+| Opus | 5, 6 | The scheduler and its constraints. Several dimensions interacting at once, where a structural mistake is expensive downstream and a spec cannot fully pre-empt a bad interaction. |
+| Sonnet | everything else | Shape already fixed by the prompt; the level does the work. |
+
 | Level | Sessions |
 |---|---|
 | `medium` | 3, 10, 11, 12, 13, 14, 19 |
-| `high` | 1, 2, 4, 6, 7, 8, 9, 15, 16, 17, 18 |
-| `max` | 5 |
+| `high` | 1, 2, 4, 6b, 7, 8, 9, 15, 16, 17, 18 |
+| `max` | 5, 6 |
 | `ultracode` | none — reserve for a debugging emergency |
+
+**Opus earns its cost more on debugging than on building.** Against a detailed prompt, Sonnet builds well. When a session's output misbehaves in a way you cannot immediately explain — the scheduler placing things oddly, a replan that is not idempotent, a constraint firing when it should not — that is when to switch models and re-open the problem. Reaching for it by default spends budget on work the prompt has already de-risked.
 
 ---
 
@@ -306,7 +319,8 @@ override wins; capacity subtracts commitments correctly.
 
 The session everything else rests on. If placement feels wrong, no amount of UI rescues it.
 
-**Model:** Sonnet 5, `max` · 4–5 h · 350–500k tokens · 1–1.5 windows
+**Model:** Opus 5, `max` · 4–5 h · 350–500k tokens · 1–1.5 windows
+**Sonnet fallback:** Sonnet 5 at `max` is viable — the algorithm is specified in full below. Split as 5a/5b if it overruns.
 **If it overruns:** stop at a working state and commit. 5a = topological sort, scoring, day walk and placement; 5b = detail decay, at-risk and the API.
 
 ````
@@ -384,7 +398,8 @@ dropped.
 
 **Delivers:** the constraints that make the schedule fit your actual working life.
 
-**Model:** Sonnet 5, `high` · 3–4 h · 250–350k tokens · ~1 window
+**Model:** Opus 5, `max` · 3–4 h · 250–350k tokens · ~1 window
+**Why Opus:** four constraints layered onto one day walk. The failure mode is a bad *interaction* between two of them rather than any single one being wrong, which is what a spec cannot fully pre-empt.
 
 ````
 Read scheduling.py as session 5 left it, plus the location and support sections
@@ -448,6 +463,112 @@ the finishing buffer even when everything is late.
 
 ---
 
+### Session 6b — Personal events, home-first chains and domestic work
+
+**Delivers:** commitments you add yourself, the travel-and-prep chain before going out, domestic tasks, the domestic hours band, and work breaks.
+
+**Why after 6:** it builds directly on session 6's travel insertion and band handling. Doing it before means writing travel logic twice.
+
+**Model:** Sonnet 5, `high` · 3–4 h · 250–350k tokens · ~1 window
+
+````
+Read scheduling.py as sessions 5 and 6 left it, the commitments routes and
+schema, static/calendar-import.js, static/tasks.js, and SCHEDULE_SCOPE.md's
+"Time bands, personal events and domestic work" section first.
+
+1. PERSONAL EVENTS. A commitment you add by hand -- going out, a haircut, a
+   train. Schema additions: commitments gains home_first INTEGER and
+   prep_minutes INTEGER.
+
+   The entry form is PLAIN: title, start, end, optional location, home_first,
+   prep_minutes. No estimation, no generated chips, NO CLAUDE CALL. These have
+   no difficulty, importance or deliverable and nothing about them needs
+   labelling. Do not route this through task_ai.py, and do not reuse the task
+   entry flow -- they are different things that happen to both occupy time.
+
+   They are immovable and may sit ANYWHERE, including outside working hours.
+   Setting or narrowing working hours later must never dislodge an evening
+   already committed to. Test that specifically.
+
+2. HOME-FIRST CHAINS. When home_first is set, the scheduler inserts immovable
+   blocks working BACKWARDS from the event's start time -- the time entered is
+   the start of the event itself, not of the preparation:
+
+     [ travel to home ] -> [ get ready, prep_minutes ] -> [ travel home to venue ] -> event
+
+   The entered time is ALWAYS when you need to BE there, never when you leave.
+   The chain is sized so the last leg lands you at the venue at that time.
+
+   - the leading travel block is OMITTED if the schedule already has you at
+     home when the chain begins -- there is nothing to travel
+   - the venue leg needs a location to size it. When home_first is set, PROMPT
+     for a location rather than silently omitting the leg -- an event with no
+     location produces a chain that is short by exactly the journey, which is
+     the one error you would not notice until you were late. If the user
+     declines, omit the leg but keep the entered time meaning arrival, and mark
+     the chain as incomplete in the UI.
+   - use scheduling.travel_minutes() from session 3; do not compute travel a
+     second way
+   - these blocks are as immovable as the event itself. scheduled_blocks.kind
+     gains 'prep'; travel blocks keep kind 'travel'
+   - if the chain would start before the previous work block ends, that work
+     block must be shortened or moved -- the chain wins. A work block ending at
+     19:00 when you are due out at 19:30 having not been home is exactly the
+     failure this exists to prevent.
+
+3. DOMESTIC HOURS. A second weekly band beside working hours:
+     domestic_hours   weekday, opens, closes    PK (weekday)
+     hours_overrides  id, date, band, opens, closes, off
+   hours_overrides is a per-date resize of EITHER band -- band is 'working' or
+   'domestic'. Session 9 builds the UI for both; this session is the data and
+   the placement rules.
+
+4. DOMESTIC TASKS. tasks gains is_domestic INTEGER. Domestic tasks are ordinary
+   tasks in every other respect -- estimate, actuals, dependencies all apply --
+   but they are placed differently:
+     - normally into domestic hours
+     - into working hours ONLY when the schedule already has you at home, or
+       there is no remaining away-from-home work that day
+   The second rule is the point: it stops a food shop being wedged between two
+   studio blocks. Domestic work fills gaps working time cannot usefully use,
+   rather than competing with project work for the same hours.
+
+   Non-domestic tasks are never placed in domestic hours.
+
+5. BREAKS. Insert a 30-minute break after every 2 hours of UNINTERRUPTED work.
+   Make both numbers named constants.
+
+   "Uninterrupted" means consecutive task blocks only. Anything that is not
+   task work -- travel, prep, a commitment, an existing break, or a gap --
+   resets the counter. Commitments are excluded because they are fixed and
+   cannot have a break inserted into them.
+
+   Breaks are real rows with kind='break', visible in the calendar, and they
+   consume capacity like anything else.
+
+   A break is skipped ONLY when keeping it would cause a deadline to be missed.
+   That is a two-pass placement: plan the day WITH breaks, and if that puts a
+   task on the at-risk list, retry that day without them and keep the second
+   result only if it clears the risk. Do not drop breaks pre-emptively because
+   the day looks tight -- tight is normal, missing a deadline is not. When
+   breaks are dropped, say so on the day rather than silently removing them.
+
+Tests: a personal event outside working hours survives working hours being
+narrowed afterwards; a home-first chain inserts travel then prep in that order
+and ends at the event start; the leading travel block is omitted when already
+at home; a venue-less event omits the final leg but still treats the entered time as arrival; work is displaced rather than
+overlapping a chain; a domestic task lands in domestic hours by default; a
+domestic task may use working hours when the day has no away-from-home work
+left; a non-domestic task is never placed in domestic hours; a break appears
+after two hours of consecutive task blocks; travel between two work blocks
+resets the break counter; breaks are dropped only when keeping them would
+miss a deadline, and the day says so when they are.
+````
+
+**Exit criteria:** an evening out blocks correctly with its run-up, work never runs into it, and domestic tasks fill gaps rather than competing.
+
+---
+
 ### Session 7 — Replan, outcomes, at-risk and pinning
 
 **Delivers:** the daily rewire and the three ways a block resolves.
@@ -481,8 +602,21 @@ section first.
 
 3. Replan. POST /api/schedule/plan already exists; make it safe to run
    repeatedly. Blocks with is_locked=1 are immovable and everything schedules
-   around them. Past blocks are never rewritten. Run it automatically on first
-   load each day, and on demand.
+   around them. Run it automatically on first load each day, on demand, and
+   whenever working or domestic hours change -- narrowing today's band is
+   pointless if the schedule does not immediately reflow into it.
+
+   PAST BLOCKS NEED CARE. A block whose time has passed is not automatically
+   history: waking late and moving the working day to start at 11:00 leaves
+   this morning's 09:00 blocks in the past having never happened. Freezing them
+   as though they did is wrong, and silently re-placing something you actually
+   did is worse.
+     - a past block that was RESOLVED (done, partial, not completed) is history
+       and is never rewritten
+     - a past block that was never resolved is treated as NOT COMPLETED and
+       returns to the pool, incrementing slip_count like any other slip
+   Do not ask the user to adjudicate every stale block on load; apply the rule
+   and let them correct any they had in fact done.
 
 4. Pinning: a control to lock a block to its slot, and to unlock it.
 
@@ -591,6 +725,49 @@ sessions 10 and 11 then copy.
 - Colour by deliverable where a task has one, using the existing ramps. Do not
   introduce new colours.
 - Show the at-risk list alongside, not buried.
+
+Also build the WORKING HOURS editor, which the plan referenced in session 4 but
+never specified, so it was never built. This is why an unconfigured schedule
+returns nothing: with no working_hours rows every weekday has zero available
+minutes and every task lands on the at-risk list.
+
+  - a weekly pattern — start and end per weekday, or "not working"
+  - the DOMESTIC hours band too, edited the same way (session 6b adds the
+    table). Both bands are drawn on the week and month grids as visible
+    background ranges, so you can see at a glance when you are meant to be
+    working and when chores get done
+  - each band resizable per day and per week directly on the grid, writing to
+    hours_overrides — drag the edge of a day's working band to extend it
+  - a one-gesture "start my day at…" control on the day and week views. Waking
+    late and pushing today's working band from 09:00 to 11:00 must be a single
+    action, not a form. Changing it replans immediately, so the day reflows
+    into the narrower window and whatever no longer fits moves or goes at-risk.
+    This is the most-used control in the whole app; treat it accordingly.
+
+Also show the SUGGESTED BEDTIME. It is not a block and not a task — it is a
+marker on the calendar, derived from the first commitment or scheduled block of
+the following day:
+
+    bedtime = first thing tomorrow − travel − morning routine − sleep target
+
+  - sleep target and morning routine are user settings with sensible defaults
+  - it occupies no time and constrains nothing; it never displaces work and is
+    never something you complete
+  - draw it as a line or marker on the evening, not a filled block — it is
+    advice, and a block would imply the scheduler owns that time
+  - if the app is open when it arrives, fire a browser notification. Request
+    permission the first time the setting is enabled, never on page load.
+    Be honest in the copy that this only fires while the app is running —
+    there is no background delivery, and implying otherwise would be worse
+    than not offering it
+  - the same shape as the location hours editor from session 3, but a
+    different concept: location_hours is when a PLACE is open, working_hours is
+    when YOU are willing to work. Both constrain placement and neither
+    substitutes for the other. Say so in a comment; they will otherwise be
+    merged by a later session.
+  - the table and GET/PUT /api/working-hours already exist from session 4
+  - when a week shows no placed work, say why — "no working hours set" is a
+    fixable message, an empty grid is not
 - Click a block to open the task; complete from there with the three outcomes.
 - Drag a block to move it, which pins it (is_locked) and triggers a replan of
   everything unlocked around it.
@@ -961,28 +1138,29 @@ solves the size problem at the same time.
 
 ## Estimates
 
-| # | Session | Level | Hours | Tokens | Windows |
+| # | Session | Model / level | Hours | Tokens | Windows |
 |---|---|---|---|---|---|
-| 1 | Schema and task API | high | 3–4 | 250–350k | 1 |
-| 2 | Task entry and completion | high | 3–4 | 250–350k | 1 |
-| 3 | Locations, hours, travel | medium | 2–3 | 150–250k | 0.6 |
-| 4 | Commitments, ICS, capacity | high | 3–4 | 250–350k | 1 |
-| 5 | Scheduler core | max | 4–5 | 350–500k | 1–1.5 |
-| 6 | Location/support/travel/finishing | high | 3–4 | 250–350k | 1 |
-| 7 | Replan, outcomes, at-risk | high | 3–4 | 250–350k | 1 |
-| 8 | Estimator | high | 3–4 | 250–350k | 1 |
-| 9 | Week view | high | 3–4 | 250–350k | 1 |
-| 10 | Day view | medium | 2–3 | 150–250k | 0.75 |
-| 11 | Month view | medium | 2–3 | 150–250k | 0.6 |
-| 12 | Deliverables UI | medium | 2–3 | 150–250k | 0.6 |
-| 13 | Recurrence | medium | 2–3 | 150–250k | 0.6 |
-| 14 | Resource archive | medium | 2–3 | 150–250k | 0.6 |
-| 15 | Brief import, concept analysis | high | 3–4 | 250–350k | 1 |
-| 16 | Project integration, hardening | high | 2.5–3.5 | 200–300k | 0.75 |
-| 17 | Remote access, phone day view | high | 3–4 | 250–350k | 1 |
-| 18 | Offline cache and sync queue | high | 3–4 | 250–350k | 1 |
-| 19 | Photo capture | medium | 1.5–2.5 | 120–200k | 0.5 |
-| | **Total** | | **52–68 h** | **4.2–5.9M** | **16–17** |
+| 1 | Schema and task API | Sonnet `high` | 3–4 | 250–350k | 1 |
+| 2 | Task entry and completion | Sonnet `high` | 3–4 | 250–350k | 1 |
+| 3 | Locations, hours, travel | Sonnet `medium` | 2–3 | 150–250k | 0.6 |
+| 4 | Commitments, ICS, capacity | Sonnet `high` | 3–4 | 250–350k | 1 |
+| 5 | Scheduler core | **Opus** `max` | 4–5 | 350–500k | 1–1.5 |
+| 6 | Location/support/travel/finishing | **Opus** `max` | 3–4 | 250–350k | 1 |
+| 6b | Personal events, home-first, domestic | Sonnet `high` | 3–4 | 250–350k | 1 |
+| 7 | Replan, outcomes, at-risk | Sonnet `high` | 3–4 | 250–350k | 1 |
+| 8 | Estimator | Sonnet `high` | 3–4 | 250–350k | 1 |
+| 9 | Week view | Sonnet `high` | 3–4 | 250–350k | 1 |
+| 10 | Day view | Sonnet `medium` | 2–3 | 150–250k | 0.75 |
+| 11 | Month view | Sonnet `medium` | 2–3 | 150–250k | 0.6 |
+| 12 | Deliverables UI | Sonnet `medium` | 2–3 | 150–250k | 0.6 |
+| 13 | Recurrence | Sonnet `medium` | 2–3 | 150–250k | 0.6 |
+| 14 | Resource archive | Sonnet `medium` | 2–3 | 150–250k | 0.6 |
+| 15 | Brief import, concept analysis | Sonnet `high` | 3–4 | 250–350k | 1 |
+| 16 | Project integration, hardening | Sonnet `high` | 2.5–3.5 | 200–300k | 0.75 |
+| 17 | Remote access, phone day view | Sonnet `high` | 3–4 | 250–350k | 1 |
+| 18 | Offline cache and sync queue | Sonnet `high` | 3–4 | 250–350k | 1 |
+| 19 | Photo capture | Sonnet `medium` | 1.5–2.5 | 120–200k | 0.5 |
+| | **Total** | | **55–72 h** | **4.5–6.3M** | **17–18** |
 
 Roughly four weeks at a window a day. Sessions 1–8 are the product; 9–16 make it usable; 17–19 make it portable. Stopping after 16 leaves a complete desktop application.
 
@@ -1001,7 +1179,7 @@ Commit after every session. Four are worth tagging:
 
 ## Risks
 
-**Session 5 is the product.** If placement feels wrong, no UI rescues it. Give it the most manual checking and be willing to spend a second window.
+**Session 5 is the product.** If placement feels wrong, no UI rescues it. Give it the most manual checking and be willing to spend a second window. It and session 6 are the two Opus sessions; everywhere else Opus is better held back for debugging.
 
 **Cold start.** For the first weeks every estimate is Claude guessing. The UI must say so; false precision here is worse than an honest range.
 
