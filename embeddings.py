@@ -75,16 +75,39 @@ def embed_combined(text=None, image_paths=None):
 
 _client = None
 _collection = None
+_task_collection = None
+
+
+def _get_client():
+    global _client
+    if _client is None:
+        _client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+    return _client
 
 
 def get_collection():
-    global _client, _collection
+    global _collection
     if _collection is None:
-        _client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-        _collection = _client.get_or_create_collection(
+        _collection = _get_client().get_or_create_collection(
             name="references", metadata={"hnsw:space": "cosine"}
         )
     return _collection
+
+
+def get_task_collection():
+    """A second Chroma collection, entirely separate from get_collection()'s
+    reference library. estimation.py embeds task descriptions to find similar
+    past work -- those vectors must never surface in reference similarity
+    search or the archive's pairwise-similarity graph, both of which query
+    get_collection() specifically. A distinct named collection guarantees
+    that structurally, rather than relying on a shared collection plus a type
+    filter that a future caller could forget."""
+    global _task_collection
+    if _task_collection is None:
+        _task_collection = _get_client().get_or_create_collection(
+            name="tasks", metadata={"hnsw:space": "cosine"}
+        )
+    return _task_collection
 
 
 def add_to_index(ref_id, embedding, metadata):
