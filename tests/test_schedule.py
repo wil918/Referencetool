@@ -512,6 +512,87 @@ def test_an_off_hours_override_shuts_the_band_for_that_date(client):
     assert resp["off"] is True
 
 
+# --- Schedule settings (sleep target, morning routine, bedtime notifications) ---
+
+
+def test_schedule_settings_default_before_anything_is_saved(client):
+    resp = client.get("/api/schedule-settings").get_json()
+    assert resp == {
+        "sleep_target_minutes": 8 * 60,
+        "morning_routine_minutes": 30,
+        "bedtime_notifications_enabled": False,
+    }
+
+
+def test_schedule_settings_round_trip(client):
+    resp = client.put("/api/schedule-settings", json={
+        "sleep_target_minutes": 420,
+        "morning_routine_minutes": 45,
+        "bedtime_notifications_enabled": True,
+    })
+    assert resp.status_code == 200
+    assert resp.get_json() == {
+        "sleep_target_minutes": 420,
+        "morning_routine_minutes": 45,
+        "bedtime_notifications_enabled": True,
+    }
+    assert client.get("/api/schedule-settings").get_json()["sleep_target_minutes"] == 420
+
+
+def test_schedule_settings_partial_update_keeps_the_rest(client):
+    client.put("/api/schedule-settings", json={
+        "sleep_target_minutes": 420, "morning_routine_minutes": 45, "bedtime_notifications_enabled": True,
+    })
+    resp = client.put("/api/schedule-settings", json={"morning_routine_minutes": 20}).get_json()
+    assert resp == {
+        "sleep_target_minutes": 420,
+        "morning_routine_minutes": 20,
+        "bedtime_notifications_enabled": True,
+    }
+
+
+def test_schedule_settings_rejects_a_non_positive_sleep_target(client):
+    resp = client.put("/api/schedule-settings", json={"sleep_target_minutes": 0})
+    assert resp.status_code == 400
+
+
+def test_schedule_settings_rejects_a_negative_morning_routine(client):
+    resp = client.put("/api/schedule-settings", json={"morning_routine_minutes": -5})
+    assert resp.status_code == 400
+
+
+# --- Suggested bedtime --------------------------------------------------------
+
+
+def test_bedtimes_route_rejects_a_missing_or_malformed_range(client):
+    assert client.get("/api/schedule/bedtimes").status_code == 400
+    assert client.get("/api/schedule/bedtimes?start=2026-01-05&end=nonsense").status_code == 400
+
+
+def test_bedtimes_route_derives_from_tomorrows_first_commitment(client):
+    client.put("/api/schedule-settings", json={
+        "sleep_target_minutes": 480, "morning_routine_minutes": 30,
+    })
+    client.post("/api/commitments", json={
+        "title": "9am lecture", "start": "2026-01-06T09:00:00", "end": "2026-01-06T10:00:00",
+    })
+
+    resp = client.get("/api/schedule/bedtimes?start=2026-01-05&end=2026-01-05")
+
+    assert resp.status_code == 200
+    markers = resp.get_json()
+    assert len(markers) == 1
+    assert markers[0]["evening_date"] == "2026-01-05"
+    assert markers[0]["first_thing_start"] == "2026-01-06T09:00:00"
+    # 09:00 - 0 travel - 30 min routine - 8h sleep = 00:30 the same calendar day.
+    assert markers[0]["bedtime"] == "2026-01-06T00:30:00"
+
+
+def test_bedtimes_route_omits_evenings_with_nothing_the_next_day(client):
+    resp = client.get("/api/schedule/bedtimes?start=2026-02-01&end=2026-02-01")
+    assert resp.get_json() == []
+
+
 # --- Task field generation ---------------------------------------------------
 #
 # task_ai.generate_task_fields itself is stubbed for every test (conftest.py),
@@ -826,6 +907,69 @@ def test_locking_requires_is_locked_in_the_body(client):
 
 def test_locking_a_block_that_does_not_exist_404s(client):
     resp = client.put("/api/schedule/blocks/nonexistent/lock", json={"is_locked": True})
+    assert resp.status_code == 404
+
+
+# --- Moving (dragging) a scheduled block ----------------------------------------
+
+
+def test_moving_a_block_repositions_it_and_locks_it(client):
+    task = make_task(client, "Task")
+    block_id = str(uuid.uuid4())
+    db.create_scheduled_block(block_id, task["id"], "2026-01-01T09:00:00", "2026-01-01T10:00:00")
+
+    resp = client.put(f"/api/schedule/blocks/{block_id}/move", json={"start": "2026-01-02T14:00:00"})
+
+    assert resp.status_code == 200
+    moved = resp.get_json()
+    assert moved["start"] == "2026-01-02T14:00:00"
+    # The original 1-hour length carries over rather than being reset.
+    assert moved["end"] == "2026-01-02T15:00:00"
+    assert moved["is_locked"] is True
+
+
+def test_moving_a_day_granularity_block_is_rejected(client):
+    task = make_task(client, "Task")
+    block_id = str(uuid.uuid4())
+    db.create_scheduled_block(block_id, task["id"], "2026-03-15", "2026-03-15")
+
+    resp = client.put(f"/api/schedule/blocks/{block_id}/move", json={"start": "2026-03-16T09:00:00"})
+
+    assert resp.status_code == 400
+    assert db.get_scheduled_block(block_id)["start"] == "2026-03-15"
+
+
+def test_moving_a_travel_block_is_rejected(client):
+    task = make_task(client, "Task")
+    block_id = str(uuid.uuid4())
+    db.create_scheduled_block(
+        block_id, task["id"], "2026-01-01T08:45:00", "2026-01-01T09:00:00", kind="travel"
+    )
+
+    resp = client.put(f"/api/schedule/blocks/{block_id}/move", json={"start": "2026-01-01T10:00:00"})
+    assert resp.status_code == 400
+
+
+def test_moving_a_block_requires_start_in_the_body(client):
+    task = make_task(client, "Task")
+    block_id = str(uuid.uuid4())
+    db.create_scheduled_block(block_id, task["id"], "2026-01-01T09:00:00", "2026-01-01T10:00:00")
+
+    resp = client.put(f"/api/schedule/blocks/{block_id}/move", json={})
+    assert resp.status_code == 400
+
+
+def test_moving_a_block_rejects_a_malformed_start(client):
+    task = make_task(client, "Task")
+    block_id = str(uuid.uuid4())
+    db.create_scheduled_block(block_id, task["id"], "2026-01-01T09:00:00", "2026-01-01T10:00:00")
+
+    resp = client.put(f"/api/schedule/blocks/{block_id}/move", json={"start": "not-a-datetime"})
+    assert resp.status_code == 400
+
+
+def test_moving_a_block_that_does_not_exist_404s(client):
+    resp = client.put("/api/schedule/blocks/nonexistent/move", json={"start": "2026-01-01T09:00:00"})
     assert resp.status_code == 404
 
 

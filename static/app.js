@@ -5,6 +5,9 @@ import * as tasks from "./tasks.js";
 import { initLocationsManager } from "./locations.js";
 import { initCalendarImport } from "./calendar-import.js";
 import { initCommitments } from "./commitments.js";
+import { refreshSchedule } from "./schedule/schedule.js";
+import { initScheduleSettings } from "./schedule/settings.js";
+import { startBedtimeWatch } from "./schedule/bedtime-watch.js";
 
 const SUPPORTED_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".txt", ".md", ".pdf"];
 
@@ -24,6 +27,7 @@ function activateTab(name) {
   if (name === "archive") refreshArchive();
   if (name === "projects") showProjectsList();
   if (name === "tasks") tasks.refreshTaskList();
+  if (name === "schedule") refreshSchedule();
   if (name === "settings") {
     refreshSimilarityStatus();
     refreshColourCoverageStatus();
@@ -875,6 +879,8 @@ colourBackfillBtn.addEventListener("click", async () => {
 initLocationsManager(() => tasks.refreshTaskList());
 initCalendarImport();
 initCommitments();
+initScheduleSettings();
+startBedtimeWatch();
 
 // A hash deep link picks its own tab and loads whatever that tab needs;
 // failing that, prime the archive grid so switching to it is instant. Run

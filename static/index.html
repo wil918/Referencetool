@@ -15,6 +15,7 @@
       <button class="tab-btn" data-tab="archive">Archive</button>
       <button class="tab-btn" data-tab="projects">Projects</button>
       <button class="tab-btn" data-tab="tasks">Tasks</button>
+      <button class="tab-btn" data-tab="schedule">Schedule</button>
       <button class="tab-btn" data-tab="settings">Settings</button>
       <a class="nav-link" href="/connections.html">Archive Connections</a>
       <a class="nav-link" href="/">3D Graph (Home)</a>
@@ -232,6 +233,16 @@
       <p id="task-list-empty" class="muted" hidden>No tasks yet -- describe one above.</p>
     </section>
 
+    <section id="tab-schedule" class="tab">
+      <div class="schedule-toolbar">
+        <button id="manage-hours-btn" class="btn">Working &amp; domestic hours</button>
+      </div>
+      <div class="schedule-layout">
+        <div id="schedule-calendar"></div>
+        <div id="schedule-at-risk-panel" class="task-at-risk-panel schedule-at-risk-panel" hidden></div>
+      </div>
+    </section>
+
     <section id="tab-settings" class="tab">
       <h2>Settings</h2>
       <div class="settings-section">
@@ -265,6 +276,32 @@
         </p>
         <p id="colour-coverage-status" class="muted"></p>
         <button id="colour-backfill-btn" class="btn primary">Fill In Missing Colour Profiles</button>
+      </div>
+
+      <div class="settings-section">
+        <h3>Suggested bedtime</h3>
+        <p class="muted">
+          A marker on the Schedule tab's calendar, worked out from tomorrow's first commitment or
+          scheduled task: that time, minus travel, minus your morning routine, minus a full night's
+          sleep. It's advice, not a block -- it never takes up time or moves anything else.
+        </p>
+        <label>
+          Sleep target (hours)
+          <input type="number" id="bedtime-sleep-target-input" min="1" max="16" step="0.5">
+        </label>
+        <label>
+          Morning routine (minutes)
+          <input type="number" id="bedtime-morning-routine-input" min="0" max="240">
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" id="bedtime-notify-checkbox">
+          Notify me when it arrives
+        </label>
+        <p class="muted">
+          Only fires while this app is open in a browser tab -- there's no background delivery, so
+          this won't wake you up if the tab (or the computer) is closed.
+        </p>
+        <p id="bedtime-settings-status" class="muted"></p>
       </div>
     </section>
   </main>
@@ -485,6 +522,40 @@
 
         <div id="commitment-list" class="commitment-list"></div>
         <p id="commitment-list-empty" class="muted" hidden>No personal events yet.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="hours-overlay" class="modal-overlay" hidden>
+    <div class="modal-box locations-modal-box hours-modal-box">
+      <div class="locations-modal-header">
+        <h3>Working &amp; domestic hours</h3>
+        <button id="hours-close-btn" class="btn">Close</button>
+      </div>
+      <div class="locations-modal-body">
+        <p class="muted">
+          Two different weekly patterns: working hours are when you're willing to do project and
+          university work; domestic hours are when chores happen. Both are separate from a
+          location's own opening hours (under Locations) -- that's when a PLACE is open, this is
+          when YOU are. Saving either one replans the schedule around the new pattern.
+        </p>
+        <div class="hours-band-section">
+          <h4>Working hours</h4>
+          <div id="working-hours-grid" class="location-hours-grid"></div>
+          <button id="working-hours-save-btn" class="btn">Save weekly working hours</button>
+          <p id="working-hours-status" class="muted"></p>
+        </div>
+        <div class="hours-band-section">
+          <h4>Domestic hours</h4>
+          <div id="domestic-hours-grid" class="location-hours-grid"></div>
+          <button id="domestic-hours-save-btn" class="btn">Save weekly domestic hours</button>
+          <p id="domestic-hours-status" class="muted"></p>
+        </div>
+        <p class="muted">
+          Both bands are also drawn directly on the Schedule tab's calendar as background ranges --
+          drag the edge of a day's band there to resize just that day, or hold Shift while dragging
+          to change every occurrence of that weekday instead of just this one.
+        </p>
       </div>
     </div>
   </div>

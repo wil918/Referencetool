@@ -728,6 +728,25 @@ CREATE TABLE IF NOT EXISTS daily_capacity (
 );
 """
 
+# A single row of global preferences behind the suggested-bedtime marker (see
+# scheduling.suggested_bedtime) -- sleep_target_minutes and
+# morning_routine_minutes are the two terms subtracted from tomorrow's first
+# commitment or scheduled block to land on tonight's marker,
+# bedtime_notifications_enabled is whether the week/day view should ask for
+# (or use) permission to fire a browser Notification when that time arrives.
+# Singleton, same delete-then-insert convention as ICS_FEED_SCHEMA -- there is
+# only ever one row, so no id column to key it on.
+SCHEDULE_SETTINGS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schedule_settings (
+    sleep_target_minutes INTEGER NOT NULL,
+    morning_routine_minutes INTEGER NOT NULL,
+    bedtime_notifications_enabled INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+DEFAULT_SLEEP_TARGET_MINUTES = 8 * 60
+DEFAULT_MORNING_ROUTINE_MINUTES = 30
+
 SCHEDULE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)",
     "CREATE INDEX IF NOT EXISTS idx_tasks_deliverable ON tasks(deliverable_id)",
@@ -810,6 +829,7 @@ def init_db():
         conn.execute(DOMESTIC_HOURS_SCHEMA)
         conn.execute(HOURS_OVERRIDES_SCHEMA)
         conn.execute(DAILY_CAPACITY_SCHEMA)
+        conn.execute(SCHEDULE_SETTINGS_SCHEMA)
         # Runs before SCHEDULE_INDEXES below: it rebuilds scheduled_blocks
         # wholesale on an old database, which drops any index that already
         # existed on it. Running the index-creation loop after this one means
@@ -2748,6 +2768,20 @@ def set_scheduled_block_locked(block_id, is_locked):
         )
 
 
+def move_scheduled_block(block_id, start, end, is_locked=True):
+    """Reposition a task block -- dragging it on the calendar -- and lock it
+    at the new slot in the same write, since a drag that didn't pin the
+    result would just be undone by the next replan. Distinct from
+    set_scheduled_block_locked, which only ever flips the flag at the block's
+    existing time; this is the one place scheduled_blocks.start/end changes
+    outside of a full replan."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE scheduled_blocks SET start = ?, end = ?, is_locked = ? WHERE id = ?",
+            (start, end, 1 if is_locked else 0, block_id),
+        )
+
+
 def delete_scheduled_block(block_id):
     with get_conn() as conn:
         conn.execute("DELETE FROM scheduled_blocks WHERE id = ?", (block_id,))
@@ -3394,4 +3428,35 @@ def save_daily_capacity(date, inferred_energy=None, manual_energy=None, availabl
                    manual_energy = excluded.manual_energy,
                    available_minutes = excluded.available_minutes""",
             (date, inferred_energy, manual_energy, available_minutes),
+        )
+
+
+# --- Schedule: schedule-wide settings (sleep target, morning routine, bedtime) -------
+
+
+def get_schedule_settings():
+    """Sensible defaults when no row exists yet -- same "absence is the
+    default case" convention as working_hours, just for scalars instead of a
+    weekly pattern."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM schedule_settings LIMIT 1").fetchone()
+        if not row:
+            return {
+                "sleep_target_minutes": DEFAULT_SLEEP_TARGET_MINUTES,
+                "morning_routine_minutes": DEFAULT_MORNING_ROUTINE_MINUTES,
+                "bedtime_notifications_enabled": False,
+            }
+        d = dict(row)
+        d["bedtime_notifications_enabled"] = bool(d["bedtime_notifications_enabled"])
+        return d
+
+
+def save_schedule_settings(sleep_target_minutes, morning_routine_minutes, bedtime_notifications_enabled):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM schedule_settings")
+        conn.execute(
+            """INSERT INTO schedule_settings
+                   (sleep_target_minutes, morning_routine_minutes, bedtime_notifications_enabled)
+               VALUES (?, ?, ?)""",
+            (sleep_target_minutes, morning_routine_minutes, 1 if bedtime_notifications_enabled else 0),
         )

@@ -552,6 +552,71 @@ def day_energy(date_str):
     return infer_energy(date_str)
 
 
+# --- Suggested bedtime ---------------------------------------------------------
+
+
+def _commitment_travel_minutes(commitment):
+    """The trip from home to a commitment's venue, for suggested_bedtime.
+
+    Prefers the commitment's own travel_minutes when it has one -- entered
+    directly, or pre-filled from a matching location (see COMMITMENTS_SCHEMA)
+    -- since that is the number the user actually vouched for. Falls back to
+    the linked location's travel_minutes_from_home when there's no location
+    at all (a commitment with neither is treated as at home: nothing to
+    travel)."""
+    if commitment.get("travel_minutes") is not None:
+        return commitment["travel_minutes"]
+    if commitment.get("location_id"):
+        return leg_minutes(HOME, commitment["location_id"])
+    return 0
+
+
+def suggested_bedtime(evening_date_str):
+    """When to be asleep by on the evening of `evening_date_str`, derived from
+    the first commitment or scheduled task block of the FOLLOWING day (see
+    SCHEDULE_SCOPE.md's "Suggested bedtime"):
+
+        bedtime = first thing tomorrow - travel - morning routine - sleep target
+
+    Returns None if tomorrow has nothing with a real time of day to work
+    back from -- a day-granularity block that far out has no slot to anchor
+    to (see SLOT_DETAIL_DAYS), and an empty tomorrow gives no reason to name
+    a bedtime at all. This is advisory only: it occupies no time of its own
+    and is never written to scheduled_blocks -- the caller (calendar.js)
+    draws it as a marker, not a block.
+    """
+    settings = db.get_schedule_settings()
+    tomorrow = (date.fromisoformat(evening_date_str) + timedelta(days=1)).isoformat()
+    day_after = (date.fromisoformat(tomorrow) + timedelta(days=1)).isoformat()
+
+    candidates = []
+    for commitment in db.list_commitments_between(f"{tomorrow}T00:00:00", f"{day_after}T00:00:00"):
+        if commitment["start"] < f"{tomorrow}T00:00:00":
+            continue  # started the evening before -- not "tomorrow's first thing"
+        candidates.append((commitment["start"], _commitment_travel_minutes(commitment)))
+    for block in db.list_scheduled_blocks_between(tomorrow, day_after):
+        if block["kind"] != "task" or block_granularity(block) != "slot":
+            continue
+        task = db.get_task(block["task_id"])
+        travel = leg_minutes(HOME, task["required_location_id"]) if task and task.get("required_location_id") else 0
+        candidates.append((block["start"], travel))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: c[0])
+    first_start, travel_minutes = candidates[0]
+
+    bedtime = datetime.fromisoformat(first_start) - timedelta(
+        minutes=travel_minutes + settings["morning_routine_minutes"] + settings["sleep_target_minutes"]
+    )
+    return {
+        "evening_date": evening_date_str,
+        "bedtime": bedtime.isoformat(),
+        "first_thing_start": first_start,
+        "travel_minutes": travel_minutes,
+        "morning_routine_minutes": settings["morning_routine_minutes"],
+        "sleep_target_minutes": settings["sleep_target_minutes"],
+    }
 
 
 # --- The scheduler ------------------------------------------------------------

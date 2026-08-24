@@ -184,6 +184,103 @@ def test_recomputing_capacity_does_not_clear_a_manual_override(archive):
     assert row["inferred_energy"] == scheduling.LOW_ENERGY
 
 
+# --- Suggested bedtime ----------------------------------------------------------
+
+
+def test_suggested_bedtime_derives_from_tomorrows_first_commitment(archive):
+    db.create_commitment("c1", "9am lecture", "2026-01-06T09:00:00", "2026-01-06T10:00:00")
+
+    marker = scheduling.suggested_bedtime("2026-01-05")
+
+    assert marker["evening_date"] == "2026-01-05"
+    assert marker["first_thing_start"] == "2026-01-06T09:00:00"
+    assert marker["travel_minutes"] == 0
+    # Defaults: 8h sleep + 30 min routine, no travel -- 09:00 minus 8h30 = 00:30
+    # the same calendar day, i.e. 2026-01-06T00:30:00.
+    assert marker["bedtime"] == "2026-01-06T00:30:00"
+
+
+def test_suggested_bedtime_ignores_a_commitment_starting_the_evening_before(archive):
+    # Starts before midnight and runs into tomorrow -- not "tomorrow's first
+    # thing", so it must not anchor the marker.
+    db.create_commitment("c1", "Late one", "2026-01-05T23:00:00", "2026-01-06T01:00:00")
+    db.create_commitment("c2", "Actual first thing", "2026-01-06T09:00:00", "2026-01-06T10:00:00")
+
+    marker = scheduling.suggested_bedtime("2026-01-05")
+
+    assert marker["first_thing_start"] == "2026-01-06T09:00:00"
+
+
+def test_suggested_bedtime_subtracts_travel_to_a_located_commitment(archive):
+    studio = make_location("Studio", travel_minutes_from_home=20)
+    db.create_commitment(
+        "c1", "Crit", "2026-01-06T09:00:00", "2026-01-06T10:00:00", location_id=studio,
+    )
+
+    marker = scheduling.suggested_bedtime("2026-01-05")
+
+    assert marker["travel_minutes"] == 20
+    assert marker["bedtime"] == "2026-01-06T00:10:00"
+
+
+def test_suggested_bedtime_prefers_a_commitments_own_travel_minutes(archive):
+    # A personal event's free-text location with a manually-entered travel
+    # time, distinct from any locations-table entry (see COMMITMENTS_SCHEMA).
+    db.create_commitment(
+        "c1", "Train", "2026-01-06T07:00:00", "2026-01-06T09:00:00",
+        location_name="Station", travel_minutes=10,
+    )
+
+    marker = scheduling.suggested_bedtime("2026-01-05")
+
+    assert marker["travel_minutes"] == 10
+
+
+def test_suggested_bedtime_derives_from_a_scheduled_task_block(archive):
+    task = "t1"
+    db.create_task(task, "Fabric shop")
+    db.create_scheduled_block("b1", task, "2026-01-06T08:00:00", "2026-01-06T09:00:00")
+
+    marker = scheduling.suggested_bedtime("2026-01-05")
+
+    assert marker["first_thing_start"] == "2026-01-06T08:00:00"
+
+
+def test_suggested_bedtime_ignores_a_day_granularity_block(archive):
+    task = "t1"
+    db.create_task(task, "Something weeks out")
+    db.create_scheduled_block("b1", task, "2026-01-06", "2026-01-06")
+
+    assert scheduling.suggested_bedtime("2026-01-05") is None
+
+
+def test_suggested_bedtime_is_none_with_nothing_the_next_day(archive):
+    assert scheduling.suggested_bedtime("2026-01-05") is None
+
+
+def test_suggested_bedtime_picks_the_earliest_of_several_candidates(archive):
+    db.create_commitment("c1", "Later", "2026-01-06T11:00:00", "2026-01-06T12:00:00")
+    db.create_commitment("c2", "Earlier", "2026-01-06T07:30:00", "2026-01-06T08:00:00")
+
+    marker = scheduling.suggested_bedtime("2026-01-05")
+
+    assert marker["first_thing_start"] == "2026-01-06T07:30:00"
+
+
+def test_suggested_bedtime_respects_saved_settings(archive):
+    db.save_schedule_settings(
+        sleep_target_minutes=360, morning_routine_minutes=15, bedtime_notifications_enabled=False,
+    )
+    db.create_commitment("c1", "Early start", "2026-01-06T08:00:00", "2026-01-06T09:00:00")
+
+    marker = scheduling.suggested_bedtime("2026-01-05")
+
+    # 08:00 - 6h - 15min = 01:45 the same calendar day.
+    assert marker["bedtime"] == "2026-01-06T01:45:00"
+    assert marker["sleep_target_minutes"] == 360
+    assert marker["morning_routine_minutes"] == 15
+
+
 def test_available_minutes_counts_overlapping_commitments_once(archive):
     set_working_hours(0, "09:00", "18:00")
     db.create_commitment("c1", "Studio session", "2026-01-05T10:00:00", "2026-01-05T12:00:00")

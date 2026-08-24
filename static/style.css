@@ -1592,6 +1592,20 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 .settings-section h3 { margin: 0 0 0.85rem; font-size: 1.25rem; }
 .settings-section p { margin: 0 0 1.25rem; }
 
+/* A plain field label (sleep target, morning routine) -- same stacked shape
+   as .task-advanced-grid label, this section's own not being inside a grid. */
+.settings-section label:not(.checkbox-label) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-bottom: 0.85rem;
+  max-width: 220px;
+}
+
+.settings-section .checkbox-label { margin-bottom: 0.85rem; }
+
 #similarity-status { color: var(--ink); }
 
 /* --- Modals --- */
@@ -3812,4 +3826,340 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   font-size: calc(0.78rem * var(--content-scale, 1));
   padding: calc(0.35rem * var(--content-scale, 1)) calc(0.8rem * var(--content-scale, 1));
   z-index: 1;
+}
+
+/* --- Schedule (schedule/calendar.js, schedule/schedule.js) ---
+   The week view is the primary planning surface, so it gets to break out of
+   the SPA's centred 1100px reading column -- the same :has() technique
+   .checkbox-label already relies on elsewhere in this file. */
+
+main:has(#tab-schedule.active) { max-width: 1600px; }
+
+.schedule-toolbar { display: flex; gap: 0.75rem; margin-bottom: 1rem; }
+
+.schedule-layout { display: flex; gap: 1.5rem; align-items: flex-start; }
+
+.schedule-at-risk-panel { flex: 0 0 280px; }
+
+/* --- The calendar component itself --- */
+
+.schedule-calendar { flex: 1; min-width: 0; }
+
+.schedule-calendar-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.85rem;
+}
+
+.schedule-range-label { margin-left: 0.4rem; }
+
+.schedule-empty-banner {
+  padding: 0.85rem 1.25rem;
+  border-radius: 18px;
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+  margin-bottom: 1rem;
+}
+
+.schedule-calendar-body {
+  display: flex;
+  max-height: 70vh;
+  overflow-y: auto;
+  border-radius: 18px;
+  background: var(--bg);
+  box-shadow: var(--press-sm);
+}
+
+.schedule-hour-axis {
+  position: relative;
+  flex: 0 0 3.4rem;
+  border-right: 1px solid rgba(70, 84, 95, 0.1);
+}
+
+:root[data-theme="dark"] .schedule-hour-axis { border-right-color: rgba(255, 255, 255, 0.07); }
+
+.schedule-hour-label {
+  position: absolute;
+  right: 0.5rem;
+  transform: translateY(-50%);
+  font-size: 0.68rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.schedule-day-columns {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(var(--schedule-num-days, 7), 1fr);
+}
+
+.schedule-day-col {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid rgba(70, 84, 95, 0.07);
+}
+
+:root[data-theme="dark"] .schedule-day-col { border-right-color: rgba(255, 255, 255, 0.05); }
+
+.schedule-day-col:last-child { border-right: none; }
+
+.schedule-day-col.is-today { background: rgba(194, 59, 46, 0.035); }
+
+.schedule-day-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--bg);
+  border-bottom: 1px solid rgba(70, 84, 95, 0.1);
+}
+
+:root[data-theme="dark"] .schedule-day-header { border-bottom-color: rgba(255, 255, 255, 0.07); }
+
+.schedule-day-weekday {
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.schedule-day-date { font-family: var(--serif); font-size: 0.95rem; color: var(--ink-strong); }
+
+/* The most-used control in the app (see CLAUDE.md's session prompt) --
+   plain and small, but never hidden behind a menu. Only rendered on today's
+   column (calendar.js). */
+.schedule-start-day-input {
+  margin-left: auto;
+  font-size: 0.7rem;
+  padding: 0.15rem 0.4rem;
+}
+
+.schedule-day-list { padding: 0.4rem 0.5rem; }
+
+.schedule-day-list-heading { font-size: 0.68rem; margin: 0 0 0.35rem; }
+
+.schedule-day-list-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: var(--serif);
+  font-size: 0.78rem;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.3rem;
+  border: none;
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+  color: var(--ink);
+  cursor: pointer;
+  transition: var(--press);
+}
+
+.schedule-day-list-item:hover { box-shadow: var(--raise-md); color: var(--ink-strong); }
+
+/* Same "small coloured dot, never a fill" idiom as .task-chip.generated's
+   accent dot -- see schedule/colour.js's header comment. */
+.schedule-day-list-item.has-deliverable {
+  position: relative;
+  padding-left: 1.1rem;
+}
+
+.schedule-day-list-item.has-deliverable::before {
+  content: "";
+  position: absolute;
+  left: 0.45rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--deliverable-colour);
+}
+
+.schedule-day-track {
+  position: relative;
+  /* Hour gridlines: a very faint hairline every hour, the same "chrome
+     separator" precedent as header's own border-bottom -- never a border on
+     a surface, just structure. */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(70, 84, 95, 0.06) 0,
+    rgba(70, 84, 95, 0.06) 1px,
+    transparent 1px,
+    transparent 60px
+  );
+}
+
+:root[data-theme="dark"] .schedule-day-track {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.045) 0,
+    rgba(255, 255, 255, 0.045) 1px,
+    transparent 1px,
+    transparent 60px
+  );
+}
+
+/* --- Working / domestic bands: background ranges, not surfaces --- */
+
+.schedule-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 0;
+  pointer-events: none; /* only the handles are interactive */
+}
+
+.schedule-band-working { background: var(--sunken); }
+
+/* Distinguished from working by pattern, not a new hue -- see CLAUDE.md hard
+   rule 6. A diagonal hatch in the same --edge tone used for hairlines. */
+.schedule-band-domestic {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(110, 127, 141, 0.09) 0,
+    rgba(110, 127, 141, 0.09) 6px,
+    transparent 6px,
+    transparent 12px
+  );
+}
+
+.schedule-band-handle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 8px;
+  cursor: ns-resize;
+  pointer-events: auto;
+}
+
+.schedule-band-handle-top { top: -4px; }
+.schedule-band-handle-bottom { bottom: -4px; }
+
+/* --- Blocks: commitments and scheduled task/travel/prep/break blocks --- */
+
+.schedule-block {
+  position: absolute;
+  z-index: 1;
+  overflow: hidden;
+  border-radius: 8px;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  box-sizing: border-box;
+}
+
+/* Real work and real commitments read as raised chips -- the same surface
+   language as .task-chip/.commitment-card, same colour as the page. */
+.schedule-block-task,
+.schedule-block-commitment {
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.schedule-block-task:hover { box-shadow: var(--raise-md); }
+.schedule-block-task.is-dragging { box-shadow: var(--raise-lg); z-index: 5; cursor: grabbing; }
+
+.schedule-block-commitment { cursor: default; color: var(--ink); }
+
+/* Travel, prep and break are derived, not work -- flat and recessed-reading
+   rather than raised, italic, muted, clearly secondary to a task chip. */
+.schedule-block-travel,
+.schedule-block-prep,
+.schedule-block-break {
+  background: var(--sunken);
+  box-shadow: none;
+  font-style: italic;
+  color: var(--muted);
+}
+
+.schedule-block-travel .schedule-block-label::before { content: "\2192  "; } /* → */
+.schedule-block-prep .schedule-block-label::before { content: "\2022  "; } /* a plain bullet -- distinct from travel's arrow, no new colour needed */
+
+.schedule-block-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--serif);
+}
+
+.schedule-block-commitment .schedule-block-label,
+.schedule-block-task .schedule-block-label { color: var(--ink-strong); }
+
+.schedule-block-time { display: block; font-size: 0.64rem; }
+
+.schedule-block-pin {
+  position: absolute;
+  top: 0.15rem;
+  right: 0.3rem;
+  font-size: 0.6rem;
+}
+
+.schedule-block-deliverable-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 0.3rem;
+  vertical-align: middle;
+}
+
+/* --- Suggested bedtime: a marker, never a block --- */
+
+.schedule-bedtime-marker {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  border-top: 1px dashed var(--muted);
+  pointer-events: none;
+}
+
+.schedule-bedtime-label {
+  position: absolute;
+  right: 0.4rem;
+  top: 0.15rem;
+  font-size: 0.62rem;
+  color: var(--muted);
+  background: var(--bg);
+  padding: 0 0.3rem;
+  border-radius: 6px;
+}
+
+/* --- Now line --- */
+
+.schedule-now-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  height: 2px;
+  background: var(--accent);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* --- Working/domestic hours editor modal --- */
+
+.hours-modal-box { max-width: 640px; }
+
+.hours-band-section { margin-bottom: 1.5rem; }
+.hours-band-section h4 { margin: 0 0 0.65rem; font-size: 1rem; }
+.hours-band-section .btn { margin-top: 0.5rem; }
+
+/* --- Task detail panel (schedule/task-panel.js) --- */
+
+.task-panel-box { max-width: 480px; }
+.task-panel-card { box-shadow: none; padding: 0; margin-top: 1rem; }
+
+@media (max-width: 900px) {
+  .schedule-layout { flex-direction: column; }
+  .schedule-at-risk-panel { flex: 1 1 auto; width: 100%; }
 }

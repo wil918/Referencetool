@@ -1595,6 +1595,22 @@ def api_get_task_actual(task_id):
     return jsonify(db.get_task_actual(task_id))
 
 
+@app.get("/api/tasks/<task_id>/blocks")
+def api_get_task_blocks(task_id):
+    """Every scheduled block this task has ever had, oldest first -- what the
+    calendar's task panel (schedule/task-panel.js) reads to find the task's
+    current slot after opening it from a click, the same way tasks.js's own
+    card finds it from GET /api/schedule's blocks list. A dedicated route
+    rather than making the caller fetch and filter the whole schedule, which
+    has no notion of "just this task" and needs a bounded date range."""
+    if not db.get_task(task_id):
+        abort(404)
+    blocks = db.list_scheduled_blocks_for_task(task_id)
+    for block in blocks:
+        block["granularity"] = scheduling.block_granularity(block)
+    return jsonify(blocks)
+
+
 @app.post("/api/tasks/<task_id>/complete")
 def api_complete_task(task_id):
     """One-tap completion -- the COMPLETED outcome (see
@@ -2108,6 +2124,52 @@ def _is_valid_date(date_str):
         return False
 
 
+@app.get("/api/schedule-settings")
+def api_get_schedule_settings():
+    return jsonify(db.get_schedule_settings())
+
+
+@app.put("/api/schedule-settings")
+def api_save_schedule_settings():
+    """Whole-object replace, same convention as the hours endpoints -- the
+    settings panel (session 9's bedtime section) always submits all three
+    fields together."""
+    body = request.get_json(force=True, silent=True) or {}
+    current = db.get_schedule_settings()
+    sleep_target = body.get("sleep_target_minutes", current["sleep_target_minutes"])
+    morning_routine = body.get("morning_routine_minutes", current["morning_routine_minutes"])
+    notify = body.get("bedtime_notifications_enabled", current["bedtime_notifications_enabled"])
+    if not isinstance(sleep_target, (int, float)) or sleep_target <= 0:
+        return jsonify({"error": "sleep_target_minutes must be a positive number"}), 400
+    if not isinstance(morning_routine, (int, float)) or morning_routine < 0:
+        return jsonify({"error": "morning_routine_minutes must be zero or more"}), 400
+    db.save_schedule_settings(int(sleep_target), int(morning_routine), bool(notify))
+    return jsonify(db.get_schedule_settings())
+
+
+@app.get("/api/schedule/bedtimes")
+def api_list_suggested_bedtimes():
+    """The suggested-bedtime marker (see scheduling.suggested_bedtime) for
+    every evening in [start, end] -- one calendar fetch for a whole visible
+    week rather than one request per day. Evenings with nothing to derive a
+    bedtime from (see suggested_bedtime's None case) are simply omitted."""
+    start = request.args.get("start")
+    end = request.args.get("end")
+    if not start or not end or not _is_valid_date(start) or not _is_valid_date(end):
+        return jsonify({"error": "start and end must both be YYYY-MM-DD"}), 400
+    day = date.fromisoformat(start)
+    stop = date.fromisoformat(end)
+    if (stop - day).days > scheduling.MAX_HORIZON_DAYS:
+        return jsonify({"error": "range is too wide"}), 400
+    markers = []
+    while day <= stop:
+        marker = scheduling.suggested_bedtime(day.isoformat())
+        if marker:
+            markers.append(marker)
+        day += timedelta(days=1)
+    return jsonify(markers)
+
+
 @app.get("/api/capacity/<date_str>")
 def api_get_daily_capacity(date_str):
     if not _is_valid_date(date_str):
@@ -2191,6 +2253,38 @@ def api_lock_scheduled_block(block_id):
         return jsonify({"error": "a day-granularity block has no slot to lock to"}), 400
 
     db.set_scheduled_block_locked(block_id, bool(body["is_locked"]))
+    return jsonify(db.get_scheduled_block(block_id))
+
+
+@app.put("/api/schedule/blocks/<block_id>/move")
+def api_move_scheduled_block(block_id):
+    """Reposition a task block by dragging it on the calendar (week.js) --
+    sets a new start (its length carries over unchanged) and always locks it
+    there, same slot-only rule as api_lock_scheduled_block. A scoped variant
+    of that route rather than a change to it: locking in place and locking at
+    a new place are different gestures with different bodies.
+
+    Never reflows anything else by itself -- the caller follows this with
+    POST /api/schedule/plan so everything unlocked replans around the new
+    pin, same as any other lock."""
+    block = db.get_scheduled_block(block_id)
+    if not block:
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    if "start" not in body:
+        return jsonify({"error": "start is required"}), 400
+    if block["kind"] != "task":
+        return jsonify({"error": "only a task block can be moved"}), 400
+    if scheduling.block_granularity(block) != "slot":
+        return jsonify({"error": "a day-granularity block has no slot to move to"}), 400
+    try:
+        new_start = datetime.fromisoformat(body["start"])
+    except (TypeError, ValueError):
+        return jsonify({"error": "start must be an ISO datetime"}), 400
+
+    duration = datetime.fromisoformat(block["end"]) - datetime.fromisoformat(block["start"])
+    new_end = new_start + duration
+    db.move_scheduled_block(block_id, new_start.isoformat(), new_end.isoformat(), is_locked=True)
     return jsonify(db.get_scheduled_block(block_id))
 
 
