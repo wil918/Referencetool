@@ -203,7 +203,7 @@ nav { display: flex; gap: 0.6rem; flex-wrap: wrap; }
 }
 
 /* display above beats the hidden attribute's UA rule, so say it again. */
-.btn[hidden], .tab-btn[hidden], .nav-link[hidden] { display: none; }
+.btn[hidden], .tab-btn[hidden], .nav-link[hidden], .task-at-risk-panel[hidden] { display: none; }
 
 /* --- Press-pulse: the click animation for every "light" button (the tab
    bar, checkbox-style selection buttons, the 2D graph's view toggles).
@@ -1030,7 +1030,100 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   background: transparent;
 }
 
-.task-card-actions { display: flex; justify-content: flex-end; margin-top: 1rem; }
+.task-card-actions { margin-top: 1rem; }
+
+.task-card-outcome-buttons { display: flex; justify-content: flex-end; gap: 0.5rem; flex-wrap: wrap; }
+
+/* The inline "record what's left" form a Partially completed tap opens in
+   place, rather than a modal -- see tasks.js's makePartialForm. Empty until
+   then, so it takes up no space on an ordinary card. */
+.task-partial-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+}
+
+.task-partial-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.task-partial-form input[type="number"] {
+  width: 6rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 12px;
+  box-shadow: var(--press-sm);
+  background: var(--bg);
+  color: var(--ink);
+}
+
+/* A task's current slot, and the control to pin it there -- see
+   scheduling._seed_locked_blocks. Only a real time of day gets the pin
+   button (day-granularity blocks have no slot to lock to). */
+.task-schedule-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  font-size: 0.78rem;
+}
+
+.task-pin-btn {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.72rem;
+}
+
+/* Pressed-in reads as "engaged", the same convention .folder-chip.active
+   uses -- a locked slot looks held down rather than merely hovered. */
+.task-pin-btn.active { box-shadow: var(--press-sm); color: var(--ink-strong); }
+
+.task-slip-badge {
+  font-family: var(--sans);
+  font-size: 0.7rem;
+  color: var(--accent);
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  box-shadow: var(--raise-sm);
+  white-space: nowrap;
+}
+
+/* A read-only rundown of what's unreachable and what keeps slipping --
+   surfaced above the task list rather than buried in a calendar view that
+   doesn't exist yet (see SCHEDULE_SCOPE.md's "At-risk surface"). Hidden
+   entirely (see tasks.js) when there's nothing to report. */
+.task-at-risk-panel {
+  padding: 1.1rem 1.5rem;
+  border-radius: 22px;
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+  margin-bottom: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.task-at-risk-section h4 {
+  font-family: var(--serif);
+  font-size: 0.85rem;
+  color: var(--ink-strong);
+  margin: 0 0 0.5rem;
+}
+
+.task-at-risk-section p,
+.task-at-risk-section li {
+  font-size: 0.8rem;
+  color: var(--ink);
+  margin: 0 0 0.3rem;
+}
+
+.task-at-risk-section ul { margin: 0; padding-left: 1.1rem; }
 
 /* --- Personal events (commitments.js) ---
    Reachable from the Tasks tab, same as Locations and Calendar. A plain

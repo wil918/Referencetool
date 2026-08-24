@@ -2563,6 +2563,19 @@ def list_all_task_dependencies():
         return [dict(r) for r in rows]
 
 
+def list_dependent_task_ids(depends_on_task_id):
+    """Every task that depends on `depends_on_task_id` -- the reverse of
+    list_task_dependencies. What a partial outcome needs to repoint: if B is
+    in this list for A and A goes partial, B's edge has to move from A to the
+    remainder (see scheduling.resolve_partial)."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT task_id FROM task_dependencies WHERE depends_on_task_id = ?",
+            (depends_on_task_id,),
+        ).fetchall()
+        return [r["task_id"] for r in rows]
+
+
 def task_dependency_cycle(task_id, depends_on_task_id):
     """The chain of existing dependencies that would close into a cycle if
     task_id were made to depend on depends_on_task_id -- as a list of task ids
@@ -2687,12 +2700,57 @@ def create_scheduled_block(block_id, task_id, start, end, kind="task", is_locked
         )
 
 
+def get_scheduled_block(block_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM scheduled_blocks WHERE id = ?", (block_id,)).fetchone()
+        return _scheduled_block_to_dict(row) if row else None
+
+
 def list_scheduled_blocks_for_task(task_id):
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM scheduled_blocks WHERE task_id = ? ORDER BY start", (task_id,)
         ).fetchall()
         return [_scheduled_block_to_dict(r) for r in rows]
+
+
+def list_locked_scheduled_blocks():
+    """Every locked task block, in start order -- what a replan has to seed
+    back into the walk so a pin survives it (see scheduling.plan). Only
+    'task' blocks are ever locked: a travel or break block is derived from
+    the placements around it and has nothing of its own to pin."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM scheduled_blocks WHERE is_locked = 1 AND kind = 'task' "
+            "ORDER BY start, id"
+        ).fetchall()
+        return [_scheduled_block_to_dict(r) for r in rows]
+
+
+def list_past_task_blocks(before):
+    """Every 'task' block that starts before `before` (an ISO moment) --
+    candidates for scheduling.resolve_lapsed_blocks to check for a task that
+    was never explicitly resolved. Unlocked and locked alike: a lock protects
+    a block from being *moved*, not from being asked whether it happened."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM scheduled_blocks WHERE kind = 'task' AND start < ? ORDER BY start, id",
+            (before,),
+        ).fetchall()
+        return [_scheduled_block_to_dict(r) for r in rows]
+
+
+def set_scheduled_block_locked(block_id, is_locked):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE scheduled_blocks SET is_locked = ? WHERE id = ?",
+            (1 if is_locked else 0, block_id),
+        )
+
+
+def delete_scheduled_block(block_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM scheduled_blocks WHERE id = ?", (block_id,))
 
 
 def list_scheduled_blocks_between(range_start, range_end):
@@ -2713,18 +2771,31 @@ def list_scheduled_blocks_between(range_start, range_end):
         return [_scheduled_block_to_dict(r) for r in rows]
 
 
-def replace_scheduled_blocks(blocks):
-    """Replace every scheduled block with this plan's, in one transaction.
+def replace_scheduled_blocks(blocks, cutoff=None):
+    """Replace scheduled blocks with this plan's, in one transaction.
 
-    Wholesale, same contract as save_working_hours: the table IS the current
-    plan, and merging a new plan into the remains of an old one would leave
-    blocks for work the new plan placed elsewhere. Each block supplies its own
-    id -- the scheduler derives ids from the placement so an unmoved block
-    keeps its id across replans (see scheduling._block_id).
+    Wholesale from `cutoff` (an ISO moment) onward, same contract as
+    save_working_hours for the window it covers: that part of the table IS
+    the current plan, and merging a new plan into the remains of an old one
+    would leave blocks for work the new plan placed elsewhere. Each block
+    supplies its own id -- the scheduler derives ids from the placement so an
+    unmoved block keeps its id across replans (see scheduling._block_id).
+
+    Anything starting before `cutoff` is left alone. plan() never places
+    there -- today's already-passed hours are never planned into, and nothing
+    earlier is either -- so those rows are history: a completed or partial
+    task's record of when it actually happened, or a not-completed block
+    resolve_lapsed_blocks hasn't got to yet. Rewriting them wholesale on every
+    replan would erase that the moment a plan runs the next day. `cutoff=None`
+    keeps the old wholesale-everything behaviour, which is what a caller with
+    no notion of "now" (or a test seeding the table directly) wants.
     """
     generated_at = datetime.now(timezone.utc).isoformat()
     with get_conn() as conn:
-        conn.execute("DELETE FROM scheduled_blocks")
+        if cutoff is None:
+            conn.execute("DELETE FROM scheduled_blocks")
+        else:
+            conn.execute("DELETE FROM scheduled_blocks WHERE start >= ?", (cutoff,))
         conn.executemany(
             """INSERT INTO scheduled_blocks
                    (id, task_id, commitment_id, start, end, is_locked, kind, generated_at)

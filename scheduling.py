@@ -13,6 +13,7 @@ in (see COMMITMENTS_SCHEMA in db.py, and ics_import.py's module docstring for
 why that's the form that survives a DST change without drifting).
 """
 import hashlib
+import uuid
 from bisect import insort
 from datetime import date, datetime, time, timedelta
 
@@ -664,6 +665,24 @@ AT_RISK_LOCATION = "location"
 AT_RISK_NO_SUPPORT = "no_support"
 AT_RISK_FINISHING = "finishing"
 
+# How many times a task can slip before it says so on its own, rather than
+# just quietly reappearing in a later plan every time. Three, not one --
+# missing a single slot is normal life; a task that keeps missing is
+# underestimated, blocked, or landing on days whose energy can't carry it,
+# and that pattern is only visible once it's repeated (see
+# SCHEDULE_SCOPE.md's "three outcomes" section).
+CHRONIC_SLIP_THRESHOLD = 3
+
+# The three ways a scheduled block can resolve (see SCHEDULE_SCOPE.md's "The
+# three outcomes"). Not stored anywhere -- these are the values a caller
+# passes to describe which of resolve_completed/resolve_partial/
+# resolve_not_completed it wants, kept here so app.py can validate against
+# the same list rather than hard-coding its own.
+OUTCOME_COMPLETED = "completed"
+OUTCOME_PARTIAL = "partial"
+OUTCOME_NOT_COMPLETED = "not_completed"
+OUTCOMES = (OUTCOME_COMPLETED, OUTCOME_PARTIAL, OUTCOME_NOT_COMPLETED)
+
 
 class DependencyCycleError(Exception):
     """task_dependencies contains a cycle, so no order satisfies it.
@@ -719,6 +738,23 @@ def plan(now=None, finishing_buffer_minutes=None):
     days = _build_days(anchor, horizon_end, required_locations)
     legs = _leg_table(days, required_locations)
     slot_dates = {d["date"] for d in days if d["granularity"] == "slot"}
+    # Every locked block for a task still in this plan's schedulable set,
+    # grouped by the date it falls on -- what _walk seeds into each day
+    # before its own greedy placement runs, so a pin survives a replan (see
+    # SCHEDULE_SCOPE.md's "Pinning"). A lock on a task that's since been
+    # completed, gone partial, been abandoned or deleted is simply not in
+    # `by_id` any more and drops out here -- nothing left to keep pinned.
+    # Restricted to slot-precision days for the same reason chain_blocks is
+    # below: a lock names a real time of day, which day-granularity days
+    # don't have.
+    locked_by_date = {}
+    for block in db.list_locked_scheduled_blocks():
+        if block["task_id"] not in by_id:
+            continue
+        day_str = block["start"][:10]
+        if day_str not in slot_dates:
+            continue
+        locked_by_date.setdefault(day_str, []).append(block)
     # Every home-first chain block that falls on a slot-precision day, for
     # EMISSION only -- the blocking itself already happened inside
     # free_intervals/domestic_free_intervals via _home_first_blocks_between,
@@ -751,7 +787,7 @@ def plan(now=None, finishing_buffer_minutes=None):
 
     no_break_dates = set()
     placements, travel, breaks, break_dates = _walk(
-        days, ranked, deps, meta, legs, protected, no_break_dates
+        days, ranked, deps, meta, legs, protected, locked_by_date, no_break_dates
     )
     at_risk = _at_risk(tasks, placements, deps, meta, days, deliverables, anchor,
                        protected, finishing, legs)
@@ -777,7 +813,7 @@ def plan(now=None, finishing_buffer_minutes=None):
         day_date = queue.pop(0)
         trial_no_break = no_break_dates | {day_date}
         trial_placements, trial_travel, trial_breaks, trial_break_dates = _walk(
-            days, ranked, deps, meta, legs, protected, trial_no_break
+            days, ranked, deps, meta, legs, protected, locked_by_date, trial_no_break
         )
         trial_at_risk = _at_risk(tasks, trial_placements, deps, meta, days, deliverables, anchor,
                                  protected, finishing, legs)
@@ -805,6 +841,12 @@ def plan(now=None, finishing_buffer_minutes=None):
         "blocks": blocks,
         "at_risk": at_risk,
         "at_risk_by_deliverable": _at_risk_by_deliverable(at_risk, tasks, deliverables),
+        # Surfaced alongside at-risk rather than folded into it: a chronic
+        # slipper may have placed just fine THIS time (see
+        # CHRONIC_SLIP_THRESHOLD) -- its problem is the pattern across past
+        # replans, not today's placement, so it needs its own list rather
+        # than hijacking a reason code that means "didn't fit."
+        "chronically_slipping": _chronically_slipping(tasks),
         # A day loses its break ONLY to save something on the at-risk list --
         # this is how that trade says so, rather than the break just quietly
         # not being there.
@@ -829,15 +871,211 @@ def plan(now=None, finishing_buffer_minutes=None):
 
 
 def replan(now=None, finishing_buffer_minutes=None):
-    """Run the scheduler and replace scheduled_blocks with its output.
+    """Resolve whatever the calendar has already decided on its own, then run
+    the scheduler and replace the future with its output.
 
-    Wholesale, not a merge: the blocks table is the plan, and a plan that
-    kept fragments of an older one would drift out of step with the tasks it
-    claims to place. Task rows are untouched -- blocks are the only output.
+    Two steps, in order:
+
+    1. resolve_lapsed_blocks(now) -- every past task block nobody ever
+       explicitly resolved is treated as NOT COMPLETED (see
+       SCHEDULE_SCOPE.md's "three outcomes"). This is the only place that
+       happens automatically; plan() itself stays pure and never mutates a
+       task row.
+    2. plan(now, ...), committed via db.replace_scheduled_blocks with a
+       cutoff at the same anchor. That commit only replaces `scheduled_blocks`
+       from the anchor forward -- anything already in the past is left alone,
+       whether it's a completed/partial task's genuine history or a
+       not-completed block resolve_lapsed_blocks hasn't reached yet. A locked
+       block in the future window is still replaced *as a row* (same id, same
+       content) rather than literally untouched, because plan() re-seeds it
+       into the walk itself (see _seed_locked_blocks) -- "survives a replan"
+       means its slot doesn't move, not that the row is never rewritten.
+
+    Safe to call repeatedly with an unchanged anchor and unchanged data: step
+    1 finds nothing new to resolve (already-resolved blocks are gone, not
+    just marked), and step 2's replace is a no-op in content even though it
+    still runs (see db.replace_scheduled_blocks and _block_id).
     """
-    result = plan(now, finishing_buffer_minutes)
-    db.replace_scheduled_blocks(result["blocks"])
+    anchor = _anchor(now)
+    resolve_lapsed_blocks(anchor)
+    result = plan(anchor, finishing_buffer_minutes)
+    db.replace_scheduled_blocks(result["blocks"], cutoff=result["anchor"])
     return result
+
+
+# --- Outcomes: completing, partially completing, and not completing --------------
+#
+# A scheduled block resolves one of three ways (SCHEDULE_SCOPE.md's "three
+# outcomes"), and each is its own function here rather than one with an
+# `outcome` flag: the three do genuinely different things to the task, its
+# blocks and (for partial) the dependency graph, and a shared function would
+# just be an if/elif in a trench coat. app.py calls whichever of these a
+# scoped route needs; none of them touch plan()'s purity, since none of them
+# run as part of it.
+
+
+def resolve_completed(task_id, actual_minutes, actual_difficulty=None,
+                      actual_importance=None, notes=None, now=None):
+    """Record a COMPLETED outcome: the actuals as given, the task closed as
+    'done', and any of its own blocks still ahead of `now` dropped -- see
+    _drop_future_blocks. A block already in the past (the ordinary case: you
+    did the work, then tapped Done) is left exactly where it is, becoming the
+    durable record of when it actually happened.
+    """
+    db.save_task_actual(task_id, actual_minutes=actual_minutes,
+                        actual_difficulty=actual_difficulty,
+                        actual_importance=actual_importance, notes=notes)
+    db.update_task(task_id, status="done")
+    _drop_future_blocks(task_id, now)
+    return {"task": db.get_task(task_id), "actual": db.get_task_actual(task_id)}
+
+
+# Everything a remainder task inherits from the original unless the caller
+# overrides it -- every field SCHEDULE_SCOPE.md's "three outcomes" names
+# (title, description, project, deliverable, location, support level,
+# importance, difficulty, is_finishing) plus deadline, measurable_goal and
+# is_domestic, which the same reasoning obviously extends to: nothing here
+# should silently reset just because it wasn't named explicitly. est_minutes
+# is deliberately absent -- see resolve_partial.
+REMAINDER_INHERITED_COLUMNS = (
+    "title", "description", "measurable_goal", "deadline", "project_id", "deliverable_id",
+    "required_location_id", "support_level", "importance", "difficulty", "is_finishing",
+    "is_domestic",
+)
+
+
+def resolve_partial(task_id, actual_minutes, est_minutes, actual_difficulty=None,
+                    actual_importance=None, notes=None, now=None, **remainder_overrides):
+    """Record a PARTIALLY COMPLETED outcome: the original is closed with the
+    time actually spent, and a remainder task is spawned to pick up where it
+    left off, chained back by continues_task_id.
+
+    `actual_minutes` is what this segment took, recorded on the ORIGINAL --
+    but never read as a completed data point against the original's own
+    estimate in isolation (that reading is backwards: a 3h task with 2h spent
+    and not finished did not take 2 hours). The estimator instead trains on
+    the whole chain once its final link completes, summing every segment's
+    actual against the FIRST link's estimate -- a job for the estimator
+    (session 8), not for this function, but the reason actual_minutes is
+    still recorded here rather than withheld.
+
+    `est_minutes` is a FRESH estimate for what remains, always supplied by
+    the caller and never inherited -- "the same estimate as before" is never
+    right for a task that's already partly done. Every field in
+    REMAINDER_INHERITED_COLUMNS carries over unless named in
+    `remainder_overrides`, keeping the remainder editable without making
+    every field mandatory input.
+
+    Dependents of the original are repointed to the remainder (see
+    _repoint_dependents) -- the single most likely bug in this whole feature
+    if it's missed.
+    """
+    task = db.get_task(task_id)
+    if not task:
+        raise ValueError(f"no such task: {task_id}")
+
+    db.save_task_actual(task_id, actual_minutes=actual_minutes,
+                        actual_difficulty=actual_difficulty,
+                        actual_importance=actual_importance, notes=notes)
+    db.update_task(task_id, status="partial")
+    _drop_future_blocks(task_id, now)
+
+    fields = {column: task[column] for column in REMAINDER_INHERITED_COLUMNS}
+    fields.update({
+        key: value for key, value in remainder_overrides.items()
+        if key in REMAINDER_INHERITED_COLUMNS
+    })
+    title = fields.pop("title")
+    remainder_id = str(uuid.uuid4())
+    db.create_task(
+        remainder_id, title, est_minutes=est_minutes, status="pending",
+        continues_task_id=task_id, **fields
+    )
+    _repoint_dependents(task_id, remainder_id)
+    return {"original": db.get_task(task_id), "remainder": db.get_task(remainder_id)}
+
+
+def resolve_not_completed(task_id):
+    """Record a NOT COMPLETED outcome: the task returns to the pool
+    unchanged and slip_count goes up by one. No actual is recorded -- never
+    starting a task says nothing about how long it takes, and an actual built
+    from that would teach the estimator from a number that never happened.
+
+    Every one of the task's own scheduled blocks, past or future, is dropped:
+    none of them describe anything true any more once the task is back in the
+    pool, and the durable trace of the slip is slip_count, not a stale block
+    (see db.replace_scheduled_blocks's "history" note). The same function
+    serves an explicit tap and resolve_lapsed_blocks's automatic detection of
+    a block nobody ever acted on -- the outcome is identical either way.
+    """
+    task = db.get_task(task_id)
+    if not task:
+        raise ValueError(f"no such task: {task_id}")
+    db.update_task(task_id, status="pending", slip_count=task["slip_count"] + 1)
+    for block in db.list_scheduled_blocks_for_task(task_id):
+        db.delete_scheduled_block(block["id"])
+    return db.get_task(task_id)
+
+
+def resolve_lapsed_blocks(now=None):
+    """Auto-resolve every past task block nobody ever explicitly resolved, as
+    NOT COMPLETED -- the fallback half of SCHEDULE_SCOPE.md's "a past block
+    that was never resolved is treated as NOT COMPLETED and returns to the
+    pool". Returns the ids of the tasks it resolved.
+
+    Only a task still in SCHEDULABLE_STATUSES qualifies: one whose status has
+    already moved to done, partial or abandoned was resolved explicitly
+    before the scanner got to it, and its block is left alone precisely
+    because nothing here touches it -- that's the "is history and is never
+    rewritten" half of the same rule.
+
+    Idempotent by construction rather than by checking a flag:
+    resolve_not_completed deletes the block it resolves, so a block already
+    processed simply isn't found the next time this runs. Called from
+    replan(), never from plan() -- plan() stays pure, and this is the
+    mutation that makes replanning safe to repeat.
+    """
+    anchor = _anchor(now)
+    resolved = []
+    for block in db.list_past_task_blocks(anchor.isoformat()):
+        task = db.get_task(block["task_id"])
+        if not task or task["status"] not in SCHEDULABLE_STATUSES:
+            continue
+        resolve_not_completed(task["id"])
+        resolved.append(task["id"])
+    return resolved
+
+
+def _drop_future_blocks(task_id, now=None):
+    """Delete this task's own scheduled blocks that are still ahead of `now`
+    -- called after resolving an outcome, when the task no longer needs
+    whatever slot it used to hold. Left otherwise, a stale future block would
+    sit in the table misdescribing the plan until the next replan happened to
+    sweep it up. A block already in the past is left alone: it's genuine
+    history, not a stale placeholder (see resolve_completed and
+    resolve_partial, the only callers).
+    """
+    anchor = _anchor(now)
+    cutoff = anchor.isoformat()
+    for block in db.list_scheduled_blocks_for_task(task_id):
+        if block["start"] >= cutoff:
+            db.delete_scheduled_block(block["id"])
+
+
+def _repoint_dependents(old_task_id, new_task_id):
+    """Move every dependency edge pointing at old_task_id onto new_task_id.
+
+    THE SINGLE MOST LIKELY BUG in a partial outcome (SCHEDULE_SCOPE.md's own
+    words): if B depends on A and A goes partial, leaving B's edge pointed at
+    the now-closed A would let the scheduler treat B's prerequisite as
+    finished and place B too early. A fresh edge to the remainder carries no
+    cycle risk -- the remainder is a brand new task with no dependencies of
+    its own yet -- so this trusts the move rather than running
+    task_dependency_cycle for it.
+    """
+    for dependent_id in db.list_dependent_task_ids(old_task_id):
+        db.remove_task_dependency(dependent_id, old_task_id)
+        db.add_task_dependency(dependent_id, new_task_id)
 
 
 # --- Anchoring and dates -------------------------------------------------------
@@ -1625,7 +1863,44 @@ def _maybe_insert_break(day, items, legs, meta):
     return day_legs
 
 
-def _walk(days, ranked, deps, meta, legs, protected, no_break_dates=frozenset()):
+def _seed_locked_blocks(day, items, day_legs, locked, meta, legs):
+    """Fold this day's locked blocks into `items`/`day_legs` before the
+    walk's own placement runs, exactly as if an earlier round of the walk had
+    just placed them -- so the greedy loop's own `occupied` check keeps
+    everything else off their time, and _day_layout routes the day's other
+    travel around wherever they put you.
+
+    Returns (items, day_legs, placed) where placed is [(task_id, start,
+    finish)] for the caller to fold into `placements`/`completion`, the same
+    bookkeeping the greedy loop itself does after a placement.
+
+    A lock is honoured regardless of whether the day's free time still
+    contains it -- that's what "immovable" means (see SCHEDULE_SCOPE.md's
+    "Pinning"). Only the travel *around* it is best-effort: if working hours
+    have since narrowed enough that _day_layout can no longer lay the day out
+    cleanly, the existing `day_legs` are kept rather than dropping the lock
+    to make room.
+    """
+    placed = []
+    for block in sorted(locked, key=lambda b: (b["start"], b["id"])):
+        tid = block["task_id"]
+        info = meta.get(tid)
+        if info is None:
+            continue  # its task left the schedulable set since the block was locked
+        start = datetime.fromisoformat(block["start"])
+        finish = datetime.fromisoformat(block["end"])
+        candidate = {"task_id": tid, "start": start, "finish": finish,
+                     "location": info["location"], "kind": "task"}
+        items = sorted(items + [candidate], key=lambda item: (item["start"], item["task_id"] or ""))
+        layout = _day_layout(day["intervals"], items, legs)
+        if layout is not None:
+            day_legs = layout
+        placed.append((tid, start, finish))
+    return items, day_legs, placed
+
+
+def _walk(days, ranked, deps, meta, legs, protected, locked_by_date=None,
+         no_break_dates=frozenset()):
     """Walk the days forward, filling each with the best work it can take.
 
     For every day: what is free on it is already known, so the eligible set is
@@ -1635,6 +1910,11 @@ def _walk(days, ranked, deps, meta, legs, protected, no_break_dates=frozenset())
     with the support it needs, outside anyone's protected finishing time (see
     _eligible_intervals). The day is offered round again until nothing else
     can be squeezed in.
+
+    Locked blocks are seeded into each slot-precision day FIRST, before any of
+    that -- see _seed_locked_blocks. They are placed, not merely eligible: the
+    greedy loop never reconsiders them, and everything else is laid out
+    (travel included) around wherever they already sit.
 
     AMONG ELIGIBLE TASKS OF COMPARABLE SCORE, THE ONE THAT MOVES YOU LEAST
     WINS. A strictly greedy urgency-first walk will send you studio -> shop ->
@@ -1684,6 +1964,21 @@ def _walk(days, ranked, deps, meta, legs, protected, no_break_dates=frozenset())
         by_day = day["granularity"] == "day"
         allow_breaks = not by_day and day["date"] not in no_break_dates
         items, day_legs = [], []
+        if not by_day and locked_by_date and day["date"] in locked_by_date:
+            items, day_legs, seeded = _seed_locked_blocks(
+                day, items, day_legs, locked_by_date[day["date"]], meta, legs
+            )
+            for tid, start, finish in seeded:
+                placements[tid] = {
+                    "date": day["date"],
+                    "granularity": day["granularity"],
+                    "start": start.isoformat(),
+                    "end": finish.isoformat(),
+                    "minutes": meta[tid]["minutes"],
+                    "location_id": meta[tid]["location"],
+                    "locked": True,
+                }
+                completion[tid] = finish
         while True:
             away_remains = (
                 _away_work_remains(day, ranked, meta, placements, protected)
@@ -1779,7 +2074,7 @@ def _blocks(placements, travel, breaks, chain_blocks):
             "start": placement["start"],
             "end": placement["end"],
             "kind": "task",
-            "is_locked": False,
+            "is_locked": placement.get("locked", False),
             "granularity": placement["granularity"],
             "minutes": placement["minutes"],
             "location_id": placement["location_id"],
@@ -2060,6 +2355,28 @@ def _at_risk_by_deliverable(at_risk, tasks, deliverables):
     # Soonest due first, and by id where two share a date -- the order someone
     # reading the list would put them in themselves.
     rows.sort(key=lambda r: (r["due_at"] or "9999-12-31", r["deliverable_id"]))
+    return rows
+
+
+def _chronically_slipping(tasks):
+    """Every still-outstanding task that has slipped CHRONIC_SLIP_THRESHOLD
+    times or more -- highest slip_count first, ties by id, so the worst
+    offender always leads. Not filtered by at-risk status: a task can be
+    placed cleanly this run and still be the one that keeps getting bumped
+    plan after plan, and that pattern is exactly what this surfaces (see
+    SCHEDULE_SCOPE.md's "three outcomes")."""
+    rows = [
+        {
+            "task_id": task["id"],
+            "title": task["title"],
+            "slip_count": task["slip_count"],
+            "project_id": task.get("project_id"),
+            "deliverable_id": task.get("deliverable_id"),
+        }
+        for task in tasks
+        if task.get("slip_count", 0) >= CHRONIC_SLIP_THRESHOLD
+    ]
+    rows.sort(key=lambda r: (-r["slip_count"], r["task_id"]))
     return rows
 
 

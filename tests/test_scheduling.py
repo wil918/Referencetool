@@ -385,6 +385,126 @@ def test_a_replan_keeps_the_ids_of_blocks_that_did_not_move(archive):
     assert first == second != []
 
 
+# --- Pinning, past blocks and replan safety --------------------------------------
+
+
+def test_a_locked_block_survives_a_replan_and_everything_schedules_around_it(archive):
+    working_week()
+    task("t-a", "Cut the toile", est_minutes=120)
+    scheduling.replan(MONDAY)
+    block = db.list_scheduled_blocks_for_task("t-a")[0]
+    db.set_scheduled_block_locked(block["id"], True)
+
+    # A second, more urgent task that would otherwise win the same morning
+    # slot -- the point of a lock is that it doesn't get the choice.
+    task("t-b", "Sew the toile", est_minutes=120, importance=5)
+
+    result = scheduling.replan(MONDAY)
+
+    relocked = placed(result)["t-a"]
+    assert relocked["id"] == block["id"]
+    assert relocked["start"] == block["start"]
+    assert relocked["end"] == block["end"]
+    assert relocked["is_locked"] is True
+
+    other = placed(result)["t-b"]
+    assert not (other["start"] < relocked["end"] and relocked["start"] < other["end"])
+
+
+def test_unlocking_a_block_frees_it_to_move_on_the_next_replan(archive):
+    working_week()
+    task("t-a", est_minutes=60)
+    scheduling.replan(MONDAY)
+    block = db.list_scheduled_blocks_for_task("t-a")[0]
+    db.set_scheduled_block_locked(block["id"], True)
+    scheduling.replan(MONDAY)
+    db.set_scheduled_block_locked(block["id"], False)
+
+    # A commitment now sits across the locked slot -- with the lock gone,
+    # the next replan is free to place t-a somewhere that actually fits.
+    db.create_commitment("c1", "Crit", f"{MONDAY}T09:00:00", f"{MONDAY}T10:00:00")
+    result = scheduling.replan(MONDAY)
+
+    relaid = placed(result)["t-a"]
+    assert relaid["start"] != block["start"]
+    assert relaid["is_locked"] is False
+
+
+def test_a_resolved_past_block_is_left_alone_by_a_later_replan(archive):
+    working_week()
+    task("t-a", est_minutes=60)
+    scheduling.replan(MONDAY)
+    block = db.list_scheduled_blocks_for_task("t-a")[0]
+
+    # Completed well after the block's own time -- the ordinary case.
+    scheduling.resolve_completed("t-a", actual_minutes=55, now=f"{MONDAY}T12:00:00")
+    scheduling.replan(WEDNESDAY)
+
+    assert db.get_scheduled_block(block["id"]) == block
+
+
+def test_a_lapsed_unresolved_block_is_auto_resolved_as_not_completed(archive):
+    working_week()
+    task("t-a", est_minutes=60)
+    scheduling.replan(MONDAY)
+    stale_id = db.list_scheduled_blocks_for_task("t-a")[0]["id"]
+
+    # Nobody ever tapped an outcome on it, and its time has now passed.
+    scheduling.replan(WEDNESDAY)
+
+    task_row = db.get_task("t-a")
+    assert task_row["status"] == "pending"
+    assert task_row["slip_count"] == 1
+    assert db.get_task_actual("t-a") is None
+    assert stale_id not in [b["id"] for b in db.list_scheduled_blocks_for_task("t-a")]
+    # Back in the pool: replanned somewhere in the new horizon rather than
+    # silently dropped.
+    assert db.list_scheduled_blocks_for_task("t-a") != []
+
+
+def test_resolving_lapsed_blocks_twice_does_not_double_count_the_slip(archive):
+    working_week()
+    task("t-a", est_minutes=60)
+    scheduling.replan(MONDAY)
+
+    scheduling.resolve_lapsed_blocks(WEDNESDAY)
+    scheduling.resolve_lapsed_blocks(WEDNESDAY)
+
+    assert db.get_task("t-a")["slip_count"] == 1
+
+
+def test_replanning_twice_with_no_changes_produces_identical_output(archive):
+    working_week()
+    task("t-a", "Cut", est_minutes=120, importance=4, difficulty=3, deadline=FRIDAY)
+    task("t-b", "Sew", est_minutes=180, importance=4, difficulty=4)
+    db.add_task_dependency("t-b", "t-a")
+    scheduling.replan(MONDAY)
+    # Locking a block is part of ordinary use between replans -- it must not
+    # itself introduce any instability into an otherwise-unchanged plan.
+    block = db.list_scheduled_blocks_for_task("t-a")[0]
+    db.set_scheduled_block_locked(block["id"], True)
+
+    second = scheduling.replan(MONDAY)
+    third = scheduling.replan(MONDAY)
+
+    assert json.dumps(second) == json.dumps(third)
+
+
+def test_chronically_slipping_tasks_are_surfaced_regardless_of_todays_placement(archive):
+    working_week()
+    task("t-a", "Underestimated", est_minutes=60)
+    db.update_task("t-a", slip_count=scheduling.CHRONIC_SLIP_THRESHOLD)
+    task("t-b", "Fine", est_minutes=60)
+    db.update_task("t-b", slip_count=scheduling.CHRONIC_SLIP_THRESHOLD - 1)
+
+    result = scheduling.plan(MONDAY)
+
+    assert {e["task_id"] for e in result["chronically_slipping"]} == {"t-a"}
+    # It still placed cleanly this run -- the flag is about the pattern
+    # across replans, not today's outcome.
+    assert "t-a" in placed(result)
+
+
 def test_a_task_with_no_slack_lands_on_the_at_risk_list(archive):
     working_week()
     # Five days of work due Wednesday, with three working days to do it in.

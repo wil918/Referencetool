@@ -1597,10 +1597,11 @@ def api_get_task_actual(task_id):
 
 @app.post("/api/tasks/<task_id>/complete")
 def api_complete_task(task_id):
-    """One-tap completion. With no body at all, every actual defaults per the
-    rule in db.py's Schedule section (block length or estimate; the task's
-    own difficulty/importance) -- that default path is what makes Done a
-    single tap. Any of actual_minutes/actual_difficulty/actual_importance/
+    """One-tap completion -- the COMPLETED outcome (see
+    scheduling.resolve_completed). With no body at all, every actual defaults
+    per the rule in db.py's Schedule section (block length or estimate; the
+    task's own difficulty/importance) -- that default path is what makes Done
+    a single tap. Any of actual_minutes/actual_difficulty/actual_importance/
     notes may be sent to correct a value, either at completion time or later;
     a field left out of a later correction keeps what was already recorded
     rather than falling back to the default again, so fixing one actual can
@@ -1623,15 +1624,64 @@ def api_complete_task(task_id):
     actual_importance = resolve("actual_importance", task["importance"])
     notes = body.get("notes", existing["notes"] if existing else None)
 
-    db.save_task_actual(
+    result = scheduling.resolve_completed(
         task_id,
         actual_minutes=actual_minutes,
         actual_difficulty=actual_difficulty,
         actual_importance=actual_importance,
         notes=notes,
     )
-    db.update_task(task_id, status="done")
-    return jsonify({"task": db.get_task(task_id), "actual": db.get_task_actual(task_id)})
+    return jsonify(result)
+
+
+@app.post("/api/tasks/<task_id>/partial")
+def api_partial_task(task_id):
+    """The PARTIALLY COMPLETED outcome (see scheduling.resolve_partial): the
+    original is closed with the time actually spent, and a remainder task is
+    spawned to pick up where it left off. `est_minutes` is required -- a
+    fresh estimate for what remains, never inherited from the original.
+    `actual_minutes` defaults the same way completion does (the current
+    block's length, or the estimate if it was never scheduled). Any field in
+    scheduling.REMAINDER_INHERITED_COLUMNS sent in the body overrides what the
+    remainder would otherwise inherit from the original -- everything else
+    (title, description, project, deliverable, location, support level,
+    importance, difficulty, is_finishing, is_domestic) carries over as-is."""
+    task = db.get_task(task_id)
+    if not task:
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    est_minutes = body.get("est_minutes")
+    if not isinstance(est_minutes, (int, float)) or est_minutes <= 0:
+        return jsonify({"error": "a positive est_minutes is required for what remains"}), 400
+
+    actual_minutes = body.get("actual_minutes")
+    if actual_minutes is None:
+        actual_minutes = _default_actual_minutes(task)
+    overrides = {
+        k: v for k, v in body.items() if k in scheduling.REMAINDER_INHERITED_COLUMNS
+    }
+
+    result = scheduling.resolve_partial(
+        task_id,
+        actual_minutes=actual_minutes,
+        est_minutes=est_minutes,
+        actual_difficulty=body.get("actual_difficulty", task["difficulty"]),
+        actual_importance=body.get("actual_importance", task["importance"]),
+        notes=body.get("notes"),
+        **overrides,
+    )
+    return jsonify(result)
+
+
+@app.post("/api/tasks/<task_id>/not-completed")
+def api_not_completed_task(task_id):
+    """The NOT COMPLETED outcome (see scheduling.resolve_not_completed): the
+    task returns to the pool unchanged, slip_count goes up by one, and no
+    actual is recorded -- never starting a task says nothing about how long
+    it takes."""
+    if not db.get_task(task_id):
+        abort(404)
+    return jsonify(scheduling.resolve_not_completed(task_id))
 
 
 def _default_actual_minutes(task):
@@ -2095,11 +2145,16 @@ def api_set_manual_energy(date_str):
 
 @app.post("/api/schedule/plan")
 def api_run_schedule_plan():
-    """Run the scheduler and replace scheduled_blocks with what it placed.
+    """Resolve whatever's lapsed, then run the scheduler and replace the
+    future of scheduled_blocks with what it placed (see scheduling.replan).
 
-    Wholesale -- the table is the current plan, not an accumulation of past
-    ones (see db.replace_scheduled_blocks). Task rows are never touched: the
-    scheduler's only output is blocks and the at-risk list it returns here.
+    Safe to call repeatedly -- and meant to be: on first load each day, on
+    demand, and whenever working or domestic hours change (see
+    SCHEDULE_SCOPE.md's "Replan"). Blocks already in the past are left alone,
+    whether they're a completed or partial task's genuine history, or a
+    not-completed block auto-resolved by this same call. A locked block in
+    the future is re-seeded at its pinned slot rather than replaced with
+    something else -- everything schedules around it.
 
     An optional `now` in the body anchors the walk somewhere other than the
     actual current time, which is what makes a plan reproducible; a dependency
@@ -2113,6 +2168,30 @@ def api_run_schedule_plan():
         return jsonify({"error": str(e), "task_ids": e.task_ids}), 400
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+
+
+@app.put("/api/schedule/blocks/<block_id>/lock")
+def api_lock_scheduled_block(block_id):
+    """Pin a scheduled block to its slot, or release it -- the only property
+    of a block mutable outside a replan (see SCHEDULE_SCOPE.md's "Pinning").
+    Locking only makes sense for a 'task' block with a real time of day: a
+    day-granularity allocation has no slot to lock to (detail decays with
+    distance -- see scheduling.SLOT_DETAIL_DAYS), and a travel/break/chain
+    block is derived from the placements around it rather than being
+    independently pinnable."""
+    block = db.get_scheduled_block(block_id)
+    if not block:
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    if "is_locked" not in body:
+        return jsonify({"error": "is_locked is required"}), 400
+    if block["kind"] != "task":
+        return jsonify({"error": "only a task block can be locked"}), 400
+    if scheduling.block_granularity(block) != "slot":
+        return jsonify({"error": "a day-granularity block has no slot to lock to"}), 400
+
+    db.set_scheduled_block_locked(block_id, bool(body["is_locked"]))
+    return jsonify(db.get_scheduled_block(block_id))
 
 
 @app.get("/api/schedule")
@@ -2157,6 +2236,7 @@ def api_get_schedule():
         "blocks": blocks,
         "at_risk": result["at_risk"],
         "at_risk_by_deliverable": result["at_risk_by_deliverable"],
+        "chronically_slipping": result["chronically_slipping"],
         "horizon_end": result["horizon_end"],
         "slot_detail_until": result["slot_detail_until"],
     })

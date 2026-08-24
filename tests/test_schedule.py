@@ -654,6 +654,181 @@ def test_completing_a_task_can_record_notes(client):
     assert resp.get_json()["actual"]["notes"] == "went well"
 
 
+# --- The other two outcomes: partial and not completed --------------------------
+
+
+def test_a_partial_outcome_closes_the_original_and_spawns_a_remainder(client):
+    project_id = make_project(client)
+    location_id = client.post("/api/locations", json={"name": "Studio"}).get_json()["id"]
+    task = make_task(
+        client, "Make the toile", description="First pass in calico",
+        measurable_goal="Toile pinned to the mannequin", deadline="2026-06-01",
+        project_id=project_id, required_location_id=location_id, support_level="needs",
+        importance=4, difficulty=3, is_finishing=True, is_domestic=False, est_minutes=180,
+    )
+
+    resp = client.post(f"/api/tasks/{task['id']}/partial", json={
+        "actual_minutes": 120, "est_minutes": 90,
+    })
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    original, remainder = body["original"], body["remainder"]
+
+    assert original["status"] == "partial"
+    actual = client.get(f"/api/tasks/{task['id']}/actual").get_json()
+    assert actual["actual_minutes"] == 120
+
+    assert remainder["status"] == "pending"
+    assert remainder["continues_task_id"] == task["id"]
+    # A fresh estimate for what remains -- never the original's.
+    assert remainder["est_minutes"] == 90
+    # Everything else inherited, editable but untouched here.
+    for field in ("title", "description", "measurable_goal", "deadline", "project_id",
+                  "required_location_id", "support_level", "importance", "difficulty",
+                  "is_finishing", "is_domestic"):
+        assert remainder[field] == original[field], field
+
+
+def test_a_partial_outcome_lets_the_caller_override_an_inherited_field(client):
+    task = make_task(client, "Cut the pattern", difficulty=2)
+
+    resp = client.post(f"/api/tasks/{task['id']}/partial", json={
+        "actual_minutes": 30, "est_minutes": 30, "title": "Finish cutting the pattern",
+        "difficulty": 4,
+    })
+
+    remainder = resp.get_json()["remainder"]
+    assert remainder["title"] == "Finish cutting the pattern"
+    assert remainder["difficulty"] == 4
+
+
+def test_a_partial_outcome_repoints_dependents_to_the_remainder(client):
+    a = make_task(client, "A")
+    b = make_task(client, "B")
+    client.post(f"/api/tasks/{b['id']}/dependencies", json={"depends_on_task_id": a["id"]})
+
+    resp = client.post(f"/api/tasks/{a['id']}/partial", json={
+        "actual_minutes": 30, "est_minutes": 30,
+    })
+    remainder_id = resp.get_json()["remainder"]["id"]
+
+    deps = client.get(f"/api/tasks/{b['id']}").get_json()
+    # There's no GET for a single task's dependencies as a list in the API
+    # beyond the task dict itself not carrying them -- read the edge table
+    # directly, the same way the scheduler does.
+    assert db.list_task_dependencies(b["id"]) == [remainder_id]
+    assert a["id"] not in db.list_task_dependencies(b["id"])
+
+
+def test_a_partial_outcome_requires_a_positive_est_minutes(client):
+    task = make_task(client, "Task")
+
+    resp = client.post(f"/api/tasks/{task['id']}/partial", json={"actual_minutes": 30})
+    assert resp.status_code == 400
+
+    resp = client.post(f"/api/tasks/{task['id']}/partial", json={
+        "actual_minutes": 30, "est_minutes": 0,
+    })
+    assert resp.status_code == 400
+
+
+def test_a_partial_outcome_on_a_task_that_does_not_exist_404s(client):
+    resp = client.post("/api/tasks/nonexistent/partial", json={
+        "actual_minutes": 30, "est_minutes": 30,
+    })
+    assert resp.status_code == 404
+
+
+def test_a_not_completed_outcome_returns_the_task_to_the_pool_and_increments_slip_count(client):
+    task = make_task(client, "Task")
+    assert task["slip_count"] == 0
+
+    resp = client.post(f"/api/tasks/{task['id']}/not-completed")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "pending"
+    assert body["slip_count"] == 1
+
+    # Slips again -- the count keeps climbing rather than resetting.
+    again = client.post(f"/api/tasks/{task['id']}/not-completed").get_json()
+    assert again["slip_count"] == 2
+
+
+def test_a_not_completed_outcome_writes_no_actual(client):
+    task = make_task(client, "Task", est_minutes=60)
+
+    client.post(f"/api/tasks/{task['id']}/not-completed")
+
+    assert client.get(f"/api/tasks/{task['id']}/actual").get_json() is None
+
+
+def test_a_not_completed_outcome_deletes_the_tasks_scheduled_blocks(client):
+    task = make_task(client, "Task")
+    db.create_scheduled_block(str(uuid.uuid4()), task["id"], "2026-01-01T09:00:00", "2026-01-01T10:00:00")
+
+    client.post(f"/api/tasks/{task['id']}/not-completed")
+
+    assert db.list_scheduled_blocks_for_task(task["id"]) == []
+
+
+def test_a_not_completed_outcome_on_a_task_that_does_not_exist_404s(client):
+    resp = client.post("/api/tasks/nonexistent/not-completed")
+    assert resp.status_code == 404
+
+
+# --- Pinning a scheduled block --------------------------------------------------
+
+
+def test_locking_and_unlocking_a_block_round_trips(client):
+    task = make_task(client, "Task")
+    block_id = str(uuid.uuid4())
+    db.create_scheduled_block(block_id, task["id"], "2026-01-01T09:00:00", "2026-01-01T10:00:00")
+
+    locked = client.put(f"/api/schedule/blocks/{block_id}/lock", json={"is_locked": True}).get_json()
+    assert locked["is_locked"] is True
+
+    unlocked = client.put(f"/api/schedule/blocks/{block_id}/lock", json={"is_locked": False}).get_json()
+    assert unlocked["is_locked"] is False
+
+
+def test_locking_a_day_granularity_block_is_rejected(client):
+    task = make_task(client, "Task")
+    block_id = str(uuid.uuid4())
+    db.create_scheduled_block(block_id, task["id"], "2026-03-15", "2026-03-15")
+
+    resp = client.put(f"/api/schedule/blocks/{block_id}/lock", json={"is_locked": True})
+
+    assert resp.status_code == 400
+    assert db.get_scheduled_block(block_id)["is_locked"] is False
+
+
+def test_locking_a_travel_block_is_rejected(client):
+    task = make_task(client, "Task")
+    block_id = str(uuid.uuid4())
+    db.create_scheduled_block(
+        block_id, task["id"], "2026-01-01T08:45:00", "2026-01-01T09:00:00", kind="travel"
+    )
+
+    resp = client.put(f"/api/schedule/blocks/{block_id}/lock", json={"is_locked": True})
+    assert resp.status_code == 400
+
+
+def test_locking_requires_is_locked_in_the_body(client):
+    task = make_task(client, "Task")
+    block_id = str(uuid.uuid4())
+    db.create_scheduled_block(block_id, task["id"], "2026-01-01T09:00:00", "2026-01-01T10:00:00")
+
+    resp = client.put(f"/api/schedule/blocks/{block_id}/lock", json={})
+    assert resp.status_code == 400
+
+
+def test_locking_a_block_that_does_not_exist_404s(client):
+    resp = client.put("/api/schedule/blocks/nonexistent/lock", json={"is_locked": True})
+    assert resp.status_code == 404
+
+
 # --- Resources and resource items -----------------------------------------------
 
 

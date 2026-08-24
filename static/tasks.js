@@ -30,6 +30,8 @@ const filterProjectSelect = document.getElementById("task-filter-project");
 const filterStatusSelect = document.getElementById("task-filter-status");
 const listEl = document.getElementById("task-list");
 const emptyEl = document.getElementById("task-list-empty");
+const replanBtn = document.getElementById("task-replan-btn");
+const atRiskPanel = document.getElementById("task-at-risk-panel");
 
 // --- Option lists shared by the entry form and the list filter ---
 
@@ -352,13 +354,16 @@ function makeGeneratedChips(task) {
   return chips;
 }
 
-// --- Completion ---
+// --- The three outcomes ---
 //
-// One tap: POST with no body at all, and app.py fills every actual from the
-// task's own estimate/difficulty/importance (or its scheduled block's
-// length, if it has one). Editing an actual afterwards re-posts just that
-// field -- see api_complete_task's resolve(), which keeps whatever was
-// already recorded for anything not sent this time.
+// A scheduled block resolves one of three ways (see SCHEDULE_SCOPE.md's
+// "three outcomes"). Completed is still the one-tap case: POST with no body
+// at all, and app.py fills every actual from the task's own estimate/
+// difficulty/importance (or its scheduled block's length, if it has one).
+// Editing an actual afterwards re-posts just that field -- see
+// api_complete_task's resolve(), which keeps whatever was already recorded
+// for anything not sent this time. Partial and not-completed are their own
+// routes rather than flags on this one, matching the backend split.
 
 async function completeTask(taskId, corrections) {
   await fetch(`/api/tasks/${taskId}/complete`, {
@@ -369,63 +374,219 @@ async function completeTask(taskId, corrections) {
   refreshTaskList();
 }
 
+async function partialTask(taskId, actualMinutes, remainderEstMinutes) {
+  const res = await fetch(`/api/tasks/${taskId}/partial`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ actual_minutes: actualMinutes, est_minutes: remainderEstMinutes }),
+  });
+  refreshTaskList();
+  return res.ok;
+}
+
+async function notCompletedTask(taskId) {
+  await fetch(`/api/tasks/${taskId}/not-completed`, { method: "POST" });
+  refreshTaskList();
+}
+
+// Editable only for a DONE task, through the same /complete route that
+// created the actual in the first place (see api_complete_task's resolve()).
+// A PARTIAL task's actual is shown the same way but read-only: re-posting to
+// /complete would flip its status back to 'done', which isn't what fixing a
+// typo in "time spent" is supposed to do -- there's no correction route for
+// a segment that's already closed as partial.
 function makeActualsRow(task, actual) {
   const row = document.createElement("div");
   row.className = "task-actuals";
+  const editable = task.status === "done";
 
   const label = document.createElement("span");
   label.className = "muted";
-  label.textContent = "Done";
+  label.textContent = task.status === "partial" ? "Partially completed" : "Done";
   row.appendChild(label);
   if (!actual) return row;
 
   if (actual.actual_minutes != null) {
     row.appendChild(
-      makeChip({
-        text: formatMinutes(actual.actual_minutes),
-        generated: false,
-        onEdit: (chip, lbl) =>
-          startNumberEdit(chip, lbl, actual.actual_minutes, 1, 24 * 60, (value) =>
-            completeTask(task.id, { actual_minutes: value })
-          ),
-      })
+      editable
+        ? makeChip({
+            text: formatMinutes(actual.actual_minutes),
+            generated: false,
+            onEdit: (chip, lbl) =>
+              startNumberEdit(chip, lbl, actual.actual_minutes, 1, 24 * 60, (value) =>
+                completeTask(task.id, { actual_minutes: value })
+              ),
+          })
+        : makeStaticChip(formatMinutes(actual.actual_minutes))
     );
   }
   if (actual.actual_importance != null) {
     row.appendChild(
-      makeChip({
-        text: `importance ${actual.actual_importance}`,
-        generated: false,
-        onEdit: (chip, lbl) =>
-          startNumberEdit(chip, lbl, actual.actual_importance, 1, 5, (value) =>
-            completeTask(task.id, { actual_importance: value })
-          ),
-      })
+      editable
+        ? makeChip({
+            text: `importance ${actual.actual_importance}`,
+            generated: false,
+            onEdit: (chip, lbl) =>
+              startNumberEdit(chip, lbl, actual.actual_importance, 1, 5, (value) =>
+                completeTask(task.id, { actual_importance: value })
+              ),
+          })
+        : makeStaticChip(`importance ${actual.actual_importance}`)
     );
   }
   if (actual.actual_difficulty != null) {
     row.appendChild(
-      makeChip({
-        text: `difficulty ${actual.actual_difficulty}`,
-        generated: false,
-        onEdit: (chip, lbl) =>
-          startNumberEdit(chip, lbl, actual.actual_difficulty, 1, 5, (value) =>
-            completeTask(task.id, { actual_difficulty: value })
-          ),
-      })
+      editable
+        ? makeChip({
+            text: `difficulty ${actual.actual_difficulty}`,
+            generated: false,
+            onEdit: (chip, lbl) =>
+              startNumberEdit(chip, lbl, actual.actual_difficulty, 1, 5, (value) =>
+                completeTask(task.id, { actual_difficulty: value })
+              ),
+          })
+        : makeStaticChip(`difficulty ${actual.actual_difficulty}`)
     );
   }
   return row;
 }
 
-function makeActionsRow(task) {
+function makeStaticChip(text) {
+  const chip = document.createElement("span");
+  chip.className = "task-chip";
+  chip.textContent = text;
+  return chip;
+}
+
+function defaultActualMinutes(task, block) {
+  if (block) return Math.round((new Date(block.end) - new Date(block.start)) / 60000);
+  return task.est_minutes || "";
+}
+
+function makePartialForm(task, block, wrap) {
+  const form = document.createElement("div");
+  form.className = "task-partial-form";
+
+  const spentLabel = document.createElement("label");
+  spentLabel.textContent = "Minutes spent";
+  const spentInput = document.createElement("input");
+  spentInput.type = "number";
+  spentInput.min = "1";
+  spentInput.value = defaultActualMinutes(task, block);
+  spentLabel.appendChild(spentInput);
+
+  const remainingLabel = document.createElement("label");
+  remainingLabel.textContent = "Minutes remaining";
+  const remainingInput = document.createElement("input");
+  remainingInput.type = "number";
+  remainingInput.min = "1";
+  remainingLabel.appendChild(remainingInput);
+
+  const saveBtn = document.createElement("button");
+  saveBtn.className = "btn primary";
+  saveBtn.textContent = "Save";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.className = "btn";
+  cancelBtn.textContent = "Cancel";
+
+  const status = document.createElement("span");
+  status.className = "muted";
+
+  saveBtn.addEventListener("click", async () => {
+    const spent = Number(spentInput.value);
+    const remaining = Number(remainingInput.value);
+    if (!spent || spent <= 0) {
+      status.textContent = "Minutes spent must be a positive number.";
+      return;
+    }
+    if (!remaining || remaining <= 0) {
+      status.textContent = "A fresh estimate for what remains is required.";
+      return;
+    }
+    const ok = await partialTask(task.id, spent, remaining);
+    if (!ok) status.textContent = "Could not save -- try again.";
+  });
+  cancelBtn.addEventListener("click", () => wrap.replaceChildren());
+
+  form.append(spentLabel, remainingLabel, saveBtn, cancelBtn, status);
+  return form;
+}
+
+function makeActionsRow(task, block) {
   const row = document.createElement("div");
   row.className = "task-card-actions";
-  const doneBtn = document.createElement("button");
-  doneBtn.className = "btn primary";
-  doneBtn.textContent = "Done";
-  doneBtn.addEventListener("click", () => completeTask(task.id));
-  row.appendChild(doneBtn);
+
+  const formSlot = document.createElement("div");
+
+  const completedBtn = document.createElement("button");
+  completedBtn.className = "btn primary";
+  completedBtn.textContent = "Completed";
+  completedBtn.addEventListener("click", () => completeTask(task.id));
+
+  const partialBtn = document.createElement("button");
+  partialBtn.className = "btn";
+  partialBtn.textContent = "Partially completed";
+  partialBtn.addEventListener("click", () => {
+    formSlot.replaceChildren(makePartialForm(task, block, formSlot));
+  });
+
+  const notCompletedBtn = document.createElement("button");
+  notCompletedBtn.className = "btn";
+  notCompletedBtn.textContent = "Not completed";
+  notCompletedBtn.addEventListener("click", () => notCompletedTask(task.id));
+
+  const buttons = document.createElement("div");
+  buttons.className = "task-card-outcome-buttons";
+  buttons.append(completedBtn, partialBtn, notCompletedBtn);
+
+  row.append(buttons, formSlot);
+  return row;
+}
+
+// --- The current scheduled block, and pinning it -----------------------------
+
+async function setBlockLocked(blockId, isLocked) {
+  await fetch(`/api/schedule/blocks/${blockId}/lock`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_locked: isLocked }),
+  });
+  refreshTaskList();
+}
+
+function formatBlockTime(block) {
+  if (block.granularity !== "slot") {
+    return new Date(`${block.start}T00:00:00`).toLocaleDateString();
+  }
+  const start = new Date(block.start);
+  const end = new Date(block.end);
+  const day = start.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  const time = start.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const endTime = end.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return `${day}, ${time}–${endTime}`;
+}
+
+function makeScheduleRow(block) {
+  const row = document.createElement("div");
+  row.className = "task-schedule-row";
+
+  const label = document.createElement("span");
+  label.className = "muted";
+  label.textContent = `Scheduled: ${formatBlockTime(block)}`;
+  row.appendChild(label);
+
+  // Locking only makes sense for a real time of day -- a day-granularity
+  // allocation five weeks out has no slot to pin to (see
+  // scheduling.SLOT_DETAIL_DAYS), so the control simply isn't offered there.
+  if (block.granularity === "slot") {
+    const pinBtn = document.createElement("button");
+    pinBtn.className = "btn task-pin-btn" + (block.is_locked ? " active" : "");
+    pinBtn.title = block.is_locked ? "Unlock this slot" : "Lock to this slot";
+    pinBtn.textContent = block.is_locked ? "Locked" : "Lock";
+    pinBtn.addEventListener("click", () => setBlockLocked(block.id, !block.is_locked));
+    row.appendChild(pinBtn);
+  }
+
   return row;
 }
 
@@ -438,6 +599,13 @@ function makeTaskCard(task, lookups) {
   const header = document.createElement("div");
   header.className = "task-card-header";
   header.appendChild(makeEditableTitle(task));
+  if (lookups.slippingIds.has(task.id)) {
+    const badge = document.createElement("span");
+    badge.className = "task-slip-badge";
+    badge.title = `Slipped ${task.slip_count} times`;
+    badge.textContent = `Slipped ${task.slip_count}x`;
+    header.appendChild(badge);
+  }
   const statusLabel = document.createElement("span");
   statusLabel.className = "muted";
   statusLabel.textContent = task.status;
@@ -468,18 +636,115 @@ function makeTaskCard(task, lookups) {
 
   if (task.measurable_goal) card.appendChild(makeEditableGoal(task));
 
-  if (task.status === "done") {
+  if (task.status === "done" || task.status === "partial") {
     card.appendChild(makeActualsRow(task, lookups.actualsByTask[task.id]));
-  } else {
-    card.appendChild(makeActionsRow(task));
+  } else if (task.status !== "abandoned") {
+    const block = lookups.blocksByTask[task.id];
+    if (block) card.appendChild(makeScheduleRow(block));
+    card.appendChild(makeActionsRow(task, block));
   }
 
   return card;
 }
 
+// --- Replanning ---
+//
+// POST /api/schedule/plan resolves whatever's lapsed and replaces the future
+// of the plan (see scheduling.replan) -- safe to call as often as this runs.
+// Triggered once automatically the first time this tab is opened in a
+// session (standing in for "on first load each day" -- there's no
+// day-boundary tracking here, just the one call this page ever needs) and
+// on demand via the button; SCHEDULE_SCOPE.md's other trigger, "whenever
+// working or domestic hours change", has no UI yet to hang a call off.
+let hasReplannedThisSession = false;
+
+async function runReplan() {
+  replanBtn.disabled = true;
+  try {
+    await fetch("/api/schedule/plan", { method: "POST" });
+  } finally {
+    replanBtn.disabled = false;
+  }
+}
+
+replanBtn.addEventListener("click", async () => {
+  await runReplan();
+  refreshTaskList();
+});
+
+// --- At risk, and chronic slippers ---
+
+function makeAtRiskList(entries) {
+  const ul = document.createElement("ul");
+  entries.forEach((e) => {
+    const li = document.createElement("li");
+    const title = document.createElement("strong");
+    title.textContent = e.title;
+    li.append(title, document.createTextNode(` — ${e.message}`));
+    ul.appendChild(li);
+  });
+  return ul;
+}
+
+function renderAtRiskPanel(schedule) {
+  const atRisk = schedule.at_risk || [];
+  const byDeliverable = schedule.at_risk_by_deliverable || [];
+  const slipping = schedule.chronically_slipping || [];
+
+  atRiskPanel.innerHTML = "";
+  atRiskPanel.hidden = atRisk.length === 0 && slipping.length === 0;
+  if (atRiskPanel.hidden) return;
+
+  if (byDeliverable.length) {
+    const section = document.createElement("div");
+    section.className = "task-at-risk-section";
+    const h = document.createElement("h4");
+    h.textContent = "At risk, by deliverable";
+    section.appendChild(h);
+    byDeliverable.forEach((d) => {
+      const p = document.createElement("p");
+      p.textContent = `${d.title || "Untitled deliverable"}: ${d.at_risk_tasks} of ${d.total_tasks} tasks at risk`;
+      section.appendChild(p);
+    });
+    atRiskPanel.appendChild(section);
+  }
+
+  const standalone = atRisk.filter((e) => !e.deliverable_id);
+  if (standalone.length) {
+    const section = document.createElement("div");
+    section.className = "task-at-risk-section";
+    const h = document.createElement("h4");
+    h.textContent = "At risk";
+    section.appendChild(h);
+    section.appendChild(makeAtRiskList(standalone));
+    atRiskPanel.appendChild(section);
+  }
+
+  if (slipping.length) {
+    const section = document.createElement("div");
+    section.className = "task-at-risk-section";
+    const h = document.createElement("h4");
+    h.textContent = "Slipping repeatedly";
+    section.appendChild(h);
+    const ul = document.createElement("ul");
+    slipping.forEach((s) => {
+      const li = document.createElement("li");
+      li.textContent = `${s.title} — slipped ${s.slip_count} times`;
+      ul.appendChild(li);
+    });
+    section.appendChild(ul);
+    atRiskPanel.appendChild(section);
+  }
+}
+
 // --- List: filtered by project and status ---
 
 export async function refreshTaskList() {
+  if (!hasReplannedThisSession) {
+    hasReplannedThisSession = true;
+    await runReplan();
+  }
+
   const projectId = filterProjectSelect.value;
   const status = filterStatusSelect.value;
 
@@ -487,30 +752,40 @@ export async function refreshTaskList() {
   if (projectId) params.set("project_id", projectId);
   if (status) params.set("status", status);
 
-  const [tasks, projects, locations] = await Promise.all([
+  const [tasks, projects, locations, schedule] = await Promise.all([
     fetch(`/api/tasks${params.toString() ? "?" + params : ""}`).then((r) => r.json()),
     fetch("/api/projects").then((r) => r.json()),
     fetch("/api/locations").then((r) => r.json()),
+    fetch("/api/schedule").then((r) => r.json()),
   ]);
 
   await populateProjectOptions(projects);
   populateLocationOptions(locations);
   filterProjectSelect.value = projectId;
   filterStatusSelect.value = status;
+  renderAtRiskPanel(schedule);
 
   const projectsById = Object.fromEntries(projects.map((p) => [p.id, p.title]));
   const locationsById = Object.fromEntries(locations.map((l) => [l.id, l.name]));
+  const blocksByTask = Object.fromEntries(
+    (schedule.blocks || []).filter((b) => b.kind === "task" && b.task_id).map((b) => [b.task_id, b])
+  );
+  const slippingIds = new Set((schedule.chronically_slipping || []).map((s) => s.task_id));
 
-  const doneTasks = tasks.filter((t) => t.status === "done");
+  const doneOrPartialTasks = tasks.filter((t) => t.status === "done" || t.status === "partial");
   const actualsEntries = await Promise.all(
-    doneTasks.map((t) => fetch(`/api/tasks/${t.id}/actual`).then((r) => r.json()).then((a) => [t.id, a]))
+    doneOrPartialTasks.map((t) =>
+      fetch(`/api/tasks/${t.id}/actual`).then((r) => r.json()).then((a) => [t.id, a])
+    )
   );
   const actualsByTask = Object.fromEntries(actualsEntries);
 
   listEl.innerHTML = "";
   emptyEl.hidden = tasks.length > 0;
   tasks.forEach((task) => {
-    listEl.appendChild(makeTaskCard(task, { projectsById, locationsById, actualsByTask }));
+    listEl.appendChild(
+      makeTaskCard(task, { projectsById, locationsById, actualsByTask, blocksByTask, slippingIds })
+    );
   });
 }
 
