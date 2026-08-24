@@ -349,6 +349,28 @@ def test_a_home_first_personal_event_round_trips_through_the_api(client):
     assert updated["prep_minutes"] is None
 
 
+def test_a_personal_events_venue_name_and_travel_time_round_trip_through_the_api(client):
+    # Free text, not a locations foreign key -- see COMMITMENTS_SCHEMA. A
+    # personal event never has to name a location already in the archive.
+    created = client.post("/api/commitments", json={
+        "title": "Haircut",
+        "start": "2026-01-05T09:00:00",
+        "end": "2026-01-05T09:45:00",
+        "home_first": True,
+        "location_name": "Corner barber's",
+        "travel_minutes": 12,
+    }).get_json()
+    assert created["location_name"] == "Corner barber's"
+    assert created["travel_minutes"] == 12
+    assert created["location_id"] is None  # no match required
+
+    updated = client.put(f"/api/commitments/{created['id']}", json={
+        "travel_minutes": 20,
+    }).get_json()
+    assert updated["travel_minutes"] == 20
+    assert updated["location_name"] == "Corner barber's"  # untouched by the partial update
+
+
 # --- Working hours and daily capacity -----------------------------------------
 
 

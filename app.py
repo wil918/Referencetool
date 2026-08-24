@@ -1864,6 +1864,8 @@ def api_create_commitment():
         energy_cost=body.get("energy_cost"),
         home_first=bool(body.get("home_first")),
         prep_minutes=body.get("prep_minutes"),
+        location_name=body.get("location_name"),
+        travel_minutes=body.get("travel_minutes"),
     )
     return jsonify(db.get_commitment(commitment_id))
 

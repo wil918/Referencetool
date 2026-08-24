@@ -14,10 +14,13 @@ const closeBtn = document.getElementById("commitments-close-btn");
 const titleInput = document.getElementById("commitment-title-input");
 const startInput = document.getElementById("commitment-start-input");
 const endInput = document.getElementById("commitment-end-input");
-const locationSelect = document.getElementById("commitment-location-select");
+const locationInput = document.getElementById("commitment-location-input");
+const locationSuggestions = document.getElementById("commitment-location-suggestions");
 const homeFirstInput = document.getElementById("commitment-home-first-input");
 const prepField = document.getElementById("commitment-prep-field");
 const prepInput = document.getElementById("commitment-prep-input");
+const travelField = document.getElementById("commitment-travel-field");
+const travelInput = document.getElementById("commitment-travel-input");
 
 const saveStatus = document.getElementById("commitment-save-status");
 const saveBtn = document.getElementById("commitment-save-btn");
@@ -27,20 +30,86 @@ const listEl = document.getElementById("commitment-list");
 const emptyEl = document.getElementById("commitment-list-empty");
 
 let editingId = null; // null while adding; a commitment id while editing one
+let knownLocations = []; // the archive's locations, for the suggestion match only
+let selectedLocationId = null; // set only while the typed text still matches a suggestion picked
 
-// --- Locations ---
+// --- Location: free text, with saved locations offered as a convenience ---
+//
+// commitments.location_name is what's actually stored and what
+// scheduling.home_first_chain sizes the venue leg from (see COMMITMENTS_SCHEMA)
+// -- a personal event never has to already exist in the locations table.
+// Typing that happens to match a saved location surfaces it here purely so
+// its travel_minutes_from_home can be reused as a starting point; picking one
+// fills the travel-time field but leaves it editable, and it's never looked
+// up again after saving (see home_first_chain's own docstring).
 
-async function populateLocationOptions(locations) {
-  const current = locationSelect.value;
-  locationSelect.innerHTML = '<option value="" selected>None</option>';
-  locations.forEach((l) => {
-    const opt = document.createElement("option");
-    opt.value = l.id;
-    opt.textContent = l.name;
-    locationSelect.appendChild(opt);
-  });
-  locationSelect.value = current;
+function matchingLocations(query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  return knownLocations.filter((l) => l.name.toLowerCase().includes(q)).slice(0, 6);
 }
+
+function renderLocationSuggestions() {
+  const matches = matchingLocations(locationInput.value);
+  locationSuggestions.innerHTML = "";
+  locationSuggestions.hidden = matches.length === 0;
+  matches.forEach((location) => {
+    const row = document.createElement("div");
+    row.className = "commitment-location-suggestion";
+    row.tabIndex = 0;
+
+    const name = document.createElement("span");
+    name.textContent = location.name;
+    row.appendChild(name);
+
+    if (location.travel_minutes_from_home != null) {
+      const minutes = document.createElement("span");
+      minutes.className = "muted";
+      minutes.textContent = `${location.travel_minutes_from_home}m from home`;
+      row.appendChild(minutes);
+    }
+
+    const pick = () => {
+      locationInput.value = location.name;
+      selectedLocationId = location.id;
+      // Pre-fills the travel field as a starting point -- never overwrites
+      // a value already typed, since that's the user's own answer.
+      if (!travelInput.value.trim() && location.travel_minutes_from_home != null) {
+        travelInput.value = location.travel_minutes_from_home;
+      }
+      locationSuggestions.hidden = true;
+    };
+    row.addEventListener("click", pick);
+    row.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pick();
+      }
+    });
+    locationSuggestions.appendChild(row);
+  });
+}
+
+locationInput.addEventListener("input", () => {
+  // The moment the text no longer names exactly what was picked, that pick
+  // no longer applies -- location_id is only ever a live match, not a
+  // sticky reference to whatever was last clicked.
+  if (selectedLocationId) {
+    const picked = knownLocations.find((l) => l.id === selectedLocationId);
+    if (!picked || picked.name !== locationInput.value) selectedLocationId = null;
+  }
+  renderLocationSuggestions();
+});
+locationInput.addEventListener("focus", renderLocationSuggestions);
+// A plain blur would fire before a suggestion's click handler runs and hide
+// the list out from under it -- letting the click land first is what makes
+// picking a suggestion by mouse work at all.
+locationInput.addEventListener("blur", () => {
+  setTimeout(() => { locationSuggestions.hidden = true; }, 150);
+});
+locationInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") locationSuggestions.hidden = true;
+});
 
 // --- datetime-local <-> the "YYYY-MM-DDTHH:MM:SS" commitments store ---
 //
@@ -55,10 +124,44 @@ function toLocalInputValue(stored) {
   return stored ? stored.slice(0, 16) : "";
 }
 
-// --- Home first: the prep field only matters once it's switched on ---
+function datePart(localValue) {
+  return localValue ? localValue.split("T")[0] : "";
+}
+
+// --- Start date carries over to end date, once, not on every keystroke ---
+//
+// Most personal events are same-day, so picking the start date fills the end
+// date in as a convenience. It only overwrites the end date while that date
+// is still following the start (empty, or left over from an earlier sync) --
+// diverge it deliberately (an overnight event) and further start edits stop
+// touching it.
+
+let lastSyncedStartDate = "";
+
+function syncEndDate() {
+  const startDate = datePart(startInput.value);
+  if (!startDate) return;
+  const [endDate, endTime] = endInput.value.split("T");
+  if (!endDate || endDate === lastSyncedStartDate) {
+    // A datetime-local input rejects (and silently no-ops on) a value with
+    // a date but no time -- so an end with no time of its own yet borrows
+    // the start's, which is at least valid and gets corrected once a real
+    // end time is entered.
+    const time = endTime || startInput.value.split("T")[1] || "00:00";
+    endInput.value = `${startDate}T${time}`;
+  }
+  lastSyncedStartDate = startDate;
+}
+// "input" rather than "change" -- a datetime-local input only fires "change"
+// once the whole control loses focus, which is too late to feel automatic;
+// "input" fires as soon as the date segment itself is complete.
+startInput.addEventListener("input", syncEndDate);
+
+// --- Home first: prep/travel only matter once it's switched on ---
 
 homeFirstInput.addEventListener("change", () => {
   prepField.hidden = !homeFirstInput.checked;
+  travelField.hidden = !homeFirstInput.checked;
 });
 
 // --- Entry form ---
@@ -68,10 +171,15 @@ function resetForm() {
   titleInput.value = "";
   startInput.value = "";
   endInput.value = "";
-  locationSelect.value = "";
+  lastSyncedStartDate = "";
+  locationInput.value = "";
+  selectedLocationId = null;
+  locationSuggestions.hidden = true;
   homeFirstInput.checked = false;
   prepInput.value = "";
   prepField.hidden = true;
+  travelInput.value = "";
+  travelField.hidden = true;
   saveBtn.textContent = "Save";
   cancelBtn.hidden = true;
   saveStatus.textContent = "";
@@ -82,10 +190,15 @@ function loadIntoForm(commitment) {
   titleInput.value = commitment.title;
   startInput.value = toLocalInputValue(commitment.start);
   endInput.value = toLocalInputValue(commitment.end);
-  locationSelect.value = commitment.location_id || "";
+  lastSyncedStartDate = datePart(startInput.value);
+  locationInput.value = commitment.location_name || "";
+  selectedLocationId = commitment.location_id || null;
+  locationSuggestions.hidden = true;
   homeFirstInput.checked = commitment.home_first;
   prepField.hidden = !commitment.home_first;
   prepInput.value = commitment.prep_minutes ?? "";
+  travelField.hidden = !commitment.home_first;
+  travelInput.value = commitment.travel_minutes ?? "";
   saveBtn.textContent = "Update";
   cancelBtn.hidden = false;
   saveStatus.textContent = "";
@@ -104,17 +217,18 @@ saveBtn.addEventListener("click", async () => {
   }
 
   const homeFirst = homeFirstInput.checked;
-  const locationId = locationSelect.value || null;
-  // An event with no location produces a chain short by exactly the trip to
-  // it -- the one error that wouldn't be noticed until being late. Prompt
-  // rather than silently omit it.
-  if (homeFirst && !locationId) {
+  const locationName = locationInput.value.trim() || null;
+  const travelMinutes = travelInput.value.trim() ? Number(travelInput.value) : null;
+  // An event with no known travel time produces a chain short by exactly the
+  // trip to it -- the one error that wouldn't be noticed until being late.
+  // Prompt rather than silently omit it.
+  if (homeFirst && travelMinutes === null) {
     const proceed = confirm(
-      "This event has no location, so the final leg of the home-first chain can't be " +
-      "sized -- it'll be marked incomplete. Save it without one anyway?"
+      "This event's travel time from home isn't set, so the final leg of the home-first " +
+      "chain can't be sized -- it'll be marked incomplete. Save it without one anyway?"
     );
     if (!proceed) {
-      locationSelect.focus();
+      travelInput.focus();
       return;
     }
   }
@@ -123,9 +237,11 @@ saveBtn.addEventListener("click", async () => {
     title,
     start,
     end,
-    location_id: locationId,
+    location_id: selectedLocationId,
+    location_name: locationName,
     home_first: homeFirst,
     prep_minutes: homeFirst && prepInput.value.trim() ? Number(prepInput.value) : null,
+    travel_minutes: homeFirst ? travelMinutes : null,
   };
 
   saveStatus.textContent = "Saving...";
@@ -168,7 +284,7 @@ function formatRange(commitment) {
   return `${startText} – ${endText}`;
 }
 
-function makeCommitmentCard(commitment, locationsById) {
+function makeCommitmentCard(commitment) {
   const card = document.createElement("div");
   card.className = "commitment-card";
 
@@ -181,21 +297,20 @@ function makeCommitmentCard(commitment, locationsById) {
   main.appendChild(title);
 
   const metaParts = [formatRange(commitment)];
-  if (commitment.location_id && locationsById[commitment.location_id]) {
-    metaParts.push(locationsById[commitment.location_id]);
-  }
+  if (commitment.location_name) metaParts.push(commitment.location_name);
   if (commitment.home_first) metaParts.push("Home first");
   const meta = document.createElement("span");
   meta.className = "commitment-card-meta";
   meta.textContent = metaParts.join(" · ");
   main.appendChild(meta);
 
-  // Incomplete purely because home_first is set with no location -- see the
-  // save-time prompt above for why that combination is allowed to exist.
-  if (commitment.home_first && !commitment.location_id) {
+  // Incomplete purely because home_first is set with no known travel time --
+  // see the save-time prompt above for why that combination is allowed to
+  // exist.
+  if (commitment.home_first && commitment.travel_minutes == null) {
     const warning = document.createElement("span");
     warning.className = "commitment-card-meta commitment-card-warning";
-    warning.textContent = "No location -- chain incomplete";
+    warning.textContent = "Travel time not set -- chain incomplete";
     main.appendChild(warning);
   }
 
@@ -229,8 +344,7 @@ async function refreshCommitmentList() {
     fetch("/api/commitments").then((r) => r.json()),
     fetch("/api/locations").then((r) => r.json()),
   ]);
-  await populateLocationOptions(locations);
-  const locationsById = Object.fromEntries(locations.map((l) => [l.id, l.name]));
+  knownLocations = locations;
 
   // /api/commitments also returns calendar-imported events (see
   // calendar-import.js) -- this form is only for the ones added by hand.
@@ -241,7 +355,7 @@ async function refreshCommitmentList() {
   const sorted = [...personal].sort((a, b) => a.start.localeCompare(b.start));
   listEl.innerHTML = "";
   emptyEl.hidden = sorted.length > 0;
-  sorted.forEach((c) => listEl.appendChild(makeCommitmentCard(c, locationsById)));
+  sorted.forEach((c) => listEl.appendChild(makeCommitmentCard(c)));
 }
 
 // --- Open / close ---

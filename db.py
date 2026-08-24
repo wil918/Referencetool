@@ -514,6 +514,19 @@ CREATE TABLE IF NOT EXISTS scheduled_blocks (
 # start (see scheduling.home_first_chain) -- prep_minutes is only meaningful
 # when home_first is set. Neither goes through Claude: personal events are a
 # plain form, not the task-estimation flow in task_ai.py.
+#
+# location_id ties a commitment to a real locations row -- it's what support
+# windows match a task's required_location_id against (see TASKS_SCHEMA),
+# and it's how an imported timetabled session gets its opening hours. A
+# personal event's own venue is different: location_name is free text (a
+# haircut doesn't need to be a place already in the archive), and
+# travel_minutes is the trip FROM HOME the home-first chain actually costs --
+# entered directly, or pre-filled from a matching location's
+# travel_minutes_from_home and then left editable, but never required to
+# come from the locations table. location_id is still set when the typed
+# name matches a saved location (so the two stay linked for that
+# convenience), but scheduling.home_first_chain reads location_name/
+# travel_minutes, not location_id, for the venue leg.
 COMMITMENTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS commitments (
     id TEXT PRIMARY KEY,
@@ -527,7 +540,9 @@ CREATE TABLE IF NOT EXISTS commitments (
     external_uid TEXT,
     energy_cost INTEGER,
     home_first INTEGER NOT NULL DEFAULT 0,
-    prep_minutes INTEGER
+    prep_minutes INTEGER,
+    location_name TEXT,
+    travel_minutes INTEGER
 );
 """
 
@@ -811,6 +826,8 @@ def init_db():
             "ALTER TABLE tasks ADD COLUMN is_domestic INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE commitments ADD COLUMN home_first INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE commitments ADD COLUMN prep_minutes INTEGER",
+            "ALTER TABLE commitments ADD COLUMN location_name TEXT",
+            "ALTER TABLE commitments ADD COLUMN travel_minutes INTEGER",
         ):
             try:
                 conn.execute(ddl)
@@ -2739,13 +2756,14 @@ def _scheduled_block_to_dict(row):
 
 def create_commitment(commitment_id, title, start, end, kind=None, location_id=None,
                       support_level="none", source=None, external_uid=None, energy_cost=None,
-                      home_first=False, prep_minutes=None):
+                      home_first=False, prep_minutes=None, location_name=None, travel_minutes=None):
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO commitments
                    (id, title, start, end, kind, location_id, support_level, source,
-                    external_uid, energy_cost, home_first, prep_minutes)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    external_uid, energy_cost, home_first, prep_minutes, location_name,
+                    travel_minutes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 commitment_id,
                 title,
@@ -2759,6 +2777,8 @@ def create_commitment(commitment_id, title, start, end, kind=None, location_id=N
                 energy_cost,
                 1 if home_first else 0,
                 prep_minutes,
+                location_name,
+                travel_minutes,
             ),
         )
 
@@ -2812,7 +2832,8 @@ def list_commitments_between(range_start, range_end):
 
 COMMITMENT_PATCH_COLUMNS = (
     "title", "start", "end", "kind", "location_id", "support_level", "source",
-    "external_uid", "energy_cost", "home_first", "prep_minutes",
+    "external_uid", "energy_cost", "home_first", "prep_minutes", "location_name",
+    "travel_minutes",
 )
 
 

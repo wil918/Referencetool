@@ -1221,21 +1221,26 @@ def test_a_personal_event_outside_working_hours_survives_working_hours_narrowing
 
 def test_a_home_first_chain_inserts_travel_then_prep_and_ends_at_the_event_start(archive):
     studio = make_location("Studio", travel_minutes_from_home=15)
-    cinema = make_location("Cinema", travel_minutes_from_home=20)
     # Away from home (at the studio) right up until the chain needs to start
     # working backwards -- so the leading travel-to-home leg has somewhere
     # real to travel from.
     make_commitment("c-studio", f"{MONDAY}T15:00:00", f"{MONDAY}T18:00:00", location_id=studio)
     event_start = f"{MONDAY}T19:30:00"
+    # location_name/travel_minutes are what the venue leg is actually sized
+    # from -- entered directly or pre-filled from a matching saved location,
+    # never looked up fresh from location_id (see home_first_chain).
     c = make_commitment("c-cinema", event_start, f"{MONDAY}T22:00:00",
-                        home_first=True, prep_minutes=30, location_id=cinema)
+                        home_first=True, prep_minutes=30,
+                        location_name="Cinema", travel_minutes=20)
 
     chain = scheduling.home_first_chain(db.get_commitment(c))
 
     assert [b["kind"] for b in chain] == ["travel", "prep", "travel"]
     assert chain[-1]["end"] == datetime.fromisoformat(event_start)
     assert chain[0]["from_location_id"] == studio and chain[0]["to_location_id"] is None
-    assert chain[-1]["from_location_id"] is None and chain[-1]["to_location_id"] == cinema
+    # The venue leg has no matching saved location (location_id was never
+    # set) -- it's still sized correctly from travel_minutes alone.
+    assert chain[-1]["from_location_id"] is None and chain[-1]["to_location_id"] is None
     # Contiguous: each block ends exactly where the next begins.
     assert chain[0]["end"] == chain[1]["start"]
     assert chain[1]["end"] == chain[2]["start"]
@@ -1259,12 +1264,12 @@ def test_the_leading_travel_leg_reads_the_commitment_that_ends_latest_not_starts
 
 
 def test_the_leading_travel_block_is_omitted_when_already_at_home(archive):
-    cinema = make_location("Cinema", travel_minutes_from_home=20)
     event_start = f"{MONDAY}T19:30:00"
     # Nothing else on the calendar -- there's nowhere to have travelled from,
     # so home is assumed (see scheduling._location_before).
     c = make_commitment("c-cinema", event_start, f"{MONDAY}T22:00:00",
-                        home_first=True, prep_minutes=30, location_id=cinema)
+                        home_first=True, prep_minutes=30,
+                        location_name="Cinema", travel_minutes=20)
 
     chain = scheduling.home_first_chain(db.get_commitment(c))
 
@@ -1275,7 +1280,7 @@ def test_the_leading_travel_block_is_omitted_when_already_at_home(archive):
 def test_a_venueless_event_omits_the_final_leg_but_still_means_arrival(archive):
     event_start = f"{MONDAY}T19:00:00"
     c = make_commitment("c-drinks", event_start, f"{MONDAY}T21:00:00",
-                        home_first=True, prep_minutes=20)  # no location_id
+                        home_first=True, prep_minutes=20)  # no location_name/travel_minutes
 
     chain = scheduling.home_first_chain(db.get_commitment(c))
 
@@ -1285,14 +1290,51 @@ def test_a_venueless_event_omits_the_final_leg_but_still_means_arrival(archive):
     assert chain[-1]["end"] == datetime.fromisoformat(event_start)
 
 
+def test_a_venue_genuinely_zero_minutes_away_gets_no_travel_block_but_isnt_incomplete(archive):
+    # travel_minutes=0 is a known, real answer (the venue is right there) --
+    # different from travel_minutes never having been set at all, even
+    # though both produce the same "no travel block" chain shape.
+    event_start = f"{MONDAY}T19:00:00"
+    c = make_commitment("c-next-door", event_start, f"{MONDAY}T21:00:00",
+                        home_first=True, prep_minutes=15,
+                        location_name="Next door", travel_minutes=0)
+
+    commitment = db.get_commitment(c)
+    chain = scheduling.home_first_chain(commitment)
+
+    assert [b["kind"] for b in chain] == ["prep"]
+    assert commitment["travel_minutes"] == 0  # known, not unset
+
+
+def test_the_venue_leg_uses_travel_minutes_not_a_fresh_location_lookup(archive):
+    # A matching saved location can pre-fill travel_minutes, but the chain
+    # reads the commitment's own stored value, never the location's current
+    # travel_minutes_from_home -- so a later edit to the location's default
+    # doesn't retroactively change an already-saved event's chain, and a
+    # manually overridden value is honoured even though it disagrees with
+    # the matched location's own number.
+    cinema = make_location("Cinema", travel_minutes_from_home=20)
+    event_start = f"{MONDAY}T19:30:00"
+    c = make_commitment("c-cinema", event_start, f"{MONDAY}T22:00:00",
+                        home_first=True, prep_minutes=30,
+                        location_id=cinema, location_name="Cinema", travel_minutes=35)
+
+    chain = scheduling.home_first_chain(db.get_commitment(c))
+
+    venue_leg = chain[-1]
+    assert venue_leg["kind"] == "travel"
+    assert venue_leg["to_location_id"] == cinema  # still linked, for display
+    assert venue_leg["start"] == datetime.fromisoformat(f"{MONDAY}T18:55:00")  # 35 min, not 20
+
+
 def test_work_is_displaced_rather_than_overlapping_a_home_first_chain(archive):
     db.save_working_hours([
         {"weekday": 0, "opens": "17:00", "closes": "19:30"},  # MONDAY: narrow, evening-only
         {"weekday": 1, "opens": "09:00", "closes": "17:00"},  # TUESDAY: a normal day
     ])
-    venue = make_location("Venue", travel_minutes_from_home=15)
     make_commitment("c-out", f"{MONDAY}T19:00:00", f"{MONDAY}T21:00:00",
-                    home_first=True, prep_minutes=30, location_id=venue)
+                    home_first=True, prep_minutes=30,
+                    location_name="Venue", travel_minutes=15)
     # 90 minutes would easily fit inside Monday's nominal 17:00-19:30 window
     # if the chain (18:15-19:00, working backwards from the 19:00 event) were
     # ignored -- but only 75 minutes of it (17:00-18:15) are actually free.

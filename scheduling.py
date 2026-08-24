@@ -207,11 +207,14 @@ def home_first_chain(commitment):
     'prep'), commitment_id, and from_location_id/to_location_id. Empty if
     home_first isn't set.
 
-    The venue leg is omitted when the commitment has no location -- there's
-    nothing to size it from, and the entered time still means arrival, just
-    without a costed trip in front of it (the caller is what marks the chain
-    incomplete for that reason; this function only needs to know the location
-    is missing, not why).
+    The venue leg is sized from the commitment's OWN travel_minutes, entered
+    directly or pre-filled from a matching saved location and then left
+    editable (see COMMITMENTS_SCHEMA) -- never looked up fresh from
+    location_id, so a personal event never needs an entry in the locations
+    table at all. It's omitted when travel_minutes isn't set (there's nothing
+    to size it from, and the entered time still means arrival, just without a
+    costed trip in front of it -- the caller marks the chain incomplete for
+    that reason) or when it's genuinely zero (nothing to travel).
 
     The leading travel-to-home leg is omitted when you're already home when
     the chain would start -- there's nothing to travel. "Already home" is
@@ -224,14 +227,16 @@ def home_first_chain(commitment):
         return []
     event_start = datetime.fromisoformat(commitment["start"])
     prep_minutes = commitment.get("prep_minutes") or 0
-    venue = commitment.get("location_id")
+    venue_name = commitment.get("location_name")
+    venue_travel = commitment.get("travel_minutes")
 
     blocks = []  # built latest-first (working backwards); reversed before return
 
-    venue_travel = leg_minutes(HOME, venue) if venue else 0
-    prep_end = event_start - timedelta(minutes=venue_travel)
-    if venue and venue_travel:
-        blocks.append(_chain_block(commitment, "travel", prep_end, event_start, HOME, venue))
+    prep_end = event_start
+    if venue_name and venue_travel:
+        prep_end = event_start - timedelta(minutes=venue_travel)
+        blocks.append(_chain_block(commitment, "travel", prep_end, event_start,
+                                   HOME, commitment.get("location_id")))
 
     prep_start = prep_end - timedelta(minutes=prep_minutes)
     if prep_minutes:

@@ -1063,9 +1063,57 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 .commitment-entry-grid label.checkbox-label { justify-content: center; }
 
 /* display:flex above beats the UA [hidden] rule on specificity -- same issue
-   .modal-overlay[hidden] exists to fix -- so the prep field's own hide (see
-   commitments.js) needs the same explicit override. */
+   .modal-overlay[hidden] exists to fix -- so the prep/travel fields' own
+   hide (see commitments.js) needs the same explicit override. */
 .commitment-entry-grid label[hidden] { display: none; }
+
+/* Location: a plain text input, not tied to the locations table (see
+   COMMITMENTS_SCHEMA) -- the suggestions list below it is a convenience for
+   reusing a saved location's travel time, not a constraint on what can be
+   typed. Positioned like .appearance-advanced-dropdown: absolute against
+   this wrapper so opening it never reflows the grid around it. */
+.commitment-location-input-wrap { position: relative; }
+
+.commitment-location-suggestions {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.5rem;
+  border-radius: 14px;
+  background: var(--bg);
+  box-shadow: var(--raise-md);
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.commitment-location-suggestions[hidden] { display: none; }
+
+.commitment-location-suggestion {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 10px;
+  font-family: var(--sans);
+  font-size: 0.8rem;
+  color: var(--ink);
+  cursor: pointer;
+  transition: var(--press);
+}
+
+.commitment-location-suggestion:hover,
+.commitment-location-suggestion:focus {
+  box-shadow: var(--press-sm);
+  color: var(--ink-strong);
+  outline: none;
+}
+
+.commitment-location-suggestion .muted { font-size: 0.72rem; white-space: nowrap; }
 
 #commitment-save-status:empty { display: none; }
 #commitment-save-status { margin: 0.6rem 0 0; }

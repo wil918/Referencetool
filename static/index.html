@@ -453,11 +453,14 @@
             End
             <input type="datetime-local" id="commitment-end-input">
           </label>
-          <label>
+          <label class="commitment-location-field">
             Location
-            <select id="commitment-location-select">
-              <option value="" selected>None</option>
-            </select>
+            <div class="commitment-location-input-wrap">
+              <input type="text" id="commitment-location-input" autocomplete="off"
+                     placeholder="Where is it? (optional)">
+              <div id="commitment-location-suggestions"
+                   class="commitment-location-suggestions" hidden></div>
+            </div>
           </label>
           <label class="checkbox-label">
             <input type="checkbox" id="commitment-home-first-input">
@@ -466,6 +469,10 @@
           <label id="commitment-prep-field" hidden>
             Prep time (minutes)
             <input type="number" id="commitment-prep-input" min="0" placeholder="e.g. 30">
+          </label>
+          <label id="commitment-travel-field" hidden>
+            Travel time from home (minutes)
+            <input type="number" id="commitment-travel-input" min="0" placeholder="e.g. 15">
           </label>
         </div>
         <p id="commitment-save-status" class="muted"></p>
