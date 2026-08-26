@@ -267,6 +267,27 @@ def test_suggested_bedtime_picks_the_earliest_of_several_candidates(archive):
     assert marker["first_thing_start"] == "2026-01-06T07:30:00"
 
 
+def test_suggested_bedtime_ignores_an_evening_only_tomorrow(archive):
+    # Nothing scheduled tomorrow before noon -- an evening task is not "the
+    # first thing tomorrow morning", so there's no early night to protect
+    # and this must return None rather than working backward from it (which
+    # used to produce a bedtime suggestion in the middle of the afternoon).
+    task = "t1"
+    db.create_task(task, "Evening task")
+    db.create_scheduled_block("b1", task, "2026-01-06T21:45:00", "2026-01-06T23:45:00")
+
+    assert scheduling.suggested_bedtime("2026-01-05") is None
+
+
+def test_suggested_bedtime_skips_an_afternoon_candidate_for_an_earlier_morning_one(archive):
+    db.create_commitment("c1", "Afternoon meeting", "2026-01-06T14:00:00", "2026-01-06T15:00:00")
+    db.create_commitment("c2", "Morning class", "2026-01-06T09:00:00", "2026-01-06T10:00:00")
+
+    marker = scheduling.suggested_bedtime("2026-01-05")
+
+    assert marker["first_thing_start"] == "2026-01-06T09:00:00"
+
+
 def test_suggested_bedtime_respects_saved_settings(archive):
     db.save_schedule_settings(
         sleep_target_minutes=360, morning_routine_minutes=15, bedtime_notifications_enabled=False,

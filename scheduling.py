@@ -554,6 +554,15 @@ def day_energy(date_str):
 
 # --- Suggested bedtime ---------------------------------------------------------
 
+# "First thing tomorrow" only means something if it's actually in the
+# morning -- an evening-only tomorrow (nothing scheduled before this) has no
+# early commitment forcing an early night, and working back a full night's
+# sleep from, say, a 9:45pm task produces a bedtime suggestion that is
+# itself in the afternoon. Candidates starting at or after this hour are
+# skipped rather than answering a question ("when do I need to be asleep to
+# make this?") that doesn't apply to them.
+MORNING_CUTOFF_HOUR = 12
+
 
 def _commitment_travel_minutes(commitment):
     """The trip from home to a commitment's venue, for suggested_bedtime.
@@ -580,10 +589,12 @@ def suggested_bedtime(evening_date_str):
 
     Returns None if tomorrow has nothing with a real time of day to work
     back from -- a day-granularity block that far out has no slot to anchor
-    to (see SLOT_DETAIL_DAYS), and an empty tomorrow gives no reason to name
-    a bedtime at all. This is advisory only: it occupies no time of its own
-    and is never written to scheduled_blocks -- the caller (calendar.js)
-    draws it as a marker, not a block.
+    to (see SLOT_DETAIL_DAYS), an empty tomorrow gives no reason to name a
+    bedtime at all, and neither does a tomorrow whose only scheduled things
+    are all in the afternoon or evening (MORNING_CUTOFF_HOUR) -- there is no
+    "first thing" to protect an early night for. This is advisory only: it
+    occupies no time of its own and is never written to scheduled_blocks --
+    the caller (calendar.js) draws it as a marker, not a block.
     """
     settings = db.get_schedule_settings()
     tomorrow = (date.fromisoformat(evening_date_str) + timedelta(days=1)).isoformat()
@@ -593,10 +604,14 @@ def suggested_bedtime(evening_date_str):
     for commitment in db.list_commitments_between(f"{tomorrow}T00:00:00", f"{day_after}T00:00:00"):
         if commitment["start"] < f"{tomorrow}T00:00:00":
             continue  # started the evening before -- not "tomorrow's first thing"
+        if datetime.fromisoformat(commitment["start"]).hour >= MORNING_CUTOFF_HOUR:
+            continue  # not a morning commitment -- nothing to protect an early night for
         candidates.append((commitment["start"], _commitment_travel_minutes(commitment)))
     for block in db.list_scheduled_blocks_between(tomorrow, day_after):
         if block["kind"] != "task" or block_granularity(block) != "slot":
             continue
+        if datetime.fromisoformat(block["start"]).hour >= MORNING_CUTOFF_HOUR:
+            continue  # not a morning slot -- same reasoning as the commitment above
         task = db.get_task(block["task_id"])
         travel = leg_minutes(HOME, task["required_location_id"]) if task and task.get("required_location_id") else 0
         candidates.append((block["start"], travel))

@@ -21,9 +21,16 @@
 import { deliverableColour } from "./colour.js";
 
 const PX_PER_MIN = 1; // 60px/hour -- keeps every time<->pixel conversion a plain subtraction
+// A day, for scheduling purposes, starts at 5am and runs a full 24 hours --
+// through midnight and into the small hours (12am-4:59am) of the FOLLOWING
+// calendar date, which still renders at the bottom of THIS date's column
+// rather than the top of tomorrow's (tomorrow's own column starts at ITS
+// 5am). elapsedInColumn/isoForColumnElapsed below are the two directions of
+// that mapping; everything that positions or drags something on the axis
+// goes through one of them rather than assuming a date's own 00:00-23:59.
 const START_HOUR = 5;
-const END_HOUR = 24;
-const GRID_HEIGHT = (END_HOUR - START_HOUR) * 60 * PX_PER_MIN;
+const DAY_SPAN_MIN = 24 * 60;
+const GRID_HEIGHT = DAY_SPAN_MIN * PX_PER_MIN;
 const DRAG_THRESHOLD = 4; // px of pointer movement before a press becomes a drag, same as grid.js
 const BLOCK_SNAP_MIN = 5;
 const BAND_SNAP_MIN = 15;
@@ -54,16 +61,38 @@ function minutesOfIso(iso) {
   return h * 60 + m;
 }
 
-function clampMinutes(m) {
-  return Math.max(START_HOUR * 60, Math.min(END_HOUR * 60, m));
+function dateOfIso(iso) {
+  return iso.slice(0, 10);
 }
 
-function yForMinutes(m) {
-  return (clampMinutes(m) - START_HOUR * 60) * PX_PER_MIN;
+/** Minutes elapsed since `dateStr`'s own column began (its 5am) for a raw
+ *  0-1439 minutes-of-day value dated `eventDateStr` -- either `dateStr`
+ *  itself (only sensible from 5am on: anything earlier in a date's own
+ *  00:00-23:59 belongs to the PREVIOUS date's column, see slotEventsFor's
+ *  own dateStr/nextDateStr split) or the day right after it, for the small
+ *  hours before THAT day's own 5am start. */
+function elapsedInColumn(dateStr, eventDateStr, rawMinutes) {
+  if (eventDateStr === dateStr) return rawMinutes - START_HOUR * 60;
+  return DAY_SPAN_MIN - START_HOUR * 60 + rawMinutes; // eventDateStr is the day after dateStr
 }
 
-function minutesForY(y) {
-  return START_HOUR * 60 + y / PX_PER_MIN;
+function yForElapsed(elapsed) {
+  return Math.max(0, Math.min(DAY_SPAN_MIN, elapsed)) * PX_PER_MIN;
+}
+
+/** The inverse of elapsedInColumn -- a pixel position within `dateStr`'s own
+ *  track, back into the absolute date+time it represents, rolling into the
+ *  following calendar date once the position carries past midnight. Used
+ *  only for a block drag, which can land anywhere in the full 24h track;
+ *  a band's own opens/closes never cross midnight (rawMinutesSameDay). */
+function isoForColumnElapsed(dateStr, elapsedMinutes) {
+  const raw = START_HOUR * 60 + elapsedMinutes;
+  if (raw >= 24 * 60) return { dateStr: addDays(dateStr, 1), minutes: raw - 24 * 60 };
+  return { dateStr, minutes: raw };
+}
+
+function rawMinutesSameDay(elapsedMinutes) {
+  return START_HOUR * 60 + elapsedMinutes;
 }
 
 function formatTime(minutes) {
@@ -72,6 +101,16 @@ function formatTime(minutes) {
   const period = h < 12 ? "am" : "pm";
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}:${String(m).padStart(2, "0")}${period}`;
+}
+
+/** formatTime for an elapsed-since-5am value rather than a raw
+ *  minutes-of-day one -- the two agree at 5am (elapsed 0) and diverge from
+ *  there, so an elapsed value must be converted back to true wall-clock
+ *  minutes (mod a full day) before formatting, or a wrapped time (e.g.
+ *  elapsed 1140 = midnight) would print as whatever raw hour that elapsed
+ *  count happens to equal instead of 12am. */
+function formatElapsed(elapsed) {
+  return formatTime((START_HOUR * 60 + elapsed) % (24 * 60));
 }
 
 /* The (opens, closes) window one band is open on `dateStr`, mirroring
@@ -104,11 +143,19 @@ async function getJSON(url) {
 
 /** Everything one visible range needs, in one pass. Exported so a future
  * month view can reuse the fetch/shape without going through the hourly
- * grid this file also builds. */
+ * grid this file also builds.
+ *
+ * `end`'s own small hours (12am-4:59am) render at the bottom of `endDate`'s
+ * column -- see elapsedInColumn -- so both fetches below reach one day past
+ * `endDate` rather than stopping exactly at it, or that continuation would
+ * have nothing to draw. The extra day's later hours come along too and are
+ * simply never rendered by anything on screen, which costs nothing worth
+ * avoiding with a narrower, time-of-day-aware request. */
 export async function loadCalendarData(startDate, endDate) {
+  const fetchEnd = addDays(endDate, 1);
   const [schedule, commitments, workingHours, domesticHours, workingOverrides,
     domesticOverrides, bedtimes, tasks, projects] = await Promise.all([
-    getJSON(`/api/schedule?start=${startDate}&end=${endDate}`),
+    getJSON(`/api/schedule?start=${startDate}&end=${fetchEnd}`),
     getJSON("/api/commitments"),
     getJSON("/api/working-hours"),
     getJSON("/api/domestic-hours"),
@@ -129,7 +176,7 @@ export async function loadCalendarData(startDate, endDate) {
   const deliverablesById = {};
   deliverableLists.forEach((list) => (list || []).forEach((d) => (deliverablesById[d.id] = d)));
 
-  const stop = `${endDate}T23:59:59`;
+  const stop = `${fetchEnd}T23:59:59`;
   const startOfDay = `${startDate}T00:00:00`;
   const visibleCommitments = (commitments || []).filter((c) => c.start < stop && c.end > startOfDay);
 
@@ -270,13 +317,16 @@ export function createCalendar(container, options = {}) {
   // fixed for this component's lifetime, so this never needs to run again.
   bodyEl.style.setProperty("--schedule-num-days", numDays);
 
-  // The hour axis is identical every render -- built once.
+  // The hour axis is identical every render -- built once. 24 labels, one
+  // per hour elapsed since 5am: the wall-clock hour they name wraps back
+  // round through midnight (%24) for the last five, 12am through 4am.
   hourAxis.style.height = `${GRID_HEIGHT}px`;
-  for (let h = START_HOUR; h < END_HOUR; h++) {
+  for (let i = 0; i < 24; i++) {
+    const wallHour = (START_HOUR + i) % 24;
     const label = document.createElement("div");
     label.className = "schedule-hour-label";
-    label.style.top = `${yForMinutes(h * 60)}px`;
-    label.textContent = formatTime(h * 60);
+    label.style.top = `${yForElapsed(i * 60)}px`;
+    label.textContent = formatTime(wallHour * 60);
     hourAxis.appendChild(label);
   }
 
@@ -292,27 +342,56 @@ export function createCalendar(container, options = {}) {
     return { working, domestic };
   }
 
+  /* startMin/endMin below are minutes ELAPSED since dateStr's own 5am (see
+   * elapsedInColumn), not raw minutes-of-day -- that's what lets this
+   * column and the axis agree on where anything sits, including something
+   * dated tomorrow that's really tonight's continuation past midnight.
+   * formatElapsed (not formatTime) is what turns one of these back into a
+   * displayable wall-clock time. */
   function slotEventsFor(dateStr) {
+    const nextDateStr = addDays(dateStr, 1);
+    // A slot-granularity item belongs to this column if it's dated today
+    // from 5am on, or dated tomorrow but still in the small hours before
+    // tomorrow's OWN 5am start -- the same split START_HOUR draws
+    // everywhere else on the axis.
+    const belongsHere = (eventDateStr, rawMinutes) =>
+      (eventDateStr === dateStr && rawMinutes >= START_HOUR * 60) ||
+      (eventDateStr === nextDateStr && rawMinutes < START_HOUR * 60);
+
     const events = [];
     (data.schedule.blocks || []).forEach((b) => {
-      if (b.granularity !== "slot" || !b.start.startsWith(dateStr)) return;
+      if (b.granularity !== "slot") return;
+      const eventDateStr = dateOfIso(b.start);
+      const rawStart = minutesOfIso(b.start);
+      if (!belongsHere(eventDateStr, rawStart)) return;
       const task = b.task_id ? data.tasksById[b.task_id] : null;
+      const startMin = elapsedInColumn(dateStr, eventDateStr, rawStart);
+      const endMin = elapsedInColumn(dateStr, dateOfIso(b.end), minutesOfIso(b.end));
       events.push({
         type: "block",
         block: b,
         kind: b.kind,
         task,
-        startMin: minutesOfIso(b.start),
-        endMin: Math.max(minutesOfIso(b.start) + 1, minutesOfIso(b.end)),
+        startMin,
+        endMin: Math.max(startMin + 1, endMin),
       });
     });
     data.commitments.forEach((c) => {
-      if (!c.start.startsWith(dateStr)) return; // rendered on the day it starts
+      const eventDateStr = dateOfIso(c.start);
+      const rawStart = minutesOfIso(c.start);
+      if (!belongsHere(eventDateStr, rawStart)) return;
+      const startMin = elapsedInColumn(dateStr, eventDateStr, rawStart);
+      // Ends beyond this column's own reach (a different date than it
+      // started) clip at this track's bottom, same as always -- a
+      // multi-day commitment is rendered fresh on each day it touches, not
+      // stretched continuously across columns.
+      const endDateStr = dateOfIso(c.end);
+      const endMin = endDateStr === eventDateStr ? elapsedInColumn(dateStr, endDateStr, minutesOfIso(c.end)) : DAY_SPAN_MIN;
       events.push({
         type: "commitment",
         commitment: c,
-        startMin: minutesOfIso(c.start),
-        endMin: Math.max(minutesOfIso(c.start) + 1, c.end.startsWith(dateStr) ? minutesOfIso(c.end) : 24 * 60),
+        startMin,
+        endMin: Math.max(startMin + 1, endMin),
       });
     });
     return events;
@@ -360,8 +439,10 @@ export function createCalendar(container, options = {}) {
   function makeBandEl(band, kind, dateStr) {
     const el = document.createElement("div");
     el.className = `schedule-band schedule-band-${kind}`;
-    const top = yForMinutes(minutesOfIso(`${dateStr}T${band.opens}:00`));
-    const bottom = yForMinutes(minutesOfIso(`${dateStr}T${band.closes}:00`));
+    // Working/domestic hours never cross midnight, so both edges are always
+    // this same date -- elapsedInColumn's same-day branch.
+    const top = yForElapsed(elapsedInColumn(dateStr, dateStr, minutesOfIso(`${dateStr}T${band.opens}:00`)));
+    const bottom = yForElapsed(elapsedInColumn(dateStr, dateStr, minutesOfIso(`${dateStr}T${band.closes}:00`)));
     el.style.top = `${top}px`;
     el.style.height = `${Math.max(bottom - top, 0)}px`;
 
@@ -392,8 +473,8 @@ export function createCalendar(container, options = {}) {
     el.className = `schedule-block schedule-block-${kindClass}`;
     el.dataset.kind = kindClass;
 
-    const top = yForMinutes(ev.startMin);
-    const height = Math.max(yForMinutes(ev.endMin) - top, MIN_BLOCK_HEIGHT_PX);
+    const top = yForElapsed(ev.startMin);
+    const height = Math.max(yForElapsed(ev.endMin) - top, MIN_BLOCK_HEIGHT_PX);
     el.style.top = `${top}px`;
     el.style.height = `${height}px`;
     el.style.left = `${(ev.lane / ev.laneCount) * 100}%`;
@@ -414,7 +495,7 @@ export function createCalendar(container, options = {}) {
     if (height > 32) {
       const time = document.createElement("span");
       time.className = "schedule-block-time muted";
-      time.textContent = `${formatTime(ev.startMin)}–${formatTime(ev.endMin)}`;
+      time.textContent = `${formatElapsed(ev.startMin)}–${formatElapsed(ev.endMin)}`;
       el.appendChild(time);
     }
 
@@ -456,31 +537,39 @@ export function createCalendar(container, options = {}) {
     return wrap;
   }
 
-  function makeBedtimeEl(marker) {
+  function makeBedtimeEl(dateStr, marker) {
     const el = document.createElement("div");
     el.className = "schedule-bedtime-marker";
     // A bedtime that rolls past midnight (e.g. 00:30) is still tonight's
-    // marker -- clamp it to the bottom of the visible grid rather than
-    // stretching the grid taller for a rare case; it reads as "very late
-    // tonight", which is the truth.
-    const minutes = minutesOfIso(marker.bedtime);
-    const rolledPastMidnight = !marker.bedtime.startsWith(marker.evening_date);
-    const y = rolledPastMidnight ? END_HOUR * 60 * PX_PER_MIN : yForMinutes(minutes);
+    // marker -- elapsedInColumn is what places it proportionally in the
+    // 12am-4am stretch at the bottom of this column instead of clamping it
+    // to a single dumped-at-the-edge position.
+    const bedtimeDateStr = dateOfIso(marker.bedtime);
+    const rawMinutes = minutesOfIso(marker.bedtime);
+    const rolledPastMidnight = bedtimeDateStr !== dateStr;
+    const y = yForElapsed(elapsedInColumn(dateStr, bedtimeDateStr, rawMinutes));
     el.style.top = `${y}px`;
     const label = document.createElement("span");
     label.className = "schedule-bedtime-label";
-    label.textContent = `Suggested bedtime ${formatTime(minutes)}${rolledPastMidnight ? " (after midnight)" : ""}`;
+    label.textContent = `Suggested bedtime ${formatTime(rawMinutes)}${rolledPastMidnight ? " (after midnight)" : ""}`;
     el.appendChild(label);
     return el;
   }
 
-  function makeNowLineEl() {
+  function makeNowLineEl(dateStr) {
+    if (dateStr !== todayStr()) return null;
     const now = new Date();
-    const minutes = now.getHours() * 60 + now.getMinutes();
-    if (minutes < START_HOUR * 60 || minutes > END_HOUR * 60) return null;
+    const rawMinutes = now.getHours() * 60 + now.getMinutes();
+    // Between midnight and 5am, "now" belongs at the bottom of YESTERDAY's
+    // column (its own small-hours continuation), not today's -- today's
+    // cycle-day hasn't started yet by this convention. Rare enough (using
+    // the app in the middle of the night) that simply not drawing a line in
+    // that window, same as before, is an acceptable edge rather than
+    // something worth a second column lookup for.
+    if (rawMinutes < START_HOUR * 60) return null;
     const el = document.createElement("div");
     el.className = "schedule-now-line";
-    el.style.top = `${yForMinutes(minutes)}px`;
+    el.style.top = `${yForElapsed(elapsedInColumn(dateStr, dateStr, rawMinutes))}px`;
     return el;
   }
 
@@ -532,10 +621,10 @@ export function createCalendar(container, options = {}) {
     laned.forEach((ev) => track.appendChild(makeEventEl(ev, dateStr)));
 
     const bedtime = bedtimeFor(dateStr);
-    if (bedtime) track.appendChild(makeBedtimeEl(bedtime));
+    if (bedtime) track.appendChild(makeBedtimeEl(dateStr, bedtime));
 
-    const nowLine = makeNowLineEl();
-    if (nowLine && dateStr === todayStr()) track.appendChild(nowLine);
+    const nowLine = makeNowLineEl(dateStr);
+    if (nowLine) track.appendChild(nowLine);
 
     col.append(header, makeDayListEl(dateStr, dayListFor(dateStr)), track);
     return col;
@@ -624,8 +713,8 @@ export function createCalendar(container, options = {}) {
       if (wasDrag) {
         const top = parseFloat(g.bandEl.style.top);
         const height = parseFloat(g.bandEl.style.height);
-        const edgeY = g.edge === "opens" ? top : top + height;
-        const minutes = minutesForY(edgeY);
+        const edgeElapsed = g.edge === "opens" ? top : top + height;
+        const minutes = rawMinutesSameDay(edgeElapsed); // bands never cross midnight
         const timeStr = `${String(Math.floor(minutes / 60) % 24).padStart(2, "0")}:${String(Math.round(minutes % 60)).padStart(2, "0")}`;
         if (e.shiftKey) {
           await upsertWeeklyHours(g.band, weekdayOf(g.dateStr), { [g.edge]: timeStr });
@@ -641,9 +730,14 @@ export function createCalendar(container, options = {}) {
         // A click, not a drag -- open the task.
         if (g.block.task_id) onOpenTask(g.block.task_id);
       } else {
-        const startMin = minutesForY(parseFloat(g.el.style.top));
-        const clamped = Math.max(START_HOUR * 60, Math.min(startMin, END_HOUR * 60 - g.durationMin));
-        const iso = `${g.dateStr}T${String(Math.floor(clamped / 60)).padStart(2, "0")}:${String(Math.round(clamped % 60)).padStart(2, "0")}:00`;
+        // Position on screen IS the elapsed-since-5am value at PX_PER_MIN=1;
+        // isoForColumnElapsed is what rolls a drop near the bottom into an
+        // absolute time on the FOLLOWING calendar date once it crosses
+        // midnight, rather than the old flat clamp at this date's own
+        // end-of-day that a wider track would now make impossible to reach.
+        const elapsed = Math.max(0, Math.min(parseFloat(g.el.style.top) / PX_PER_MIN, DAY_SPAN_MIN - g.durationMin));
+        const { dateStr: targetDate, minutes: targetMinutes } = isoForColumnElapsed(g.dateStr, elapsed);
+        const iso = `${targetDate}T${String(Math.floor(targetMinutes / 60)).padStart(2, "0")}:${String(Math.round(targetMinutes % 60)).padStart(2, "0")}:00`;
         await fetch(`/api/schedule/blocks/${g.block.id}/move`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
