@@ -259,8 +259,16 @@ export function createCalendar(container, options = {}) {
   const todayBtn = container.querySelector(".schedule-nav-today");
   const rangeLabel = container.querySelector(".schedule-range-label");
   const emptyBanner = container.querySelector(".schedule-empty-banner");
+  const bodyEl = container.querySelector(".schedule-calendar-body");
   const hourAxis = container.querySelector(".schedule-hour-axis");
   const columnsEl = container.querySelector(".schedule-day-columns");
+
+  // Set once, on the grid itself rather than on .schedule-day-columns: a
+  // custom property only cascades to descendants, and grid-template-columns
+  // that reads it now lives on .schedule-calendar-body (style.css), an
+  // ancestor of .schedule-day-columns, not that element itself. numDays is
+  // fixed for this component's lifetime, so this never needs to run again.
+  bodyEl.style.setProperty("--schedule-num-days", numDays);
 
   // The hour axis is identical every render -- built once.
   hourAxis.style.height = `${GRID_HEIGHT}px`;
@@ -537,7 +545,6 @@ export function createCalendar(container, options = {}) {
     renderRangeLabel();
     renderEmptyBanner();
     columnsEl.innerHTML = "";
-    columnsEl.style.setProperty("--schedule-num-days", numDays);
     visibleDates().forEach((d) => columnsEl.appendChild(renderDayColumn(d)));
   }
 

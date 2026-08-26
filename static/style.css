@@ -3862,8 +3862,20 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
   margin-bottom: 1rem;
 }
 
+/* One grid across the whole body -- the hour axis and every day's track are
+   columns of the SAME grid, in the SAME row (row 3), rather than the axis
+   being a flex sibling with nothing above it while each day column carries
+   its own header (and sometimes a "later this week" list) above its track.
+   That mismatch used to shift every day's track down by its header's height
+   with nothing compensating in the axis, so a block whose top aligned with
+   the axis's "10am" tick was actually sitting an hour earlier in its own
+   track -- see the day-columns/day-col subgrid below for how the header and
+   day-list rows are kept in lock-step across every column, axis included,
+   however tall a given day's header or list happens to render. */
 .schedule-calendar-body {
-  display: flex;
+  display: grid;
+  grid-template-columns: 3.4rem repeat(var(--schedule-num-days, 7), 1fr);
+  grid-template-rows: auto auto auto;
   max-height: 70vh;
   overflow-y: auto;
   border-radius: 18px;
@@ -3872,8 +3884,9 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
 }
 
 .schedule-hour-axis {
+  grid-column: 1;
+  grid-row: 3; /* the track row -- rows 1/2 (header/day-list) are just empty cells here */
   position: relative;
-  flex: 0 0 3.4rem;
   border-right: 1px solid rgba(70, 84, 95, 0.1);
 }
 
@@ -3888,15 +3901,29 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
   white-space: nowrap;
 }
 
+/* Re-exposes the parent's own column and row tracks to each day-col below,
+   rather than laying out a second, independent grid -- that's what keeps
+   this grid's row 3 (and everyone else's) sized by the tallest content
+   across every column, axis included, instead of each day column deciding
+   its own row heights in isolation. */
 .schedule-day-columns {
-  flex: 1;
+  grid-column: 2 / -1;
+  grid-row: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(var(--schedule-num-days, 7), 1fr);
+  grid-template-columns: subgrid;
+  grid-template-rows: subgrid;
 }
 
+/* One column of the subgrid above, spanning all three of its rows so it can
+   subgrid them again for its own three children (header, day-list, track --
+   appended in that order in renderDayColumn, which is what places them into
+   rows 1/2/3 here with no explicit grid-row needed). Still a single element
+   for the whole day, so its border and .is-today tint still read as one
+   continuous column the way they did as a flex child. */
 .schedule-day-col {
-  display: flex;
-  flex-direction: column;
+  grid-row: 1 / -1;
+  display: grid;
+  grid-template-rows: subgrid;
   border-right: 1px solid rgba(70, 84, 95, 0.07);
 }
 
