@@ -3460,3 +3460,76 @@ def save_schedule_settings(sleep_target_minutes, morning_routine_minutes, bedtim
                VALUES (?, ?, ?)""",
             (sleep_target_minutes, morning_routine_minutes, 1 if bedtime_notifications_enabled else 0),
         )
+
+
+# --- Schedule: reset (clearing test data) -----------------------------------
+#
+# One place that says what "the schedule" is, shared by the route
+# (POST /api/schedule/reset) and any later caller. Anything NOT named in these
+# tuples is out of scope for a reset: the reference archive's own tables (which
+# only share this SQLite file by accident of being local-first), and
+# ics_feed / schedule_settings, which are remembered preferences rather than
+# anything a test run produced.
+
+# Task and plan data -- everything that accumulates from actually using the
+# scheduler, and the whole reason a reset exists. Always cleared. Ordered
+# children before parents for tidiness only; nothing here enforces foreign
+# keys, so the order isn't load-bearing.
+SCHEDULE_DATA_TABLES = (
+    "scheduled_blocks",
+    "task_actuals",
+    "task_dependencies",
+    "tasks",
+    "commitments",
+    "deliverables",
+    "recurrence_rules",
+    "daily_capacity",
+    "hours_overrides",
+)
+
+# Configuration the user enters once and rarely wants gone -- each group is
+# opt-in so "clear the test data" doesn't also wipe an afternoon of setup.
+SCHEDULE_LOCATION_TABLES = (
+    "location_hours",
+    "location_overrides",
+    "location_travel",
+    "locations",
+)
+SCHEDULE_HOURS_TABLES = ("working_hours", "domestic_hours")
+SCHEDULE_RESOURCE_TABLES = ("resource_items", "resources", "briefs")
+
+
+def reset_schedule(clear_locations=False, clear_hours=False, clear_resources=False):
+    """Empty the schedule back to nothing, for clearing test data between runs.
+
+    Always clears SCHEDULE_DATA_TABLES. Each flag adds one optional group
+    (SCHEDULE_LOCATION_TABLES / SCHEDULE_HOURS_TABLES / SCHEDULE_RESOURCE_TABLES)
+    -- off by default because that data is configuration, not test noise.
+
+    Runs as one transaction: either every listed table is cleared or none is.
+    Returns {table: rows_deleted} in the order the tables were cleared.
+
+    Does NOT touch the task embedding collection -- db.py carries no Chroma
+    dependency and isn't about to grow one. A caller that clears tasks must
+    also clear embeddings.get_task_collection(), or estimation.py keeps
+    offering neighbours from tasks that no longer exist. The one caller, the
+    /api/schedule/reset route, does exactly that.
+    """
+    tables = list(SCHEDULE_DATA_TABLES)
+    if clear_locations:
+        tables += SCHEDULE_LOCATION_TABLES
+    if clear_hours:
+        tables += SCHEDULE_HOURS_TABLES
+    if clear_resources:
+        tables += SCHEDULE_RESOURCE_TABLES
+
+    deleted = {}
+    with get_conn() as conn:
+        for table in tables:
+            # Every name here is a literal from the tuples above, never
+            # anything off the wire, so interpolating it is safe -- same as
+            # _next_position.
+            count = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
+            conn.execute(f"DELETE FROM {table}")
+            deleted[table] = count
+    return deleted

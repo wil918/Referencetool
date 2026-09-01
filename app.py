@@ -2336,6 +2336,56 @@ def api_get_schedule():
     })
 
 
+# --- Schedule: reset ----------------------------------------------------------
+
+
+RESET_SCHEDULE_CONFIRMATION = "clear-schedule"
+
+
+@app.post("/api/schedule/reset")
+def api_reset_schedule():
+    """Empty the schedule back to nothing, for clearing out test data.
+
+    Destructive and not undoable, so it will not fire on an empty or careless
+    request: the body must carry {"confirm": "clear-schedule"} exactly.
+
+    Always clears tasks (with their dependencies and actuals), scheduled
+    blocks, commitments, deliverables, recurrence rules, daily capacity and
+    per-date hours overrides -- see db.SCHEDULE_DATA_TABLES. Three optional
+    flags each clear a group of configuration that is tedious to re-enter and
+    rarely what a reset means, all default false:
+
+        clear_locations  -- locations and their hours, overrides and travel
+        clear_hours      -- the weekly working and domestic hour bands
+        clear_resources  -- the resource library and imported briefs
+
+    The reference archive shares this SQLite file and is never touched, nor
+    are the remembered ICS feed URL and bedtime settings.
+
+    Returns {"deleted": {table: rows, ...}, "task_vectors_deleted": n}.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    if body.get("confirm") != RESET_SCHEDULE_CONFIRMATION:
+        return jsonify({
+            "error": "this wipes all schedule data and cannot be undone; "
+                     f'send {{"confirm": "{RESET_SCHEDULE_CONFIRMATION}"}} to proceed'
+        }), 400
+
+    deleted = db.reset_schedule(
+        clear_locations=bool(body.get("clear_locations")),
+        clear_hours=bool(body.get("clear_hours")),
+        clear_resources=bool(body.get("clear_resources")),
+    )
+
+    # estimation.py finds "similar past tasks" in a Chroma collection of task
+    # vectors, not the tasks table -- clearing one and not the other leaves it
+    # matching new work against tasks that are gone. db.reset_schedule keeps
+    # clear of Chroma by design, so the two-step cleanup lands here.
+    task_vectors_deleted = embeddings.clear_task_collection()
+
+    return jsonify({"deleted": deleted, "task_vectors_deleted": task_vectors_deleted})
+
+
 # --- Schedule: resources -----------------------------------------------------------
 
 

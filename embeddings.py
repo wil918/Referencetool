@@ -110,6 +110,19 @@ def get_task_collection():
     return _task_collection
 
 
+def clear_task_collection():
+    """Drop every vector from the task collection, returning how many there
+    were. Used when the schedule is reset: estimation.index_task_collection
+    rebuilds this wholesale from the tasks table before its next estimate, so
+    emptying it here only stops stale neighbours surfacing in the meantime.
+    The reference collection (get_collection) is left untouched."""
+    collection = get_task_collection()
+    ids = collection.get(include=[])["ids"]
+    if ids:
+        collection.delete(ids=ids)
+    return len(ids)
+
+
 def add_to_index(ref_id, embedding, metadata):
     collection = get_collection()
     collection.add(ids=[ref_id], embeddings=[embedding], metadatas=[metadata])
