@@ -287,6 +287,40 @@ def test_location_crud_and_deletion_clears_required_location_on_tasks(client):
     assert survived["required_location_id"] is None
 
 
+def test_a_location_can_be_created_and_edited_with_a_parent_and_online_flag(client):
+    campus = client.post("/api/locations", json={"name": "Harrow Campus"}).get_json()
+    studio = client.post("/api/locations", json={
+        "name": "Studio", "parent_location_id": campus["id"],
+    }).get_json()
+    assert studio["parent_location_id"] == campus["id"]
+    assert studio["is_online"] is False
+
+    resp = client.put(f"/api/locations/{studio['id']}", json={"is_online": True})
+    assert resp.get_json()["is_online"] is True
+
+
+def test_creating_a_location_rejects_an_unknown_parent(client):
+    resp = client.post("/api/locations", json={"name": "Studio", "parent_location_id": "nonexistent"})
+    assert resp.status_code == 400
+
+
+def test_a_location_parent_update_rejects_a_cycle(client):
+    campus = client.post("/api/locations", json={"name": "Harrow Campus"}).get_json()
+    studio = client.post("/api/locations", json={
+        "name": "Studio", "parent_location_id": campus["id"],
+    }).get_json()
+
+    # Campus is already an ancestor of Studio -- pointing Campus at Studio
+    # would make Studio its own ancestor.
+    resp = client.put(f"/api/locations/{campus['id']}", json={"parent_location_id": studio["id"]})
+
+    assert resp.status_code == 400
+    assert "cycle" in resp.get_json()["error"]
+    # And the rejected edit never landed.
+    still = next(l for l in client.get("/api/locations").get_json() if l["id"] == campus["id"])
+    assert still["parent_location_id"] is None
+
+
 def test_travel_matrix_round_trips_wholesale(client):
     a = client.post("/api/locations", json={"name": "A"}).get_json()
     b = client.post("/api/locations", json={"name": "B"}).get_json()
@@ -521,6 +555,7 @@ def test_schedule_settings_default_before_anything_is_saved(client):
         "sleep_target_minutes": 8 * 60,
         "morning_routine_minutes": 30,
         "bedtime_notifications_enabled": False,
+        "default_location_umbrella_id": None,
     }
 
 
@@ -535,6 +570,7 @@ def test_schedule_settings_round_trip(client):
         "sleep_target_minutes": 420,
         "morning_routine_minutes": 45,
         "bedtime_notifications_enabled": True,
+        "default_location_umbrella_id": None,
     }
     assert client.get("/api/schedule-settings").get_json()["sleep_target_minutes"] == 420
 
@@ -548,7 +584,24 @@ def test_schedule_settings_partial_update_keeps_the_rest(client):
         "sleep_target_minutes": 420,
         "morning_routine_minutes": 20,
         "bedtime_notifications_enabled": True,
+        "default_location_umbrella_id": None,
     }
+
+
+def test_schedule_settings_can_set_the_default_location_umbrella(client):
+    campus = client.post("/api/locations", json={"name": "Harrow Campus"}).get_json()
+
+    resp = client.put("/api/schedule-settings", json={"default_location_umbrella_id": campus["id"]})
+
+    assert resp.get_json()["default_location_umbrella_id"] == campus["id"]
+    # A later partial update that doesn't mention it leaves it in place.
+    resp2 = client.put("/api/schedule-settings", json={"morning_routine_minutes": 20})
+    assert resp2.get_json()["default_location_umbrella_id"] == campus["id"]
+
+
+def test_schedule_settings_rejects_an_unknown_default_location_umbrella(client):
+    resp = client.put("/api/schedule-settings", json={"default_location_umbrella_id": "nonexistent"})
+    assert resp.status_code == 400
 
 
 def test_schedule_settings_rejects_a_non_positive_sleep_target(client):

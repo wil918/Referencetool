@@ -12,6 +12,7 @@
 
 import { createCalendar } from "./calendar.js";
 import { openTaskPanel } from "./task-panel.js";
+import { openCommitmentPanel } from "./commitment-panel.js";
 import { initHoursEditor, openHoursEditor } from "./hours-editor.js";
 
 const calendarContainer = document.getElementById("schedule-calendar");
@@ -95,6 +96,15 @@ function handleOpenTask(taskId) {
   });
 }
 
+// locationsById is only ever needed to resolve a commitment's location NAME
+// for display -- see commitment-panel.js -- so it's captured off the
+// calendar's own onDataLoaded rather than fetched separately here.
+let locationsById = {};
+
+function handleOpenCommitment(commitment) {
+  openCommitmentPanel(commitment, locationsById);
+}
+
 hoursBtn.addEventListener("click", openHoursEditor);
 initHoursEditor(() => calendar?.reload());
 
@@ -103,7 +113,11 @@ export function refreshSchedule() {
     calendar = createCalendar(calendarContainer, {
       numDays: 7,
       onOpenTask: handleOpenTask,
-      onDataLoaded: (data) => renderAtRisk(data.schedule),
+      onOpenCommitment: handleOpenCommitment,
+      onDataLoaded: (data) => {
+        renderAtRisk(data.schedule);
+        locationsById = data.locationsById;
+      },
     });
   } else {
     calendar.reload();

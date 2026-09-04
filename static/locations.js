@@ -177,7 +177,7 @@ function buildDetailFields(loc) {
     const data = await res.json();
     if (!res.ok) {
       status.textContent = `Error: ${data.error}`;
-      return;
+      return false;
     }
     Object.assign(loc, data);
     status.textContent = "Saved.";
@@ -185,6 +185,7 @@ function buildDetailFields(loc) {
     renderTravelSelects();
     renderTravelList();
     onChange();
+    return true;
   };
 
   nameInput.addEventListener("blur", () => {
@@ -215,12 +216,64 @@ function buildDetailFields(loc) {
   });
   wrap.appendChild(addressLabel);
 
+  // Parent (umbrella) and online separate DISPLAY from TRAVEL -- see
+  // CLAUDE.md's data model section. A specific place (Studio, Library)
+  // points at an umbrella that travel is actually priced to and from; an
+  // online place has none at all. Both are checked server-side too (an
+  // unknown or cyclical parent is rejected there), this is just the picker.
+  const parentLabel = document.createElement("label");
+  parentLabel.append("Parent location (umbrella)");
+  const parentSelect = document.createElement("select");
+  const noneOption = document.createElement("option");
+  noneOption.value = "";
+  noneOption.textContent = "None -- its own umbrella";
+  parentSelect.appendChild(noneOption);
+  locations
+    .filter((l) => l.id !== loc.id)
+    .forEach((l) => {
+      const opt = document.createElement("option");
+      opt.value = l.id;
+      opt.textContent = l.name;
+      parentSelect.appendChild(opt);
+    });
+  parentSelect.value = loc.parent_location_id || "";
+  parentLabel.appendChild(parentSelect);
+  parentSelect.addEventListener("change", async () => {
+    const ok = await saveField({ parent_location_id: parentSelect.value || null });
+    // The travel field below is disabled/enabled by whether a parent is
+    // set, so a successful change has to redraw the whole panel to stay
+    // honest. A rejection (a cycle) leaves the select itself un-reverted --
+    // re-rendering it too would need re-deriving its old value for no gain,
+    // since the error message already says what went wrong.
+    if (ok) await renderDetail(loc.id);
+  });
+  wrap.appendChild(parentLabel);
+
+  const onlineLabel = document.createElement("label");
+  onlineLabel.className = "checkbox-label";
+  const onlineInput = document.createElement("input");
+  onlineInput.type = "checkbox";
+  onlineInput.checked = Boolean(loc.is_online);
+  onlineLabel.appendChild(onlineInput);
+  onlineLabel.append("No travel from anywhere (online)");
+  onlineInput.addEventListener("change", () => {
+    saveField({ is_online: onlineInput.checked });
+  });
+  wrap.appendChild(onlineLabel);
+
   const travelLabel = document.createElement("label");
   travelLabel.append("Travel from home (minutes)");
+  const travelHint = document.createElement("span");
+  travelHint.className = "muted";
+  travelHint.textContent = loc.parent_location_id
+    ? " -- ignored while a parent is set; edit the parent's instead"
+    : "";
+  travelLabel.appendChild(travelHint);
   const travelInput = document.createElement("input");
   travelInput.type = "number";
   travelInput.min = "0";
   travelInput.value = loc.travel_minutes_from_home ?? "";
+  travelInput.disabled = Boolean(loc.parent_location_id);
   travelLabel.appendChild(travelInput);
   travelInput.addEventListener("change", () => {
     const raw = travelInput.value.trim();

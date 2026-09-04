@@ -1782,6 +1782,9 @@ def api_create_location():
     name = (body.get("name") or "").strip()
     if not name:
         return jsonify({"error": "a name is required"}), 400
+    parent_location_id = body.get("parent_location_id")
+    if parent_location_id and not db.get_location(parent_location_id):
+        return jsonify({"error": "parent_location_id must be an existing location"}), 400
     location_id = str(uuid.uuid4())
     db.create_location(
         location_id,
@@ -1789,6 +1792,8 @@ def api_create_location():
         address=body.get("address"),
         travel_minutes_from_home=body.get("travel_minutes_from_home"),
         notes=body.get("notes"),
+        parent_location_id=parent_location_id,
+        is_online=bool(body.get("is_online")),
     )
     return jsonify(db.get_location(location_id))
 
@@ -1801,6 +1806,17 @@ def api_update_location(location_id):
     fields = {k: v for k, v in body.items() if k in db.LOCATION_PATCH_COLUMNS}
     if "name" in fields and not (fields["name"] or "").strip():
         return jsonify({"error": "a name is required"}), 400
+    if fields.get("parent_location_id"):
+        if not db.get_location(fields["parent_location_id"]):
+            return jsonify({"error": "parent_location_id must be an existing location"}), 400
+        cycle = db.location_parent_cycle(location_id, fields["parent_location_id"])
+        if cycle:
+            names = {l["id"]: l["name"] for l in db.get_locations_by_ids(cycle)}
+            chain = " -> ".join(names.get(lid, lid) for lid in cycle)
+            return jsonify({
+                "error": f"would create a location cycle: {chain}",
+                "location_ids": cycle,
+            }), 400
     db.update_location(location_id, **fields)
     return jsonify(db.get_location(location_id))
 
@@ -2132,18 +2148,22 @@ def api_get_schedule_settings():
 @app.put("/api/schedule-settings")
 def api_save_schedule_settings():
     """Whole-object replace, same convention as the hours endpoints -- the
-    settings panel (session 9's bedtime section) always submits all three
-    fields together."""
+    settings panel (session 9's bedtime section) always submits all fields
+    together, falling back to the current value for anything a caller omits
+    (e.g. calendar-import.js only ever sends default_location_umbrella_id)."""
     body = request.get_json(force=True, silent=True) or {}
     current = db.get_schedule_settings()
     sleep_target = body.get("sleep_target_minutes", current["sleep_target_minutes"])
     morning_routine = body.get("morning_routine_minutes", current["morning_routine_minutes"])
     notify = body.get("bedtime_notifications_enabled", current["bedtime_notifications_enabled"])
+    umbrella_id = body.get("default_location_umbrella_id", current["default_location_umbrella_id"])
     if not isinstance(sleep_target, (int, float)) or sleep_target <= 0:
         return jsonify({"error": "sleep_target_minutes must be a positive number"}), 400
     if not isinstance(morning_routine, (int, float)) or morning_routine < 0:
         return jsonify({"error": "morning_routine_minutes must be zero or more"}), 400
-    db.save_schedule_settings(int(sleep_target), int(morning_routine), bool(notify))
+    if umbrella_id and not db.get_location(umbrella_id):
+        return jsonify({"error": "default_location_umbrella_id must be an existing location"}), 400
+    db.save_schedule_settings(int(sleep_target), int(morning_routine), bool(notify), umbrella_id)
     return jsonify(db.get_schedule_settings())
 
 

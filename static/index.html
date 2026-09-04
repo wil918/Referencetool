@@ -463,6 +463,20 @@
         </div>
       </div>
 
+      <div class="calendar-import-section">
+        <h4>Locations acquired on import</h4>
+        <p class="muted">
+          A feed session's site (A Building, Online, ...) becomes a location automatically the
+          first time it's seen, so imported sessions get somewhere to be without hand-entry.
+          A new one is filed under this umbrella -- travel is priced to and from here, and the
+          specific room is still what shows on the calendar. Leave unset to have each site
+          become its own umbrella instead.
+        </p>
+        <select id="calendar-default-umbrella-select">
+          <option value="">No default umbrella</option>
+        </select>
+      </div>
+
       <p id="calendar-import-status" class="muted"></p>
     </div>
   </div>

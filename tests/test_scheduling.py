@@ -14,9 +14,10 @@ import db
 import scheduling
 
 
-def make_location(name, travel_minutes_from_home=None):
+def make_location(name, travel_minutes_from_home=None, parent_location_id=None, is_online=False):
     location_id = name.lower().replace(" ", "-")
-    db.create_location(location_id, name, travel_minutes_from_home=travel_minutes_from_home)
+    db.create_location(location_id, name, travel_minutes_from_home=travel_minutes_from_home,
+                       parent_location_id=parent_location_id, is_online=is_online)
     return location_id
 
 
@@ -72,6 +73,90 @@ def test_a_reverse_pair_row_overrides_the_symmetric_fallback(archive):
 
     assert scheduling.travel_minutes(studio, shop) == 8
     assert scheduling.travel_minutes(shop, studio) == 12
+
+
+# --- Location umbrellas: display vs. travel -------------------------------------
+#
+# parent_location_id separates "where you're going" (the Studio, the Library)
+# from "how long it takes to get there" (Harrow Campus). Two places under the
+# same umbrella are zero travel apart, however different their names or their
+# own travel_minutes_from_home -- travel is priced at the root, never the leaf.
+
+
+def test_two_locations_sharing_an_umbrella_resolve_to_zero_travel(archive):
+    campus = make_location("Harrow Campus", travel_minutes_from_home=40)
+    studio = make_location("Studio", travel_minutes_from_home=999, parent_location_id=campus)
+    library = make_location("Library", travel_minutes_from_home=999, parent_location_id=campus)
+
+    assert scheduling.travel_minutes(studio, library) == 0
+    assert scheduling.travel_minutes(library, studio) == 0
+
+
+def test_an_umbrella_less_location_behaves_as_before(archive):
+    # No parent_location_id set at all -- resolving to root is a no-op, so
+    # this is exactly test_via_home_fallback_when_no_direct_pair_is_on_file.
+    studio = make_location("Studio", travel_minutes_from_home=15)
+    shop = make_location("Fabric Shop", travel_minutes_from_home=25)
+
+    assert scheduling.travel_minutes(studio, shop) == 40
+
+
+def test_a_direct_travel_row_recorded_at_the_umbrella_still_applies_to_its_children(archive):
+    campus = make_location("Harrow Campus")
+    other_campus = make_location("Regent Street Campus")
+    studio = make_location("Studio", parent_location_id=campus)
+    db.save_travel([{"from_location_id": campus, "to_location_id": other_campus, "minutes": 25}])
+
+    # The pair is on file for the umbrellas, never for the room directly.
+    assert scheduling.travel_minutes(studio, other_campus) == 25
+
+
+def test_location_parent_cycle_rejects_a_location_becoming_its_own_ancestor(archive):
+    campus = make_location("Harrow Campus")
+    studio = make_location("Studio", parent_location_id=campus)
+
+    # Campus is already an ancestor of Studio; making Campus depend on Studio
+    # would close the loop.
+    assert db.location_parent_cycle(campus, studio) is not None
+    assert db.location_parent_cycle(studio, studio) is not None
+    # But the existing, non-cyclical link is untouched.
+    assert db.location_parent_cycle(studio, campus) is None
+
+
+def test_resolve_location_root_does_not_hang_on_a_cycle_that_bypassed_the_guard(archive):
+    # location_parent_cycle is what actually prevents this from being written
+    # via the API -- this proves resolve_location_root still terminates if a
+    # cycle ever got into the data some other way (e.g. hand-edited).
+    a = make_location("A")
+    b = make_location("B", parent_location_id=a)
+    db.update_location(a, parent_location_id=b)
+
+    scheduling.travel_minutes(a, b)  # must return, not loop forever
+
+
+# --- Online locations: no travel, and no change of context ----------------------
+
+
+def test_an_online_location_has_no_travel_from_anywhere(archive):
+    online = make_location("Online", travel_minutes_from_home=999, is_online=True)
+    studio = make_location("Studio", travel_minutes_from_home=15)
+
+    assert scheduling.travel_minutes(online, studio) == 0
+    assert scheduling.travel_minutes(studio, online) == 0
+    assert scheduling.leg_minutes(scheduling.HOME, online) == 0
+
+
+def test_an_online_session_does_not_change_the_current_location(archive):
+    online = make_location("Online", is_online=True)
+    studio = make_location("Studio", travel_minutes_from_home=15)
+
+    items = [
+        {"task_id": "t-1", "start": None, "finish": datetime(2026, 3, 2, 10, 0), "location": studio},
+        {"task_id": "t-2", "start": None, "finish": datetime(2026, 3, 2, 11, 0), "location": online},
+    ]
+    # Read as of right after the online item: it must read straight through
+    # to the Studio placement before it, not report "Online" or fall to HOME.
+    assert scheduling._context_before(items, datetime(2026, 3, 2, 11, 30)) == studio
 
 
 # --- Daily capacity ------------------------------------------------------------
@@ -1208,6 +1293,48 @@ def test_travel_is_counted_against_the_day_but_never_folded_into_the_task(archiv
     assert result["summary"]["travel_minutes"] == 30
     task_block = next(b for b in result["blocks"] if b["kind"] == "task")
     assert task_block["minutes"] == 120
+
+
+def test_two_rooms_under_the_same_umbrella_generate_no_travel_block_between_them(archive):
+    # The whole point of session 9a: the Studio and the Library are different
+    # places to be told apart on the calendar, but they're the same building,
+    # so back-to-back tasks in each must not insert a trip between them.
+    working_week(closes="18:00")
+    campus = make_location("Harrow Campus", travel_minutes_from_home=30)
+    studio = make_location("Studio", parent_location_id=campus)
+    library = make_location("Library", parent_location_id=campus)
+    location_hours(studio, "09:00", "12:00")
+    location_hours(library, "12:00", "18:00")
+    task("t-cut", "Pattern cutting", est_minutes=60, required_location_id=studio, deadline=MONDAY)
+    task("t-read", "Read up on finishes", est_minutes=60, required_location_id=library,
+         deadline=MONDAY)
+
+    legs = [b for b in scheduling.plan(MONDAY)["blocks"] if b["kind"] == "travel"]
+
+    assert not any(b["from_location_id"] == studio and b["to_location_id"] == library for b in legs)
+    # Still one trip out from home and one trip back -- the umbrella has a
+    # real travel_minutes_from_home, this only cancels the LEG BETWEEN them.
+    assert [b["minutes"] for b in legs] == [30, 30]
+
+
+def test_an_online_session_between_two_studio_tasks_inserts_no_travel_at_all(archive):
+    working_week(closes="18:00")
+    studio = make_location("Studio", travel_minutes_from_home=20)
+    online = make_location("Online", is_online=True)
+    location_hours(studio, "09:00", "18:00")
+    task("t-morning", "Toile fitting", est_minutes=60, required_location_id=studio, deadline=MONDAY)
+    task("t-lecture", "Live seminar", est_minutes=60, required_location_id=online, deadline=MONDAY)
+    task("t-afternoon", "Pattern cutting", est_minutes=60, required_location_id=studio,
+         deadline=MONDAY)
+
+    legs = [b for b in scheduling.plan(MONDAY)["blocks"] if b["kind"] == "travel"]
+
+    # One trip in from home before the first Studio task and one trip home
+    # after the last -- nothing at all around the online session in between.
+    assert [b["minutes"] for b in legs] == [20, 20]
+    assert [(b["from_location_id"], b["to_location_id"]) for b in legs] == [
+        (None, studio), (studio, None),
+    ]
 
 
 def test_a_trip_between_two_locations_uses_the_pair_rather_than_going_via_home(archive):

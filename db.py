@@ -527,6 +527,16 @@ CREATE TABLE IF NOT EXISTS scheduled_blocks (
 # name matches a saved location (so the two stay linked for that
 # convenience), but scheduling.home_first_chain reads location_name/
 # travel_minutes, not location_id, for the venue leg.
+#
+# meta is JSON: the structured fields ics_import.py's parser can confidently
+# pull out of an institutional feed's house format (module_code, module_name,
+# delivery_type, site, room, details, lecturer), plus a "raw" object holding
+# the feed's own summary/location/description text so a later reparse -- the
+# parser improving, or the university changing its export -- never needs a
+# re-fetch. Its own JSON column rather than seven of its own, and versioned by
+# convention rather than a schema field, for the same reason as
+# deliverables.spec: parsed source data whose shape is expected to move.
+# Always NULL for a commitment entered by hand -- there's no feed to parse.
 COMMITMENTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS commitments (
     id TEXT PRIMARY KEY,
@@ -542,7 +552,8 @@ CREATE TABLE IF NOT EXISTS commitments (
     home_first INTEGER NOT NULL DEFAULT 0,
     prep_minutes INTEGER,
     location_name TEXT,
-    travel_minutes INTEGER
+    travel_minutes INTEGER,
+    meta TEXT
 );
 """
 
@@ -558,13 +569,30 @@ CREATE TABLE IF NOT EXISTS ics_feed (
 
 # A place work can happen. travel_minutes_from_home is a cheap default the
 # scheduler can use before location_travel has a specific pair on file.
+#
+# parent_location_id separates DISPLAY from TRAVEL: a specific place (Studio
+# 3, the Library, E1.01) points at an umbrella (Harrow Campus) that is what
+# travel is actually measured to and from. A location with no parent is its
+# own umbrella, same as before this column existed -- see
+# scheduling.travel_minutes, which resolves every location to the root of its
+# parent chain before any lookup. Guarded against cycles by
+# location_parent_cycle rather than a foreign key, since SQLite can't express
+# "not an ancestor of itself".
+#
+# is_online marks a location that has no travel from anywhere and does not
+# count as "being" anywhere for the purpose of what the next commitment
+# travels from -- see scheduling.travel_minutes and _context_before. A flag
+# rather than matching the name "Online", so a feed that spells it differently
+# still works once the location is flagged.
 LOCATIONS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS locations (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     address TEXT,
     travel_minutes_from_home INTEGER,
-    notes TEXT
+    notes TEXT,
+    parent_location_id TEXT,
+    is_online INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -736,11 +764,17 @@ CREATE TABLE IF NOT EXISTS daily_capacity (
 # (or use) permission to fire a browser Notification when that time arrives.
 # Singleton, same delete-then-insert convention as ICS_FEED_SCHEMA -- there is
 # only ever one row, so no id column to key it on.
+#
+# default_location_umbrella_id is the parent ics_import.py hangs a newly
+# created location under when a feed's `site` has never been seen before --
+# nullable, since a user who hasn't set one just gets a parentless
+# (self-umbrella) location, same as before this column existed.
 SCHEDULE_SETTINGS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schedule_settings (
     sleep_target_minutes INTEGER NOT NULL,
     morning_routine_minutes INTEGER NOT NULL,
-    bedtime_notifications_enabled INTEGER NOT NULL DEFAULT 0
+    bedtime_notifications_enabled INTEGER NOT NULL DEFAULT 0,
+    default_location_umbrella_id TEXT
 );
 """
 
@@ -848,6 +882,10 @@ def init_db():
             "ALTER TABLE commitments ADD COLUMN prep_minutes INTEGER",
             "ALTER TABLE commitments ADD COLUMN location_name TEXT",
             "ALTER TABLE commitments ADD COLUMN travel_minutes INTEGER",
+            "ALTER TABLE commitments ADD COLUMN meta TEXT",
+            "ALTER TABLE locations ADD COLUMN parent_location_id TEXT",
+            "ALTER TABLE locations ADD COLUMN is_online INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE schedule_settings ADD COLUMN default_location_umbrella_id TEXT",
         ):
             try:
                 conn.execute(ddl)
@@ -2861,14 +2899,15 @@ def _scheduled_block_to_dict(row):
 
 def create_commitment(commitment_id, title, start, end, kind=None, location_id=None,
                       support_level="none", source=None, external_uid=None, energy_cost=None,
-                      home_first=False, prep_minutes=None, location_name=None, travel_minutes=None):
+                      home_first=False, prep_minutes=None, location_name=None, travel_minutes=None,
+                      meta=None):
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO commitments
                    (id, title, start, end, kind, location_id, support_level, source,
                     external_uid, energy_cost, home_first, prep_minutes, location_name,
-                    travel_minutes)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    travel_minutes, meta)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 commitment_id,
                 title,
@@ -2884,6 +2923,7 @@ def create_commitment(commitment_id, title, start, end, kind=None, location_id=N
                 prep_minutes,
                 location_name,
                 travel_minutes,
+                json.dumps(meta) if meta is not None else None,
             ),
         )
 
@@ -2938,7 +2978,7 @@ def list_commitments_between(range_start, range_end):
 COMMITMENT_PATCH_COLUMNS = (
     "title", "start", "end", "kind", "location_id", "support_level", "source",
     "external_uid", "energy_cost", "home_first", "prep_minutes", "location_name",
-    "travel_minutes",
+    "travel_minutes", "meta",
 )
 
 
@@ -2950,6 +2990,8 @@ def update_commitment(commitment_id, **fields):
         value = fields[column]
         if column == "home_first":
             value = 1 if value else 0
+        elif column == "meta":
+            value = json.dumps(value) if value is not None else None
         sets.append(f"{column} = ?")
         params.append(value)
     if not sets:
@@ -2963,6 +3005,7 @@ def update_commitment(commitment_id, **fields):
 def _commitment_to_dict(row):
     d = dict(row)
     d["home_first"] = bool(d["home_first"])
+    d["meta"] = json.loads(d["meta"]) if d["meta"] else None
     return d
 
 
@@ -2986,28 +3029,40 @@ def save_ics_feed_url(feed_url):
 # --- Schedule: locations ------------------------------------------------------
 
 
-def create_location(location_id, name, address=None, travel_minutes_from_home=None, notes=None):
+def create_location(location_id, name, address=None, travel_minutes_from_home=None, notes=None,
+                    parent_location_id=None, is_online=False):
     with get_conn() as conn:
         conn.execute(
-            """INSERT INTO locations (id, name, address, travel_minutes_from_home, notes)
-               VALUES (?, ?, ?, ?, ?)""",
-            (location_id, name, address, travel_minutes_from_home, notes),
+            """INSERT INTO locations
+                   (id, name, address, travel_minutes_from_home, notes, parent_location_id,
+                    is_online)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (location_id, name, address, travel_minutes_from_home, notes, parent_location_id,
+             1 if is_online else 0),
         )
 
 
 def list_locations():
     with get_conn() as conn:
         rows = conn.execute("SELECT * FROM locations ORDER BY name").fetchall()
-        return [dict(r) for r in rows]
+        return [_location_to_dict(r) for r in rows]
 
 
 def get_location(location_id):
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM locations WHERE id = ?", (location_id,)).fetchone()
-        return dict(row) if row else None
+        return _location_to_dict(row) if row else None
 
 
-LOCATION_PATCH_COLUMNS = ("name", "address", "travel_minutes_from_home", "notes")
+def _location_to_dict(row):
+    d = dict(row)
+    d["is_online"] = bool(d["is_online"])
+    return d
+
+
+LOCATION_PATCH_COLUMNS = (
+    "name", "address", "travel_minutes_from_home", "notes", "parent_location_id", "is_online",
+)
 
 
 def update_location(location_id, **fields):
@@ -3015,14 +3070,90 @@ def update_location(location_id, **fields):
     for column in LOCATION_PATCH_COLUMNS:
         if column not in fields:
             continue
+        value = fields[column]
+        if column == "is_online":
+            value = 1 if value else 0
         sets.append(f"{column} = ?")
-        params.append(fields[column])
+        params.append(value)
     if not sets:
         return
     with get_conn() as conn:
         conn.execute(
             f"UPDATE locations SET {', '.join(sets)} WHERE id = ?", [*params, location_id]
         )
+
+
+def location_parent_cycle(location_id, new_parent_id):
+    """The chain of existing parent links, from new_parent_id up to
+    location_id, that would close into a cycle if location_id's
+    parent_location_id were set to new_parent_id -- or None if the new link
+    is safe.
+
+    A location cannot be its own ancestor. Walks the whole existing chain
+    (depth is one level in practice, but this doesn't assume that) rather
+    than checking new_parent_id alone, so a deeper setup is still guarded.
+    Mirrors task_dependency_cycle's shape: called before the write, which
+    trusts the caller and simply writes the column.
+    """
+    if not new_parent_id:
+        return None
+    if location_id == new_parent_id:
+        return [location_id, new_parent_id]
+
+    with get_conn() as conn:
+        rows = conn.execute("SELECT id, parent_location_id FROM locations").fetchall()
+    parent_by_id = {r["id"]: r["parent_location_id"] for r in rows}
+
+    chain = [new_parent_id]
+    current = new_parent_id
+    seen = {new_parent_id}
+    while parent_by_id.get(current):
+        current = parent_by_id[current]
+        chain.append(current)
+        if current == location_id:
+            return chain
+        if current in seen:
+            return None  # a pre-existing cycle elsewhere in the data, unrelated to this edge
+        seen.add(current)
+    return None
+
+
+def resolve_location_root(location_id):
+    """The location at the top of location_id's parent chain -- itself, if it
+    has no parent (a child with no parent behaves exactly as before this
+    column existed). This is what scheduling.travel_minutes resolves both
+    sides to before any travel lookup, so "Studio" and "Library" under the
+    same "Harrow Campus" umbrella price as the same place.
+
+    Bounded by `seen` so a cycle that somehow slipped past
+    location_parent_cycle can't loop forever -- that function is what
+    actually prevents one being written; this just refuses to hang if one
+    exists anyway.
+    """
+    if not location_id:
+        return location_id
+    with get_conn() as conn:
+        rows = conn.execute("SELECT id, parent_location_id FROM locations").fetchall()
+    parent_by_id = {r["id"]: r["parent_location_id"] for r in rows}
+    current = location_id
+    seen = set()
+    while parent_by_id.get(current) and current not in seen:
+        seen.add(current)
+        current = parent_by_id[current]
+    return current
+
+
+def get_locations_by_ids(ids):
+    """Many locations at once, e.g. to name every location in a rejected
+    parent cycle without a query per location."""
+    if not ids:
+        return []
+    placeholders = ",".join("?" for _ in ids)
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM locations WHERE id IN ({placeholders})", ids
+        ).fetchall()
+        return [_location_to_dict(r) for r in rows]
 
 
 def delete_location(location_id):
@@ -3445,20 +3576,24 @@ def get_schedule_settings():
                 "sleep_target_minutes": DEFAULT_SLEEP_TARGET_MINUTES,
                 "morning_routine_minutes": DEFAULT_MORNING_ROUTINE_MINUTES,
                 "bedtime_notifications_enabled": False,
+                "default_location_umbrella_id": None,
             }
         d = dict(row)
         d["bedtime_notifications_enabled"] = bool(d["bedtime_notifications_enabled"])
         return d
 
 
-def save_schedule_settings(sleep_target_minutes, morning_routine_minutes, bedtime_notifications_enabled):
+def save_schedule_settings(sleep_target_minutes, morning_routine_minutes,
+                           bedtime_notifications_enabled, default_location_umbrella_id=None):
     with get_conn() as conn:
         conn.execute("DELETE FROM schedule_settings")
         conn.execute(
             """INSERT INTO schedule_settings
-                   (sleep_target_minutes, morning_routine_minutes, bedtime_notifications_enabled)
-               VALUES (?, ?, ?)""",
-            (sleep_target_minutes, morning_routine_minutes, 1 if bedtime_notifications_enabled else 0),
+                   (sleep_target_minutes, morning_routine_minutes, bedtime_notifications_enabled,
+                    default_location_umbrella_id)
+               VALUES (?, ?, ?, ?)""",
+            (sleep_target_minutes, morning_routine_minutes, 1 if bedtime_notifications_enabled else 0,
+             default_location_umbrella_id),
         )
 
 

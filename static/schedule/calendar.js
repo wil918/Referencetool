@@ -154,7 +154,7 @@ async function getJSON(url) {
 export async function loadCalendarData(startDate, endDate) {
   const fetchEnd = addDays(endDate, 1);
   const [schedule, commitments, workingHours, domesticHours, workingOverrides,
-    domesticOverrides, bedtimes, tasks, projects] = await Promise.all([
+    domesticOverrides, bedtimes, tasks, projects, locations] = await Promise.all([
     getJSON(`/api/schedule?start=${startDate}&end=${fetchEnd}`),
     getJSON("/api/commitments"),
     getJSON("/api/working-hours"),
@@ -164,7 +164,9 @@ export async function loadCalendarData(startDate, endDate) {
     getJSON(`/api/schedule/bedtimes?start=${startDate}&end=${endDate}`),
     getJSON("/api/tasks"),
     getJSON("/api/projects"),
+    getJSON("/api/locations"),
   ]);
+  const locationsById = Object.fromEntries((locations || []).map((l) => [l.id, l]));
 
   const tasksById = Object.fromEntries((tasks || []).map((t) => [t.id, t]));
   const projectIds = [...new Set(
@@ -191,7 +193,43 @@ export async function loadCalendarData(startDate, endDate) {
     tasksById,
     deliverablesById,
     projects: projects || [],
+    locationsById,
   };
+}
+
+// --- Location umbrellas: display vs. travel -------------------------------
+//
+// Mirrors scheduling.resolve_location_root/travel_minutes by hand rather than
+// sharing code across the Python/JS boundary -- same convention as
+// effectiveBandWindow above. Only the home leg is needed here (a block shows
+// the trip FROM HOME to get to it, never location-to-location), which is
+// simpler than the backend's full pairwise travel_minutes.
+
+function resolveLocationRoot(locationsById, locationId) {
+  let current = locationId;
+  const seen = new Set();
+  while (locationsById[current]?.parent_location_id && !seen.has(current)) {
+    seen.add(current);
+    current = locationsById[current].parent_location_id;
+  }
+  return current;
+}
+
+/** Minutes from home to `locationId`'s umbrella, or null when travel doesn't
+ * apply at all -- no location, an online one (see LOCATIONS_SCHEMA.is_online),
+ * or nobody has entered a travel_minutes_from_home for its umbrella yet. */
+function travelMinutesFromHome(locationsById, locationId) {
+  if (!locationId) return null;
+  const location = locationsById[locationId];
+  if (!location || location.is_online) return null;
+  const root = locationsById[resolveLocationRoot(locationsById, locationId)];
+  const minutes = root?.travel_minutes_from_home;
+  return minutes ? minutes : null;
+}
+
+function leaveByLabel(startIso, minutes) {
+  const leave = new Date(new Date(startIso).getTime() - minutes * 60000);
+  return leave.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
 // --- hours_overrides upsert ---------------------------------------------------
@@ -279,6 +317,7 @@ function layoutLanes(events) {
 export function createCalendar(container, options = {}) {
   const numDays = options.numDays || 7;
   const onOpenTask = options.onOpenTask || (() => {});
+  const onOpenCommitment = options.onOpenCommitment || (() => {});
   const onDataLoaded = options.onDataLoaded || (() => {});
   // Only the week view (numDays: 7) should open on Monday regardless of what
   // day it is today -- the day view (numDays: 1) mounts this same component
@@ -468,13 +507,33 @@ export function createCalendar(container, options = {}) {
   }
 
   function labelForBlock(ev) {
-    if (ev.type === "commitment") return ev.commitment.title;
+    // The module name is THE IMPORTANT ONE (see ics_import.py's parser) --
+    // it's what a lecture actually IS, where the bare module code or a raw
+    // feed title is not. Falls back to the commitment's own title for
+    // anything not imported from a house-format feed (a personal event, or a
+    // commitment the parser couldn't confidently name).
+    if (ev.type === "commitment") return ev.commitment.meta?.module_name || ev.commitment.title;
     const b = ev.block;
     if (b.kind === "task") return ev.task ? ev.task.title : "Task";
     if (b.kind === "travel") return "Travel";
     if (b.kind === "prep") return "Getting ready";
     if (b.kind === "break") return "Break";
     return b.kind;
+  }
+
+  /* delivery type and room -- the second-most-useful thing a block can show,
+   * never competing with the module name for top billing (see labelForBlock).
+   * Room over site: "E1.01" tells you where to walk, "E Building" doesn't. */
+  function subtitleForCommitment(commitment) {
+    const meta = commitment.meta || {};
+    const parts = [meta.delivery_type, meta.room || meta.site].filter(Boolean);
+    return parts.join(" · "); // middle dot
+  }
+
+  function travelHintForCommitment(commitment) {
+    const minutes = travelMinutesFromHome(data.locationsById, commitment.location_id);
+    if (!minutes) return null;
+    return `${minutes} min travel · leave ${leaveByLabel(commitment.start, minutes)}`;
   }
 
   function makeEventEl(ev, dateStr) {
@@ -502,11 +561,34 @@ export function createCalendar(container, options = {}) {
     label.textContent = labelForBlock(ev);
     el.appendChild(label);
 
+    // A calendar cell that tries to show everything shows nothing -- each
+    // extra line only earns its place once the block is tall enough to hold
+    // the ones before it too, in order of how useful it is at a glance.
+    if (ev.type === "commitment") {
+      const subtitle = subtitleForCommitment(ev.commitment);
+      if (subtitle && height > 44) {
+        const sub = document.createElement("span");
+        sub.className = "schedule-block-subtitle muted";
+        sub.textContent = subtitle;
+        el.appendChild(sub);
+      }
+    }
+
     if (height > 32) {
       const time = document.createElement("span");
       time.className = "schedule-block-time muted";
       time.textContent = `${formatElapsed(ev.startMin)}–${formatElapsed(ev.endMin)}`;
       el.appendChild(time);
+    }
+
+    if (ev.type === "commitment") {
+      const travelHint = height > 60 ? travelHintForCommitment(ev.commitment) : null;
+      if (travelHint) {
+        const travel = document.createElement("span");
+        travel.className = "schedule-block-travel-hint muted";
+        travel.textContent = travelHint;
+        el.appendChild(travel);
+      }
     }
 
     if (ev.type === "block" && ev.block.kind === "task" && ev.block.is_locked) {
@@ -520,6 +602,8 @@ export function createCalendar(container, options = {}) {
     const isDraggableTask = ev.type === "block" && ev.block.kind === "task";
     if (isDraggableTask) {
       wireTaskBlockGesture(el, ev, dateStr);
+    } else if (ev.type === "commitment") {
+      el.addEventListener("click", () => onOpenCommitment(ev.commitment));
     }
     return el;
   }

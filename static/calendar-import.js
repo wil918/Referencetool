@@ -19,6 +19,8 @@ const feedUrlInput = document.getElementById("calendar-feed-url-input");
 const feedImportBtn = document.getElementById("calendar-feed-import-btn");
 const feedResyncBtn = document.getElementById("calendar-feed-resync-btn");
 
+const umbrellaSelect = document.getElementById("calendar-default-umbrella-select");
+
 const statusEl = document.getElementById("calendar-import-status");
 
 let storedFeedUrl = null;
@@ -122,6 +124,40 @@ feedResyncBtn.addEventListener("click", () => {
   runImport({ feed_url: storedFeedUrl });
 });
 
+// --- Default location umbrella (see ics_import._resolve_import_location) ---
+//
+// schedule_settings, not this module's own state -- it's the same setting
+// locations.js's parent-location picker feeds, just configured from here
+// since import is where it actually gets used.
+
+async function refreshUmbrellaSelect() {
+  const [locations, settings] = await Promise.all([
+    fetch("/api/locations").then((r) => r.json()),
+    fetch("/api/schedule-settings").then((r) => r.json()),
+  ]);
+  umbrellaSelect.innerHTML = '<option value="">No default umbrella</option>';
+  locations.forEach((loc) => {
+    const opt = document.createElement("option");
+    opt.value = loc.id;
+    opt.textContent = loc.name;
+    umbrellaSelect.appendChild(opt);
+  });
+  umbrellaSelect.value = settings.default_location_umbrella_id || "";
+}
+
+umbrellaSelect.addEventListener("change", async () => {
+  const res = await fetch("/api/schedule-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ default_location_umbrella_id: umbrellaSelect.value || null }),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    statusEl.textContent = `Error: ${data.error}`;
+    await refreshUmbrellaSelect(); // revert the select to what's actually saved
+  }
+});
+
 // --- Open / close ---
 
 openBtn.addEventListener("click", async () => {
@@ -131,6 +167,7 @@ openBtn.addEventListener("click", async () => {
   // session stays visible across a close/reopen, the same as the feed URL
   // persisting across one. Only picking a new file replaces it.
   await refreshStoredFeedUrl();
+  await refreshUmbrellaSelect();
 });
 closeBtn.addEventListener("click", () => {
   overlay.hidden = true;

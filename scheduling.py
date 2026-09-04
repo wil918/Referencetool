@@ -52,14 +52,36 @@ PREFERS_SUPPORT = "prefers"
 INDEPENDENT = "independent"
 
 
+def _is_online(location_id):
+    """Whether location_id has no travel from anywhere and doesn't count as
+    "being" anywhere -- see LOCATIONS_SCHEMA's is_online. Checked on the
+    location as given, never after resolving to its umbrella: it describes
+    that specific place (a Zoom room), not something a parent location could
+    inherit down to it.
+    """
+    if not location_id:
+        return False
+    location = db.get_location(location_id) or {}
+    return bool(location.get("is_online"))
+
+
 def travel_minutes(from_location_id, to_location_id):
     """Minutes to travel between two locations.
 
-    0 if either side is missing or they're the same location -- there's
-    nothing to travel. Otherwise, a direct location_travel row wins if one
-    exists, checked in both directions since travel is symmetric by default
-    (a row for the reverse pair still covers this one, unless a row for
-    *this* pair says otherwise). Failing that, falls back to going via home:
+    0 if either side is missing, they're the same location, or either is
+    flagged is_online -- an online session has no travel from anywhere (see
+    _is_online). Otherwise both sides are resolved to the root of their own
+    parent chain first (see LOCATIONS_SCHEMA's parent_location_id and
+    db.resolve_location_root): two specific places under the same umbrella --
+    the Studio and the Library, both at Harrow Campus -- are zero travel
+    apart however different their names, because travel is priced at the
+    umbrella, never the room. A location with no parent resolves to itself,
+    so this is exactly today's behaviour for anyone who hasn't set one up.
+
+    Past that, a direct location_travel row wins if one exists, checked in
+    both directions since travel is symmetric by default (a row for the
+    reverse pair still covers this one, unless a row for *this* pair says
+    otherwise). Failing that, falls back to going via home:
     travel_minutes_from_home(from) + travel_minutes_from_home(to). That's
     deliberately pessimistic -- there are no coordinates in this system and
     no routing API, so a studio-to-fabric-shop trip is estimated as
@@ -71,16 +93,23 @@ def travel_minutes(from_location_id, to_location_id):
         return 0
     if from_location_id == to_location_id:
         return 0
+    if _is_online(from_location_id) or _is_online(to_location_id):
+        return 0
 
-    direct = db.get_travel_minutes(from_location_id, to_location_id)
+    from_root = db.resolve_location_root(from_location_id)
+    to_root = db.resolve_location_root(to_location_id)
+    if from_root == to_root:
+        return 0
+
+    direct = db.get_travel_minutes(from_root, to_root)
     if direct is not None:
         return direct
-    reverse = db.get_travel_minutes(to_location_id, from_location_id)
+    reverse = db.get_travel_minutes(to_root, from_root)
     if reverse is not None:
         return reverse
 
-    from_location = db.get_location(from_location_id) or {}
-    to_location = db.get_location(to_location_id) or {}
+    from_location = db.get_location(from_root) or {}
+    to_location = db.get_location(to_root) or {}
     from_minutes = from_location.get("travel_minutes_from_home") or 0
     to_minutes = to_location.get("travel_minutes_from_home") or 0
     return from_minutes + to_minutes
@@ -105,7 +134,10 @@ def leg_minutes(from_location_id, to_location_id):
 
 
 def _minutes_from_home(location_id):
-    location = db.get_location(location_id) or {}
+    if not location_id or _is_online(location_id):
+        return 0
+    root = db.resolve_location_root(location_id)
+    location = db.get_location(root) or {}
     return location.get("travel_minutes_from_home") or 0
 
 
@@ -266,9 +298,11 @@ def _chain_block(commitment, kind, start, end, from_location_id, to_location_id)
 
 def _location_before(moment, exclude_commitment_id=None):
     """Where you are at `moment`, read from commitments alone: the last one
-    ending at or before it that names a location, reading through any that
-    don't (an appointment with no location doesn't move you, same convention
-    _context_before later uses for placed task items). HOME if nothing does.
+    ending at or before it that names a REAL location, reading through any
+    that don't (an appointment with no location doesn't move you, same
+    convention _context_before later uses for placed task items) and through
+    any that are online (see _is_online -- attending a lecture from your desk
+    doesn't move you either). HOME if nothing does.
 
     Sorted by END, not start -- two commitments can overlap (nothing stops
     that at the API level), and it's the one that finishes latest among
@@ -281,7 +315,7 @@ def _location_before(moment, exclude_commitment_id=None):
             continue
         if datetime.fromisoformat(commitment["end"]) > moment:
             continue
-        if commitment.get("location_id"):
+        if commitment.get("location_id") and not _is_online(commitment["location_id"]):
             location = commitment["location_id"]
     return location
 
@@ -1752,10 +1786,14 @@ def _context_before(items, moment):
 
     An item with no location doesn't move you -- writing up notes happens
     wherever you already are -- so the context reads through it to the last
-    placement that actually names a place, and home when there is none.
+    placement that actually names a place. It reads through an online one the
+    same way (see _is_online): a Studio block, then an online lecture, then
+    another Studio block must produce no travel at all, because attending the
+    lecture never moved you from the Studio. Home when neither turns up
+    anything.
     """
     for item in reversed(items):
-        if item["finish"] <= moment and item["location"] is not None:
+        if item["finish"] <= moment and item["location"] is not None and not _is_online(item["location"]):
             return item["location"]
     return HOME
 
@@ -1788,7 +1826,10 @@ def _day_layout(free, items, legs):
                 return None
             legs_out.append(_leg(item["task_id"], start, item["start"],
                                  context, item["location"], minutes))
-        if item["location"] is not None:
+        # An online item doesn't move you (see _is_online) -- read through it
+        # the same way a location-less one already is, so the item after it
+        # still travels from wherever the last REAL place was.
+        if item["location"] is not None and not _is_online(item["location"]):
             context = item["location"]
             context_task_id = item["task_id"]
         previous_finish = item["finish"]

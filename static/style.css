@@ -4090,10 +4090,11 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
   transition: box-shadow 0.15s ease, transform 0.15s ease;
 }
 
-.schedule-block-task:hover { box-shadow: var(--raise-md); }
+.schedule-block-task:hover,
+.schedule-block-commitment:hover { box-shadow: var(--raise-md); }
 .schedule-block-task.is-dragging { box-shadow: var(--raise-lg); z-index: 5; cursor: grabbing; }
 
-.schedule-block-commitment { cursor: default; color: var(--ink); }
+.schedule-block-commitment { color: var(--ink); }
 
 /* Travel, prep and break are derived, not work -- flat and recessed-reading
    rather than raised, italic, muted, clearly secondary to a task chip. */
@@ -4118,9 +4119,25 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
 }
 
 .schedule-block-commitment .schedule-block-label,
-.schedule-block-task .schedule-block-label { color: var(--ink-strong); }
+.schedule-block-task .schedule-block-label { color: var(--ink-strong); font-weight: 600; }
+
+/* Delivery type + room -- second billing to the module name, same size as
+   the time line below it. */
+.schedule-block-subtitle {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.66rem;
+}
 
 .schedule-block-time { display: block; font-size: 0.64rem; }
+
+.schedule-block-travel-hint {
+  display: block;
+  font-size: 0.6rem;
+  font-style: italic;
+}
 
 .schedule-block-pin {
   position: absolute;
@@ -4185,6 +4202,37 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
 
 .task-panel-box { max-width: 480px; }
 .task-panel-card { box-shadow: none; padding: 0; margin-top: 1rem; }
+
+/* --- Commitment detail panel (schedule/commitment-panel.js) --- */
+/* Read-only, so no inputs -- just the fields the block itself has no room
+   for, in the same card shell task-panel.js uses. */
+
+.commitment-panel-box { max-width: 480px; }
+.commitment-panel-card { box-shadow: none; padding: 0; margin-top: 1rem; }
+
+/* No divider between rows -- CLAUDE.md hard rule 6 forbids a border here,
+   and spacing alone reads clearly enough at this size. */
+.commitment-panel-row {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.35rem 0;
+}
+
+.commitment-panel-label { flex: 0 0 7rem; }
+.commitment-panel-value { font-family: var(--serif); }
+
+.commitment-panel-raw {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+}
+
+.commitment-panel-raw h4 { margin: 0 0 0.25rem; font-size: 0.85rem; }
+.commitment-panel-raw-line {
+  font-size: 0.8rem;
+  font-family: var(--serif);
+  margin: 0.3rem 0;
+  white-space: pre-wrap;
+}
 
 @media (max-width: 900px) {
   .schedule-layout { flex-direction: column; }

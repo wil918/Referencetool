@@ -4,7 +4,9 @@ survives a re-sync (see the module docstring in ics_import.py for the
 external_uid and timezone rules these rely on).
 """
 import io
+import uuid
 from datetime import date, timedelta
+from pathlib import Path
 
 import db
 import ics_import
@@ -18,6 +20,22 @@ FIXED_WINDOW = {"window_start": date(2026, 1, 1), "window_days": 200}
 
 def sync(source, ics_text):
     return ics_import.sync_feed(source, ics_text, **FIXED_WINDOW)
+
+
+# Five real VEVENTs extracted verbatim from a fetch of the user's own
+# Westminster feed (see ics_import.py's module docstring) -- not a hand-built
+# guess at the house format. Dated across the 2026/27 academic year, so this
+# fixture gets its own window rather than reusing FIXED_WINDOW above.
+REAL_FEED_FIXTURE = Path(__file__).parent / "fixtures" / "westminster_feed_sample.ics"
+REAL_FEED_WINDOW = {"window_start": date(2026, 9, 1), "window_days": 200}
+
+
+def real_feed_text():
+    return REAL_FEED_FIXTURE.read_text()
+
+
+def sync_real_feed(source="westminster.ics"):
+    return ics_import.sync_feed(source, real_feed_text(), **REAL_FEED_WINDOW)
 
 
 def ics_calendar(*events):
@@ -248,6 +266,116 @@ def test_reclassification_survives_the_commitment_moving_in_the_feed(archive):
     moved = db.get_commitment(commitment_id)
     assert moved["start"] == "2026-01-05T14:00:00"
     assert moved["support_level"] == "ambient"
+
+
+# --- House-format parsing: meta, and locations acquired on import --------------
+
+
+def test_a_real_vevent_parses_into_the_expected_meta_fields(archive):
+    result = sync_real_feed()
+    assert result["created"] == 6  # 5 VEVENTs, one of them a 2-occurrence series
+
+    identity_seminar = db.get_commitment_by_external_uid(
+        "0ID255278:2016-04-06T11:33:00.0000000+01:00@timetabling.westminster.ac.uk"
+    )
+    assert identity_seminar["meta"]["module_code"] == "5FADE005W/2"
+    assert identity_seminar["meta"]["module_name"] == "Identity"
+    assert identity_seminar["meta"]["delivery_type"] == "Seminar"
+    assert identity_seminar["meta"]["site"] == "Online"
+    assert identity_seminar["meta"]["room"] == "Online - Live"
+    assert identity_seminar["meta"]["details"] == "Identity briefing"
+    assert identity_seminar["meta"]["lecturer"] == ["Ladega, Tumi"]
+    assert identity_seminar["meta"]["raw"]["summary"].strip() == "5FADE005W/2 Identity"
+
+    # A VEVENT whose SUMMARY/DESCRIPTION delivery type agrees across its two
+    # bundled groups ("Studio; Studio") but whose LOCATION does not (two
+    # different rooms) -- delivery_type is confidently one value, room is
+    # confidently NOT one value, and that difference must survive the parse
+    # rather than being flattened into a guess.
+    surface_studio = db.get_commitment_by_external_uid(
+        "0ID264863:2021-09-25T12:41:00.0000000+01:00@timetabling.westminster.ac.uk"
+    )
+    assert surface_studio["meta"]["delivery_type"] == "Studio"
+    assert surface_studio["meta"]["site"] == "A Building"
+    assert surface_studio["meta"]["room"] is None
+    assert surface_studio["meta"]["lecturer"] == ["Loftus, Lauren", "Bigg-Wither, Jan"]
+
+
+def test_a_vevent_with_no_location_property_still_parses_the_rest(archive):
+    sync_real_feed()
+
+    no_location = db.get_commitment_by_external_uid(
+        "0ID365113:2026-09-04T15:29:00.0000000+01:00@timetabling.westminster.ac.uk"
+    )
+    assert no_location["meta"]["site"] is None
+    assert no_location["meta"]["room"] is None
+    assert no_location["meta"]["module_code"] == "5FADE003W"
+    assert no_location["meta"]["lecturer"] == ["James, Emily"]
+
+
+def test_a_vevent_bundling_two_modules_leaves_module_code_and_name_unconfident(archive):
+    sync_real_feed()
+
+    combined = next(
+        c for c in db.list_commitments() if c["meta"] and c["meta"].get("details") == "Design assistant pairing"
+    )
+    # "5FADE003W" and "6FADE003W/2" disagree -- there's no honest single
+    # answer, so this stays None rather than silently picking the first.
+    assert combined["meta"]["module_code"] is None
+    assert combined["meta"]["module_name"] is None
+    assert combined["meta"]["delivery_type"] == "Optional Event"
+
+
+def test_resyncing_backfills_meta_onto_a_commitment_imported_before_the_parser_existed(archive):
+    # Simulates one of the 96 pre-existing commitments: created the way
+    # sync_feed used to, with no meta at all.
+    db.create_commitment(
+        "old-row", "5FADE005W/2 Identity", "2027-02-25T14:00:00", "2027-02-25T16:00:00",
+        source="westminster.ics",
+        external_uid="0ID255278:2016-04-06T11:33:00.0000000+01:00@timetabling.westminster.ac.uk",
+    )
+    assert db.get_commitment("old-row")["meta"] is None
+
+    sync_real_feed()
+
+    backfilled = db.get_commitment("old-row")
+    assert backfilled["meta"] is not None
+    assert backfilled["meta"]["module_name"] == "Identity"
+
+
+def test_resync_only_fills_a_blank_location_never_overwrites_a_classified_one(archive):
+    sync_real_feed()
+    identity_seminar = db.get_commitment_by_external_uid(
+        "0ID255278:2016-04-06T11:33:00.0000000+01:00@timetabling.westminster.ac.uk"
+    )
+    # The import mapped "Online" onto a real location automatically.
+    assert identity_seminar["location_id"] is not None
+    auto_mapped = identity_seminar["location_id"]
+
+    manual_id = str(uuid.uuid4())
+    db.create_location(manual_id, "My Own Desk")
+    db.update_commitment(identity_seminar["id"], location_id=manual_id)
+
+    sync_real_feed()
+
+    reclassified = db.get_commitment(identity_seminar["id"])
+    assert reclassified["location_id"] == manual_id
+    assert reclassified["location_id"] != auto_mapped
+
+
+def test_import_creates_locations_under_the_configured_default_umbrella(archive):
+    campus_id = str(uuid.uuid4())
+    db.create_location(campus_id, "Harrow Campus")
+    db.save_schedule_settings(480, 30, False, default_location_umbrella_id=campus_id)
+
+    sync_real_feed()
+
+    a_building = next(l for l in db.list_locations() if l["name"] == "A Building")
+    assert a_building["parent_location_id"] == campus_id
+    assert a_building["travel_minutes_from_home"] is None  # never invented
+
+    online = next(l for l in db.list_locations() if l["name"] == "Online")
+    assert online["is_online"] is True
 
 
 # --- Errors --------------------------------------------------------------------
