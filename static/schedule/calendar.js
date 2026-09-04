@@ -280,8 +280,18 @@ export function createCalendar(container, options = {}) {
   const numDays = options.numDays || 7;
   const onOpenTask = options.onOpenTask || (() => {});
   const onDataLoaded = options.onDataLoaded || (() => {});
+  // Only the week view (numDays: 7) should open on Monday regardless of what
+  // day it is today -- the day view (numDays: 1) mounts this same component
+  // and must show exactly the date it's asked for, so it defaults off there.
+  const snapToWeek = "snapToWeek" in options ? options.snapToWeek : numDays === 7;
 
-  let startDate = options.startDate || todayStr();
+  // weekdayOf is Monday=0..Sunday=6, so subtracting it walks back to that
+  // week's Monday. addDays(mon, ±numDays) is still a Monday once numDays is
+  // itself a multiple of 7, so prev/next don't need to re-snap -- only the
+  // two places that can hand in an arbitrary date (here, and Today) do.
+  const snapDate = (d) => (snapToWeek ? addDays(d, -weekdayOf(d)) : d);
+
+  let startDate = snapDate(options.startDate || todayStr());
   let data = null;
   let nowTimer = null;
   let gesture = null; // the one in-flight pointer gesture, band-resize or block-drag
@@ -777,7 +787,7 @@ export function createCalendar(container, options = {}) {
     reload();
   });
   todayBtn.addEventListener("click", () => {
-    startDate = todayStr();
+    startDate = snapDate(todayStr());
     reload();
   });
 
