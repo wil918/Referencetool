@@ -90,12 +90,19 @@ These are not preferences. Violating one means the change gets reverted.
    task block carries no filter, no blend and no mask, ever.** Its edges are ruled lines,
    which is what the subject of a drawing is anyway. Every `feTurbulence` is seeded
    explicitly; an unseeded one may differ between renders and the drawing would shimmer.
-   **Every principal line carries an understudy.** The pencil a ruled line was inked over
-   is still on the sheet: `--dr-under-*`, thin and heavily displaced, offset a few pixels.
-   It is **always one weight step lighter than the line it constructs** — structural .88 →
-   .30, object .58 → .20, hairline .32 → .13, the hour rules' own construction ink .20 →
-   .12, an arc's .11 → .07. Get that backwards and the setting-out competes with the
-   object, which inverts the whole drawing. Specimen plate 12 shows each pair.
+   **The drawing is set out before it is drawn.** Every principal line has a pencil line
+   (`--dr-pencil-*`) that was ruled first, and three properties make it read as setting-out
+   rather than as a sloppy second rule: it is **coincident** with what it constructs, never
+   offset beside it; it **overruns** (`--dr-overrun`, 18px, against the object rules' own
+   `--dr-extend` of 7px), so it visibly carries on past the object and under its neighbour;
+   and a circle is struck **whole**, with its centre marked and its radius drawn — a compass
+   arc is only the part of it that got inked. It is also **thinner and lighter** than what it
+   constructs: half a pixel against the object line's one. It lives on `.dr-track::before`,
+   one overrunning layer per column, which is why `.dr-col::after` carries the separator and
+   today's left edge comes from `:has(+ .is-today)` rather than a second pseudo-element.
+   **Pencil, not blur.** Do not displace these lines: displacement smears a hairline across
+   three device pixels and reads as both blurry and fat. The geometry stays exact and a
+   high-frequency stitched turbulence varies the *density* instead. Specimen plate 12.
    **Two traps in the SVG data URIs, both of which fail silently.** A filter region given
    in the default `objectBoundingBox` units is *zero* for a straight line (its bbox has no
    width or height), so the element does not render at all — every line filter here

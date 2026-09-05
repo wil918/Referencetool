@@ -336,144 +336,190 @@
      ruled gradient: displaced by 1.6 units over a 600px tile, so the line
      wanders visibly along its length and the horizontal seam recurs rarely
      enough that a sub-pixel step in an 0.05-alpha line is invisible. */
-  --dr-grid-rough:
-    url("data:image/svg+xml,\
-      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='15'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='27' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.02 0.9' numOctaves='3' seed='13' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='1.6' xChannelSelector='R' yChannelSelector='G'/%3E\
-      %3C/filter%3E\
-      %3Cpath d='M0,0.5 L600,0.5' stroke='rgb(33,32,30)' stroke-width='0.8' opacity='0.09' fill='none' filter='url(%23u)'/%3E\
-      %3C/svg%3E");
-  --dr-grid-rough-size: 600px calc(var(--dr-hour) / 4);
-  --dr-grid-smooth: repeating-linear-gradient(to bottom,
-    var(--dr-construction-ink) 0 var(--dr-w-construction),
-    transparent var(--dr-w-construction) calc(var(--dr-hour) / 4));
-  --dr-grid: var(--dr-grid-rough);
-  --dr-grid-size: var(--dr-grid-rough-size);
-
-
-  /* --- Construction understudies ---------------------------------------
-     Every ruled line in the drawing was set out in pencil before it was
-     inked, and in all four references that pencil is still on the sheet:
-     the ray that found the point, the sweep the arc was struck along, the
-     line the rule was laid against. So every principal line here carries an
-     understudy -- a thin, heavily displaced hairline running a few pixels
-     off it.
-
-     TWO RULES GOVERN THEM, AND NEITHER MAY BE BROKEN:
-       1. An understudy is ALWAYS lighter than the line it constructs. It
-          follows the same four-weight hierarchy, one step down:
-             structural (.88) -> .30      object (.58) -> .20
-             hairline   (.32) -> .13      construction (.20) -> .12
-             the arc's own construction ink (.11) -> .07
-          A setting-out line that competes with its own object line inverts
-          the whole point of the drawing.
-       2. It is thin and rough rather than thick and smooth -- 0.65px stroke
-          displaced by 2.6 units. A lot of texture, very little weight.
-
-     They are construction, so `.dr-no-construction` blanks all of them, and
-     they are textured, so `.dr-no-texture` swaps them for ruled twins. Like
-     every other texture in this file they are rasters, never live filters:
-     an understudy sits beside a line that is about to be dragged past.
-
-       --dr-under-grid    under the hour rules        (construction)
-       --dr-under-h-line  under now / deadline        (object)
-       --dr-under-h-hair  under a band's own edges    (hairline)
-       --dr-under-v-cut   beside today's column rules (structural)
-       --dr-under-v-line  beside the axis rule        (object)
-       --dr-under-v-hair  beside a column separator   (hairline)
-       --dr-under-arc     inside a compass arc        (below construction)
-
-     Getting this backwards is easy and looks immediately wrong: the hour
-     rules are drawn in --dr-c-construction, not --dr-c-line, so their
-     understudy belongs at .12 and not at .20; and an arc is already the
-     faintest line on the sheet, so its sweep has to go below even that. */
-  --dr-under-grid:
+  --dr-pencil-hour:
     url("data:image/svg+xml,\
       %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='60'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='72' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.06 0.5' numOctaves='3' seed='21' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='608' height='68' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='31' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
       %3C/filter%3E\
-      %3Cpath d='M0,2.8 L600,2.8' stroke='rgb(33,32,30)' stroke-width='0.65' opacity='0.12' fill='none' filter='url(%23u)'/%3E\
+      %3Cpath d='M0,0.5 L600,0.5' stroke='rgb(33,32,30)' stroke-width='0.5' opacity='0.24' fill='none' filter='url(%23p)'/%3E\
       %3C/svg%3E");
-  --dr-under-h-line:
+  --dr-pencil-quarter:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='15'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='608' height='23' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='32' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,0.5 L600,0.5' stroke='rgb(33,32,30)' stroke-width='0.5' opacity='0.12' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+  --dr-pencil-v:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='14' height='608' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='33' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M5.5,0 L5.5,600' stroke='rgb(33,32,30)' stroke-width='0.5' opacity='0.17' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+  --dr-pencil-v-cut:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='14' height='608' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='34' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M5.5,0 L5.5,600' stroke='rgb(33,32,30)' stroke-width='0.5' opacity='0.34' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+  --dr-pencil-h:
     url("data:image/svg+xml,\
       %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='6'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='18' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.06 0.5' numOctaves='3' seed='22' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='608' height='14' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='35' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
       %3C/filter%3E\
-      %3Cpath d='M0,3 L600,3' stroke='rgb(33,32,30)' stroke-width='0.65' opacity='0.2' fill='none' filter='url(%23u)'/%3E\
+      %3Cpath d='M0,3 L600,3' stroke='rgb(33,32,30)' stroke-width='0.5' opacity='0.24' fill='none' filter='url(%23p)'/%3E\
       %3C/svg%3E");
-  --dr-under-h-hair:
+  --dr-pencil-h-hair:
     url("data:image/svg+xml,\
       %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='6'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='18' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.06 0.5' numOctaves='3' seed='23' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='608' height='14' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='36' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
       %3C/filter%3E\
-      %3Cpath d='M0,3 L600,3' stroke='rgb(33,32,30)' stroke-width='0.65' opacity='0.13' fill='none' filter='url(%23u)'/%3E\
+      %3Cpath d='M0,3 L600,3' stroke='rgb(33,32,30)' stroke-width='0.5' opacity='0.17' fill='none' filter='url(%23p)'/%3E\
       %3C/svg%3E");
-  --dr-under-v-cut:
-    url("data:image/svg+xml,\
-      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='18' height='612' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5 0.06' numOctaves='3' seed='24' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
-      %3C/filter%3E\
-      %3Cpath d='M3,0 L3,600' stroke='rgb(33,32,30)' stroke-width='0.65' opacity='0.3' fill='none' filter='url(%23u)'/%3E\
-      %3C/svg%3E");
-  --dr-under-v-line:
-    url("data:image/svg+xml,\
-      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='18' height='612' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5 0.06' numOctaves='3' seed='25' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
-      %3C/filter%3E\
-      %3Cpath d='M3,0 L3,600' stroke='rgb(33,32,30)' stroke-width='0.65' opacity='0.2' fill='none' filter='url(%23u)'/%3E\
-      %3C/svg%3E");
-  --dr-under-v-hair:
-    url("data:image/svg+xml,\
-      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='18' height='612' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5 0.06' numOctaves='3' seed='26' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
-      %3C/filter%3E\
-      %3Cpath d='M3,0 L3,600' stroke='rgb(33,32,30)' stroke-width='0.65' opacity='0.13' fill='none' filter='url(%23u)'/%3E\
-      %3C/svg%3E");
-  --dr-under-arc:
+  --dr-pencil-circle:
     url("data:image/svg+xml,\
       %3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-8' y='-8' width='216' height='216' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.012' numOctaves='3' seed='27' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='5' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='208' height='208' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='2' stitchTiles='stitch' seed='37' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
       %3C/filter%3E\
-      %3Ccircle cx='100.0' cy='100.0' r='96.0' stroke='rgb(33,32,30)' stroke-width='0.9' opacity='0.07' fill='none' filter='url(%23u)'/%3E\
+      %3Ccircle cx='100' cy='100' r='98' stroke='rgb(33,32,30)' stroke-width='0.5' opacity='0.17' fill='none' filter='url(%23p)'/%3E\
       %3C/svg%3E");
 
-  /* Which vertical understudy a column uses. Set on the column, read by the
-     track, so `.is-today` can promote its own setting-out to the structural
-     step without the track needing a second background declaration. */
-  --dr-under-v: var(--dr-under-v-hair);
 
-  /* Ruled twins, for `.dr-no-texture`. The geometry survives; only the
-     wander goes. */
-  --dr-under-grid-smooth: repeating-linear-gradient(to bottom,
-    transparent 0 3px, rgba(var(--dr-ink-rgb), 0.09) 3px 3.7px, transparent 3.7px var(--dr-hour));
-  --dr-under-h-line-smooth: linear-gradient(to bottom,
-    transparent 0 3px, rgba(var(--dr-ink-rgb), 0.14) 3px 3.7px, transparent 3.7px);
-  --dr-under-h-hair-smooth: linear-gradient(to bottom,
-    transparent 0 3px, rgba(var(--dr-ink-rgb), 0.09) 3px 3.7px, transparent 3.7px);
-  --dr-under-v-cut-smooth: linear-gradient(to right,
-    transparent 0 3px, rgba(var(--dr-ink-rgb), 0.22) 3px 3.7px, transparent 3.7px);
-  --dr-under-v-line-smooth: linear-gradient(to right,
-    transparent 0 3px, rgba(var(--dr-ink-rgb), 0.14) 3px 3.7px, transparent 3.7px);
-  --dr-under-v-hair-smooth: linear-gradient(to right,
-    transparent 0 3px, rgba(var(--dr-ink-rgb), 0.09) 3px 3.7px, transparent 3.7px);
-  --dr-under-arc-smooth: radial-gradient(circle,
-    transparent 0 calc(50% - 1px), rgba(var(--dr-ink-rgb), 0.07) calc(50% - 1px) 50%, transparent 50%);
+  /* --- The construction layer, as setting-out --------------------------
+     A drawing is set out before it is drawn: the grid is ruled across the
+     whole sheet, the circles are struck complete, and only then is the object
+     inked in over the top. Three rules follow from that, and all three were
+     wrong in the first attempt:
+
+       1. THE CONSTRUCTION LINE IS THE SAME LINE. It is coincident with what
+          it constructs, not offset beside it -- an offset pencil line reads
+          as a sloppy double rule, never as setting-out.
+       2. IT OVERRUNS. What makes it read as construction is that it carries
+          on past the object: --dr-overrun past every edge of a track, well
+          beyond the --dr-extend the object rules themselves run on.
+       3. A CIRCLE IS DRAWN WHOLE. A compass arc has a full circle behind it,
+          a marked centre and a radius, because that is what struck it.
+
+     It is also THINNER than what it constructs, never wider: half a pixel
+     against the object line's one, at a lighter tone.
+
+     PENCIL, NOT BLUR. The first version displaced these lines, which smears
+     a hairline across three device pixels and reads as both blurry and fat.
+     A pencil line is none of those: it holds its position and its width, and
+     varies in DENSITY -- so the geometry is exact and a high-frequency
+     stitched turbulence eats into the alpha instead, breaking and re-darkening
+     the line along its length the way graphite catches on tooth. */
+  --dr-pencil-hour:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='60'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='608' height='68' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='31' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,0.5 L600,0.5' stroke='rgb(33,32,30)' stroke-width='0.5' opacity='0.24' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+  --dr-pencil-quarter:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='15'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='608' height='23' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='32' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,0.5 L600,0.5' stroke='rgb(33,32,30)' stroke-width='0.5' opacity='0.12' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+  --dr-pencil-v:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='14' height='608' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='33' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M5.5,0 L5.5,600' stroke='rgb(33,32,30)' stroke-width='0.5' opacity='0.17' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+  --dr-pencil-v-cut:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='14' height='608' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='34' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M5.5,0 L5.5,600' stroke='rgb(33,32,30)' stroke-width='0.5' opacity='0.34' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+  --dr-pencil-h:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='6'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='608' height='14' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='35' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,3 L600,3' stroke='rgb(33,32,30)' stroke-width='0.5' opacity='0.24' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+  --dr-pencil-h-hair:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='6'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='608' height='14' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='36' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,3 L600,3' stroke='rgb(33,32,30)' stroke-width='0.5' opacity='0.17' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+  --dr-pencil-circle:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='208' height='208' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='2' stitchTiles='stitch' seed='37' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Ccircle cx='100' cy='100' r='98' stroke='rgb(33,32,30)' stroke-width='0.5' opacity='0.17' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+
+
+  /* Ruled twins, for `.dr-no-texture`. Same geometry, same overrun, no grain.
+     Each puts its line at the same place in the tile as the pencil does. */
+  --dr-pencil-hour-smooth: linear-gradient(to bottom,
+    rgba(var(--dr-ink-rgb), 0.24) 0 0.5px, transparent 0.5px);
+  --dr-pencil-quarter-smooth: linear-gradient(to bottom,
+    rgba(var(--dr-ink-rgb), 0.12) 0 0.5px, transparent 0.5px);
+  --dr-pencil-v-smooth: linear-gradient(to right,
+    transparent 0 5.5px, rgba(var(--dr-ink-rgb), 0.17) 5.5px 6px);
+  --dr-pencil-v-cut-smooth: linear-gradient(to right,
+    transparent 0 5.5px, rgba(var(--dr-ink-rgb), 0.34) 5.5px 6px);
+  --dr-pencil-h-smooth: linear-gradient(to bottom,
+    transparent 0 3px, rgba(var(--dr-ink-rgb), 0.24) 3px 3.5px, transparent 3.5px);
+  --dr-pencil-h-hair-smooth: linear-gradient(to bottom,
+    transparent 0 3px, rgba(var(--dr-ink-rgb), 0.17) 3px 3.5px, transparent 3.5px);
+  --dr-pencil-circle-smooth: radial-gradient(circle,
+    transparent 0 calc(50% - 0.5px), rgba(var(--dr-ink-rgb), 0.17) calc(50% - 0.5px) 50%, transparent 50%);
 
   /* === 1c. WHICH LAYERS MAY CARRY TEXTURE ===============================
      Texture is spent where the drawing does not move, and the drawing's own
@@ -535,8 +581,11 @@
   --dr-hour: 60px;
   --dr-tick-major: 11px;
   --dr-tick-minor: 6px;
-  /* How far a drawn rule runs past its content, as a drawn rule does. */
+  /* How far a drawn rule runs past its content, as a drawn rule does, and
+     how much further the setting-out under it runs. The gap between the two
+     is what makes one read as the object and the other as construction. */
   --dr-extend: 7px;
+  --dr-overrun: 18px;
 
   /* --- Defusing the neumorphic system ----------------------------------
      style.css is still loaded here for the modals, forms and buttons this
@@ -736,82 +785,10 @@
       %3C/filter%3E\
       %3Crect x='6' y='6' width='108' height='68' fill='rgb(119,174,203)' opacity='0.4' filter='url(%23w)'/%3E\
       %3C/svg%3E");
-  --dr-grid-rough:
-    url("data:image/svg+xml,\
-      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='15'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='27' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.02 0.9' numOctaves='3' seed='13' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='1.6' xChannelSelector='R' yChannelSelector='G'/%3E\
-      %3C/filter%3E\
-      %3Cpath d='M0,0.5 L600,0.5' stroke='rgb(226,233,238)' stroke-width='0.8' opacity='0.075' fill='none' filter='url(%23u)'/%3E\
-      %3C/svg%3E");
 
   /* Understudies re-inked for the plate, one step lighter again -- a pale
      setting-out line on a dark ground reads heavier than a graphite one on
      paper, and this layer must stay under everything it constructs. */
-  --dr-under-grid:
-    url("data:image/svg+xml,\
-      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='60'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='72' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.06 0.5' numOctaves='3' seed='21' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
-      %3C/filter%3E\
-      %3Cpath d='M0,2.8 L600,2.8' stroke='rgb(226,233,238)' stroke-width='0.65' opacity='0.1' fill='none' filter='url(%23u)'/%3E\
-      %3C/svg%3E");
-  --dr-under-h-line:
-    url("data:image/svg+xml,\
-      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='6'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='18' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.06 0.5' numOctaves='3' seed='22' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
-      %3C/filter%3E\
-      %3Cpath d='M0,3 L600,3' stroke='rgb(226,233,238)' stroke-width='0.65' opacity='0.16' fill='none' filter='url(%23u)'/%3E\
-      %3C/svg%3E");
-  --dr-under-h-hair:
-    url("data:image/svg+xml,\
-      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='6'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='18' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.06 0.5' numOctaves='3' seed='23' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
-      %3C/filter%3E\
-      %3Cpath d='M0,3 L600,3' stroke='rgb(226,233,238)' stroke-width='0.65' opacity='0.1' fill='none' filter='url(%23u)'/%3E\
-      %3C/svg%3E");
-  --dr-under-v-cut:
-    url("data:image/svg+xml,\
-      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='18' height='612' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5 0.06' numOctaves='3' seed='24' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
-      %3C/filter%3E\
-      %3Cpath d='M3,0 L3,600' stroke='rgb(226,233,238)' stroke-width='0.65' opacity='0.24' fill='none' filter='url(%23u)'/%3E\
-      %3C/svg%3E");
-  --dr-under-v-line:
-    url("data:image/svg+xml,\
-      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='18' height='612' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5 0.06' numOctaves='3' seed='25' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
-      %3C/filter%3E\
-      %3Cpath d='M3,0 L3,600' stroke='rgb(226,233,238)' stroke-width='0.65' opacity='0.16' fill='none' filter='url(%23u)'/%3E\
-      %3C/svg%3E");
-  --dr-under-v-hair:
-    url("data:image/svg+xml,\
-      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='18' height='612' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5 0.06' numOctaves='3' seed='26' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
-      %3C/filter%3E\
-      %3Cpath d='M3,0 L3,600' stroke='rgb(226,233,238)' stroke-width='0.65' opacity='0.1' fill='none' filter='url(%23u)'/%3E\
-      %3C/svg%3E");
-  --dr-under-arc:
-    url("data:image/svg+xml,\
-      %3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E\
-      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-8' y='-8' width='216' height='216' color-interpolation-filters='sRGB'%3E\
-      %3CfeTurbulence type='fractalNoise' baseFrequency='0.012' numOctaves='3' seed='27' result='n'/%3E\
-      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='5' xChannelSelector='R' yChannelSelector='G'/%3E\
-      %3C/filter%3E\
-      %3Ccircle cx='100.0' cy='100.0' r='96.0' stroke='rgb(226,233,238)' stroke-width='0.9' opacity='0.06' fill='none' filter='url(%23u)'/%3E\
-      %3C/svg%3E");
 
 
   /* The one place the two modes genuinely disagree. #c23b2e is a printer's
@@ -819,6 +796,77 @@
      brighter one at the same hue. This does NOT touch --accent, which the
      graph pages draw their threads in and which stays identical across
      themes by design (style.css). */
+  --dr-pencil-hour:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='60'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='608' height='68' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='31' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,0.5 L600,0.5' stroke='rgb(226,233,238)' stroke-width='0.5' opacity='0.2' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+  --dr-pencil-quarter:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='15'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='608' height='23' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='32' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,0.5 L600,0.5' stroke='rgb(226,233,238)' stroke-width='0.5' opacity='0.1' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+  --dr-pencil-v:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='14' height='608' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='33' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M5.5,0 L5.5,600' stroke='rgb(226,233,238)' stroke-width='0.5' opacity='0.14' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+  --dr-pencil-v-cut:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='14' height='608' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='34' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M5.5,0 L5.5,600' stroke='rgb(226,233,238)' stroke-width='0.5' opacity='0.28' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+  --dr-pencil-h:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='6'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='608' height='14' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='35' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,3 L600,3' stroke='rgb(226,233,238)' stroke-width='0.5' opacity='0.2' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+  --dr-pencil-h-hair:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='6'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='608' height='14' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='36' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,3 L600,3' stroke='rgb(226,233,238)' stroke-width='0.5' opacity='0.14' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+  --dr-pencil-circle:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E\
+      %3Cfilter id='p' filterUnits='userSpaceOnUse' x='-4' y='-4' width='208' height='208' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='2' stitchTiles='stitch' seed='37' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.5 1.5 0 0 -0.42' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Ccircle cx='100' cy='100' r='98' stroke='rgb(226,233,238)' stroke-width='0.5' opacity='0.14' fill='none' filter='url(%23p)'/%3E\
+      %3C/svg%3E");
+
   --dr-red: #e2604e;
   --dr-red-line: rgba(226, 96, 78, 0.92);
   --dr-red-faint: rgba(226, 96, 78, 0.34);
@@ -844,19 +892,18 @@
   --dr-hatch-a: var(--dr-hatch-a-smooth);
   --dr-hatch-b: var(--dr-hatch-b-smooth);
   --dr-hatch-cross: var(--dr-hatch-cross-smooth);
-  --dr-grid: var(--dr-grid-smooth);
-  --dr-grid-size: auto;
   --dr-wash: var(--dr-cool-wash-flat);
   --dr-ink-blend: normal;
   --dr-grain-opacity: 0;
-  /* The setting-out keeps its geometry and loses only its wander. */
-  --dr-under-grid: var(--dr-under-grid-smooth);
-  --dr-under-h-line: var(--dr-under-h-line-smooth);
-  --dr-under-h-hair: var(--dr-under-h-hair-smooth);
-  --dr-under-v-cut: var(--dr-under-v-cut-smooth);
-  --dr-under-v-line: var(--dr-under-v-line-smooth);
-  --dr-under-v-hair: var(--dr-under-v-hair-smooth);
-  --dr-under-arc: var(--dr-under-arc-smooth);
+  /* The setting-out keeps its geometry and its overrun, and loses only the
+     graphite grain along it. */
+  --dr-pencil-hour: var(--dr-pencil-hour-smooth);
+  --dr-pencil-quarter: var(--dr-pencil-quarter-smooth);
+  --dr-pencil-v: var(--dr-pencil-v-smooth);
+  --dr-pencil-v-cut: var(--dr-pencil-v-cut-smooth);
+  --dr-pencil-h: var(--dr-pencil-h-smooth);
+  --dr-pencil-h-hair: var(--dr-pencil-h-hair-smooth);
+  --dr-pencil-circle: var(--dr-pencil-circle-smooth);
 }
 
 .drafting.dr-no-texture .dr-grain { display: none; }
@@ -868,14 +915,13 @@
    opacity is baked into its raster, so blanking --dr-construction-ink alone
    would not reach it. */
 .drafting.dr-no-construction {
-  --dr-grid: none;
-  --dr-under-grid: none;
-  --dr-under-h-line: none;
-  --dr-under-h-hair: none;
-  --dr-under-v-cut: none;
-  --dr-under-v-line: none;
-  --dr-under-v-hair: none;
-  --dr-under-arc: none;
+  --dr-pencil-hour: none;
+  --dr-pencil-quarter: none;
+  --dr-pencil-v: none;
+  --dr-pencil-v-cut: none;
+  --dr-pencil-h: none;
+  --dr-pencil-h-hair: none;
+  --dr-pencil-circle: none;
 }
 
 /* --- Paper tooth ------------------------------------------------------------
@@ -1054,11 +1100,25 @@
     repeating-linear-gradient(to bottom,
       var(--dr-c-line) 0 var(--dr-w-line), transparent var(--dr-w-line) var(--dr-hour)),
     repeating-linear-gradient(to bottom,
-      var(--dr-construction-ink) 0 var(--dr-w-line), transparent var(--dr-w-line) var(--dr-hour)),
-    var(--dr-under-v-line);
-  background-size: var(--dr-tick-major) 100%, var(--dr-tick-minor) 100%, 6px auto;
-  background-position: right top, right calc(var(--dr-hour) / 2), right 3px top;
-  background-repeat: no-repeat, no-repeat, repeat-y;
+      var(--dr-construction-ink) 0 var(--dr-w-line), transparent var(--dr-w-line) var(--dr-hour));
+  background-size: var(--dr-tick-major) 100%, var(--dr-tick-minor) 100%;
+  background-position: right top, right calc(var(--dr-hour) / 2);
+  background-repeat: no-repeat, no-repeat;
+}
+
+/* The axis rule's own setting-out, overrunning it top and bottom. */
+.dr-axis::before {
+  content: "";
+  position: absolute;
+  top: calc(-1 * var(--dr-overrun));
+  bottom: calc(-1 * var(--dr-overrun));
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  background-image: var(--dr-pencil-v);
+  background-size: 6px auto;
+  background-position: right 0 top 0;
+  background-repeat: repeat-y;
 }
 
 /* The hour figure hangs off its own tick and hard against the rule, the way
@@ -1088,8 +1148,10 @@
 .dr-axis--mirrored {
   border-right: 0;
   border-left: var(--dr-rule-line);
-  background-position: left top, left calc(var(--dr-hour) / 2), left 3px top;
+  background-position: left top, left calc(var(--dr-hour) / 2);
 }
+
+.dr-axis--mirrored::before { transform: scaleX(-1); }
 
 .dr-axis--mirrored .dr-axis-figure {
   right: auto;
@@ -1108,33 +1170,61 @@
    The hour rules stay a gradient -- they are information, they must be
    perfectly straight, and a wandering hour line would make the whole grid
    feel unreliable. The quarter-hour sub-grid is setting-out, so it is the
-   drawn one (--dr-grid, a displaced hairline raster).
+   drawn one (--dr-pencil-quarter, on the construction field below).
 
    No blend and no filter here, deliberately: the track is the parent of every
    block, so a mix-blend-mode on it would blend the blocks too and a block
    would stop covering the tone behind it. */
 .dr-track {
   position: relative;
+  /* Object lines only. The hour rule is information -- it must be perfectly
+     straight and it stops at the column edge, like an inked line. */
   background-image:
     repeating-linear-gradient(to bottom,
-      var(--dr-c-construction) 0 var(--dr-w-line), transparent var(--dr-w-line) var(--dr-hour)),
-    var(--dr-under-grid),
-    var(--dr-grid),
-    var(--dr-under-v);
+      var(--dr-c-construction) 0 var(--dr-w-line), transparent var(--dr-w-line) var(--dr-hour));
+}
+
+/* The setting-out, on its own layer, overrunning the track on all four sides.
+   This is the whole difference between a grid that was ruled across the sheet
+   and one that was drawn inside a box: the hour lines and the column line run
+   --dr-overrun past every edge, under the neighbouring column and out into the
+   axis gutter, and the object rules are inked over the middle of them.
+
+   Anchored so that the pencil is COINCIDENT with what it constructs: the
+   horizontal tiles carry their line at the top, offset down by the overrun so
+   one lands on every hour; the vertical tile carries its line at its right
+   edge and is anchored right, so it lands on the column boundary. */
+.dr-track::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--dr-overrun));
+  right: calc(-1 * var(--dr-overrun));
+  top: calc(-1 * var(--dr-overrun));
+  bottom: calc(-1 * var(--dr-overrun));
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    var(--dr-pencil-hour),
+    var(--dr-pencil-quarter),
+    var(--dr-pencil-v);
   background-size:
-    auto,
-    600px var(--dr-hour),
-    var(--dr-grid-size),
+    auto var(--dr-hour),
+    auto calc(var(--dr-hour) / 4),
     6px auto;
-  background-position: 0 0, 0 0, 0 0, right 3px top;
-  background-repeat: repeat, repeat, repeat, repeat-y;
+  background-position:
+    left top var(--dr-overrun),
+    left top var(--dr-overrun),
+    right var(--dr-overrun) top 0;
+  background-repeat: repeat, repeat, repeat-y;
 }
 
 /* Today's column is ruled at structural weight, so its setting-out steps up
    with it -- one property on the column, read by the track's background list
    above, rather than a second background declaration that would have to
    restate all four layers. */
-.dr-col.is-today { --dr-under-v: var(--dr-under-v-cut); }
+/* Today is ruled at structural weight, so its setting-out steps up with it --
+   one property on the column, read by the field above. */
+.dr-col.is-today { --dr-pencil-v: var(--dr-pencil-v-cut); }
 
 /* A drawn rule runs fractionally past what it divides. The separator is a
    pseudo-element rather than a border precisely so it can overrun the
@@ -1157,18 +1247,13 @@
 /* Today. Not a tint -- colour is never a fill -- but the two rules that
    bound the column drawn at structural weight, which is how a drawing says
    "this one" without saying it in ink of a different colour. */
-.dr-col.is-today::after { background: var(--dr-c-cut); width: var(--dr-w-line); }
+.dr-col.is-today::after,
+.dr-col:has(+ .is-today)::after { background: var(--dr-c-cut); width: var(--dr-w-line); }
 
-.dr-col.is-today::before {
-  content: "";
-  position: absolute;
-  top: calc(-1 * var(--dr-extend));
-  bottom: calc(-1 * var(--dr-extend));
-  left: calc(-1 * var(--dr-w-line));
-  width: var(--dr-w-line);
-  background: var(--dr-c-cut);
-  pointer-events: none;
-}
+/* Today's LEFT edge is the previous column's right rule promoted, rather than a
+   second pseudo-element on today itself -- which frees ::before on the track
+   for the construction field above. */
+.dr-col:has(+ .is-today) { --dr-pencil-v: var(--dr-pencil-v-cut); }
 
 /* ==========================================================================
    7. BANDS -- tone, never a fill
@@ -1204,17 +1289,17 @@
 .dr-band::after {
   content: "";
   position: absolute;
-  left: 0;
-  right: 0;
+  left: calc(-1 * var(--dr-overrun));
+  right: calc(-1 * var(--dr-overrun));
   height: 6px;
-  background-image: var(--dr-under-h-hair);
+  background-image: var(--dr-pencil-h-hair);
   background-size: 600px 6px;
   background-repeat: repeat-x;
   pointer-events: none;
 }
 
-.dr-band::before { top: 1px; }
-.dr-band::after { bottom: 1px; transform: scaleY(-1); }
+.dr-band::before { top: -3px; }
+.dr-band::after { bottom: -3px; }
 
 /* Stipple is the lightest tone in the system, which is why the band that
    most blocks sit on top of gets it. */
@@ -1495,17 +1580,17 @@
   border-left: 5px solid var(--dr-red);
 }
 
-/* now, deadline and the bedtime marker are drawn rules too, so each carries
-   its own setting-out -- at the step below its own weight: object for the two
-   red ones, hairline for the dashed advisory. */
+/* now, deadline and the bedtime marker are drawn rules too, so each was set
+   out first: a pencil line on the same y, running --dr-overrun past both ends
+   of the rule it constructs. */
 .dr-now::after,
 .dr-deadline::after,
 .dr-marker::after {
   content: "";
   position: absolute;
-  left: 0;
-  right: 0;
-  top: 1px;
+  left: calc(-1 * var(--dr-overrun));
+  right: calc(-1 * var(--dr-overrun));
+  top: -3px;
   height: 6px;
   background-size: 600px 6px;
   background-repeat: repeat-x;
@@ -1513,8 +1598,8 @@
 }
 
 .dr-now::after,
-.dr-deadline::after { background-image: var(--dr-under-h-line); }
-.dr-marker::after { background-image: var(--dr-under-h-hair); }
+.dr-deadline::after { background-image: var(--dr-pencil-h); }
+.dr-marker::after { background-image: var(--dr-pencil-h-hair); }
 
 .dr-now-label {
   position: absolute;
@@ -1591,22 +1676,41 @@
   border-radius: 50%;
   border: var(--dr-w-construction) solid var(--dr-construction-ink);
   background: none;
-  clip-path: inset(0 0 50% 0);
   pointer-events: none;
   z-index: 0;
 }
 
-/* The sweep the arc was struck along, just inside it. Same relationship as
-   every other understudy: thinner, rougher, lighter, and it inherits the
-   parent's clip so it stops at the same half-circle the arc does. */
+/* A compass sweep is part of a whole circle, and on a drawing the whole
+   circle is what is on the paper -- the arc is just the part that got inked.
+   So no clip: the circle is struck complete, in pencil, exactly on the radius
+   the arc uses. */
 .dr-arc::before {
   content: "";
   position: absolute;
-  inset: -2px;
+  inset: 0;
   border-radius: 50%;
-  background-image: var(--dr-under-arc);
+  background-image: var(--dr-pencil-circle);
   background-size: 100% 100%;
   background-repeat: no-repeat;
+  pointer-events: none;
+}
+
+/* Its centre, and the radius that struck it -- the two marks that say a
+   circle was constructed rather than drawn. The radius is a pencil line at
+   the same weight, rotated to whatever --dr-radius-angle the caller wants. */
+.dr-arc::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 50%;
+  height: 6px;
+  margin-top: -3px;
+  transform-origin: left center;
+  transform: rotate(var(--dr-radius-angle, -55deg));
+  background-image: var(--dr-pencil-h-hair);
+  background-size: 600px 6px;
+  background-repeat: repeat-x;
   pointer-events: none;
 }
 

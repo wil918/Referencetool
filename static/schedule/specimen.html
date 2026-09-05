@@ -128,46 +128,35 @@
     background-size: var(--dr-stipple-pitch), auto;
   }
 
-  /* Plate 12 only: each principal line beside the understudy that serves it,
-     drawn with the same custom properties the surface itself uses. */
+  /* Plate 12 only: each principal line with the pencil that set it out,
+     drawn with the same custom properties the surface itself uses. The figure
+     is wider than the object line inside it, so the overrun is the thing you
+     actually see. */
   .setout { display: grid; gap: 0.2rem; }
   .setout-row {
     display: grid;
-    grid-template-columns: 7.5rem 12rem 1fr;
+    grid-template-columns: 7.5rem 14rem 1fr;
     align-items: center;
     gap: 0.9rem;
     padding: 0.2rem 0;
   }
-  .setout-fig { position: relative; height: 2.6rem; }
-  .setout-fig--v { background-repeat: repeat-y; background-size: 6px auto; background-position: right 3px top; }
+  .setout-fig { position: relative; height: 3rem; }
+  .setout-obj { position: absolute; }
+  .setout-obj--v { top: 18%; bottom: 18%; right: 50%; border-right: var(--dr-rule-cut); }
+  .setout-obj--v.setout-obj--hair { border-right: var(--dr-rule-hair); }
+  .setout-obj--h { left: 22%; right: 22%; top: 50%; border-top: var(--dr-rule-line); border-top-color: var(--dr-c-construction); }
 
-  .setout-v-cut { border-right: var(--dr-rule-cut); background-image: var(--dr-under-v-cut); }
-  .setout-v-line { border-right: var(--dr-rule-line); background-image: var(--dr-under-v-line); }
-  .setout-v-hair { border-right: var(--dr-rule-hair); background-image: var(--dr-under-v-hair); }
+  .setout-v { background-repeat: repeat-y; background-size: 6px auto; background-position: right 50% top 0; }
+  .setout-v-cut { background-image: var(--dr-pencil-v-cut); }
+  .setout-v-hair { background-image: var(--dr-pencil-v); }
 
-  .setout-hour {
-    background-image:
-      repeating-linear-gradient(to bottom,
-        var(--dr-c-construction) 0 var(--dr-w-line), transparent var(--dr-w-line) var(--dr-hour)),
-      var(--dr-under-grid);
-    background-size: auto, 600px var(--dr-hour);
-  }
+  .setout-h { background-repeat: repeat-x; background-size: auto 6px; background-position: left 0 top calc(50% - 0.5px); }
+  .setout-h-hour { background-image: var(--dr-pencil-h); }
+  .setout-h-quarter { background-image: var(--dr-pencil-h-hair); }
 
-  .setout-h-line {
-    border-top: var(--dr-w-line) solid var(--dr-red-line);
-    background-image: var(--dr-under-h-line);
-    background-size: 600px 6px;
-    background-repeat: repeat-x;
-  }
-
-  .setout-h-hair {
-    border-top: var(--dr-rule-hair);
-    background-image: var(--dr-under-h-hair);
-    background-size: 600px 6px;
-    background-repeat: repeat-x;
-  }
-
-  .setout-arc { overflow: hidden; }
+  /* Tall enough to hold the whole circle -- clipping it would show an arc,
+     which is exactly the thing this row exists to disprove. */
+  .setout-circle { height: 8.5rem; }
 </style>
 </head>
 <body class="drafting">
@@ -677,56 +666,48 @@
         <span class="dr-key-num">12</span>
         <span class="dr-key-term">Setting out</span>
         <span class="dr-key-leader"></span>
-        <span class="dr-micro">Every line, and the pencil under it</span>
+        <span class="dr-micro">Coincident · overrunning · whole</span>
       </div>
       <div class="setout">
         <div class="setout-row">
           <span class="dr-label">Structural</span>
-          <div class="setout-fig setout-fig--v setout-v-cut"></div>
-          <span class="dr-micro">Today's column · .88 → .30</span>
-        </div>
-        <div class="setout-row">
-          <span class="dr-label">Object</span>
-          <div class="setout-fig setout-fig--v setout-v-line"></div>
-          <span class="dr-micro">The axis rule · .58 → .20</span>
+          <div class="setout-fig setout-v setout-v-cut"><i class="setout-obj setout-obj--v"></i></div>
+          <span class="dr-micro">Today's column · .88 over .34</span>
         </div>
         <div class="setout-row">
           <span class="dr-label">Hairline</span>
-          <div class="setout-fig setout-fig--v setout-v-hair"></div>
-          <span class="dr-micro">Column separator · .32 → .13</span>
+          <div class="setout-fig setout-v setout-v-hair"><i class="setout-obj setout-obj--v setout-obj--hair"></i></div>
+          <span class="dr-micro">Column separator · .32 over .17</span>
         </div>
         <div class="setout-row">
-          <span class="dr-label">Construction</span>
-          <div class="setout-fig setout-hour"></div>
-          <span class="dr-micro">Hour rules · .20 → .12</span>
+          <span class="dr-label">Hour rule</span>
+          <div class="setout-fig setout-h setout-h-hour"><i class="setout-obj setout-obj--h"></i></div>
+          <span class="dr-micro">.20 over .24 — thinner, not lighter</span>
         </div>
         <div class="setout-row">
-          <span class="dr-label">Annotation</span>
-          <div class="setout-fig setout-h-line"></div>
-          <span class="dr-micro">Now · deadline · .92 → .20</span>
+          <span class="dr-label">Quarter hour</span>
+          <div class="setout-fig setout-h setout-h-quarter"></div>
+          <span class="dr-micro">Pencil only — nothing is inked over it</span>
         </div>
         <div class="setout-row">
-          <span class="dr-label">Band edge</span>
-          <div class="setout-fig setout-h-hair"></div>
-          <span class="dr-micro">.32 → .13</span>
-        </div>
-        <div class="setout-row">
-          <span class="dr-label">Arc</span>
-          <div class="setout-fig setout-arc">
-            <div class="dr-arc dr-construction" style="top:100%; --dr-arc-r: 150px;"></div>
+          <span class="dr-label">Circle</span>
+          <div class="setout-fig setout-circle">
+            <div class="dr-arc dr-construction" style="top:50%; --dr-arc-r: 118px; --dr-radius-angle: -35deg;"></div>
+            <span class="dr-point" style="top:50%; left:50%;"></span>
           </div>
-          <span class="dr-micro">Compass sweep · .11 → .07</span>
+          <span class="dr-micro">Struck whole, then part of it inked</span>
         </div>
       </div>
       <p class="note dr-body">
-        A ruled line was set out in pencil before it was inked, and in all four references
-        that pencil is still on the sheet. So every principal line here carries an understudy
-        a few pixels off it — thin, heavily displaced, and <em>always</em> a step lighter than
-        the line it constructs. Getting that backwards looks immediately wrong: the hour rules
-        are drawn in construction ink rather than object ink, so their understudy belongs at
-        .12 and not .20, and an arc is already the faintest line on the sheet, so its sweep has
-        to go below even that. All of it is construction, so it goes with that switch; all of
-        it is a raster, so a block can be dragged straight past it.
+        Three things make setting-out read as setting-out rather than as a second, sloppier
+        line. It is <em>coincident</em> — the same line, not one beside it. It <em>overruns</em>,
+        by 18px against the object rules' own 7, which is what says the grid was ruled across
+        the sheet before anything was drawn on it. And a circle is struck <em>whole</em>, with
+        its centre marked and its radius drawn, because that is what a compass leaves behind;
+        the arc is only the part that got inked.
+        <br><br>
+        It is also thinner than what it constructs — half a pixel against the object line's one —
+        and it is a pencil, not a blur: the geometry is exact and only the density varies.
       </p>
     </section>
 
@@ -770,9 +751,9 @@
           <div class="specimen-swatch" style="background-image: var(--dr-wash-rough); background-size: 100% 100%;"></div>
         </div>
         <div class="tex-cell">
-          <span class="dr-micro">Construction grid</span>
-          <div class="specimen-swatch" style="background-image: var(--dr-grid-smooth);"></div>
-          <div class="specimen-swatch" style="background-image: var(--dr-grid-rough); background-size: var(--dr-grid-rough-size);"></div>
+          <span class="dr-micro">Pencil line</span>
+          <div class="specimen-swatch" style="background-image: var(--dr-pencil-quarter-smooth); background-size: auto 15px;"></div>
+          <div class="specimen-swatch" style="background-image: var(--dr-pencil-quarter); background-size: auto 15px;"></div>
         </div>
         <div class="tex-cell">
           <span class="dr-micro">Crossing strokes — normal · multiply</span>
@@ -784,7 +765,10 @@
         Ruled on the left, drawn on the right. The tooth is stitched fractal noise, so it
         tiles with no seam and no asset; the hatches vary in density rather than in
         geometry, because a displaced stroke will not meet its own continuation across a
-        tile edge and a seam every 60px is worse than a straight hairline.
+        tile edge and a seam every 60px is worse than a straight hairline. The same reasoning
+        governs the pencil line: displacing a hairline smears it across three device pixels and
+        reads as blur and as extra width, so the setting-out holds its position exactly and
+        varies in density instead.
         <br><br>
         The last pair is the one that decided the architecture — two hatches crossing, laid
         over each other normally and then multiplied. They are near enough identical, because
