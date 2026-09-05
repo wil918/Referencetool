@@ -59,9 +59,13 @@ These are not preferences. Violating one means the change gets reverted.
    `/drafting.css` after `/style.css`, and adding one `<div class="dr-grain">` as the
    first child of `<body>` — that div is the paper, and a page without it is a drawing
    floating on nothing.
-   **Adoption so far:** the specimen sheet only. `schedule.html` is still neumorphic and
-   takes the language when session 9c's screens land — the system was signed off before the
-   screens were restyled, deliberately.
+   **Adoption:** `schedule.html` (all three tabs) and the specimen sheet. The archive SPA,
+   the project shell and the three graph pages are untouched. Two consequences of the colour
+   rule that are easy to mistake for oversights: a **deliverable is keyed by number**, not by
+   hue — `calendar.js` builds a stable 1..n index over the visible range, marks each block
+   with it and draws the key under the calendar, which is why `schedule/colour.js` is no
+   longer imported anywhere — and **travel is a dashed leader line, not a block**, because it
+   is the line between two things rather than a thing.
    **Where it lives:** every value — line weights, tones, hatch pitches, the two accents, the
    type scale, the measure — is defined once at the top of `static/drafting.css`, scoped under
    `.drafting`, and nothing further down that file may introduce a colour, weight or size of
@@ -138,6 +142,7 @@ These are not preferences. Violating one means the change gets reverted.
 | `static/index.html` | `app.js` | The SPA: Add / Archive / Projects / Settings tabs. |
 | `static/schedule.html` | `schedule/main.js` | Tasks + calendar, and the schedule's own settings (locations, calendar import, personal events, hours, suggested bedtime). **This is the homepage** — `GET /` serves it, not `index.html`. |
 | `static/schedule/specimen.html` | — | The drafting language's specimen sheet. Static, unlinked, no logic. Reached directly at `/schedule/specimen.html`. |
+| `static/schedule/key.js` | — | The numbered key with leader lines that both detail panels open into, shared by `task-panel.js` and `commitment-panel.js`. |
 | `static/graph.html` | `graph.js` | 3D similarity graph, reachable at `/graph.html`. |
 | `static/connections.html` | `connections.js` | Flat 2D view the 3D graph folds into. |
 | `static/colour-connections.html` | `colour-connections.js` | Flat colour view. |

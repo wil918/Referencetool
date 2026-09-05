@@ -6,10 +6,23 @@
 <title>Schedule</title>
 <script src="/theme.js"></script>
 <link rel="stylesheet" href="/style.css">
+<!-- The drafting language, loaded AFTER style.css and scoped entirely under
+     .drafting on <body> below. See CLAUDE.md hard rule 6's schedule
+     exception: this surface is a drawing, not a soft-UI page, and the two
+     systems are not reconciled. -->
+<link rel="stylesheet" href="/drafting.css">
 </head>
-<body>
-  <header>
-    <h1>Schedule</h1>
+<body class="drafting">
+  <!-- The paper. One fixed element, multiplied over everything, never
+       re-rendered. Every page carrying class="drafting" needs exactly this. -->
+  <div class="dr-grain" aria-hidden="true"></div>
+
+  <!-- A drawing is identified by a title block, not a page header. -->
+  <header class="dr-titleblock">
+    <div class="dr-titleblock-field">
+      <span class="dr-micro">Fashion reference tool</span>
+      <h1 class="dr-title">Schedule</h1>
+    </div>
     <nav>
       <button class="tab-btn active" data-tab="tasks">Tasks</button>
       <button class="tab-btn" data-tab="schedule">Schedule</button>

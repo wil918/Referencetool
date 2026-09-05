@@ -13,6 +13,8 @@
 // action that could have moved something on the calendar (an outcome, a
 // pin/unlock), so the caller (calendar.js) knows to reload.
 
+import { makeKey } from "./key.js";
+
 let overlay = null;
 let box = null;
 
@@ -56,15 +58,6 @@ function makeStaticChip(text) {
   return chip;
 }
 
-function makeChipsRow(task) {
-  const row = document.createElement("div");
-  row.className = "task-chips";
-  if (task.est_minutes != null) row.appendChild(makeStaticChip(formatMinutes(task.est_minutes)));
-  if (task.importance != null) row.appendChild(makeStaticChip(`importance ${task.importance}`));
-  if (task.difficulty != null) row.appendChild(makeStaticChip(`difficulty ${task.difficulty}`));
-  return row;
-}
-
 function formatBlockTime(block) {
   if (block.granularity !== "slot") {
     return new Date(`${block.start}T00:00:00`).toLocaleDateString();
@@ -86,13 +79,12 @@ async function setBlockLocked(blockId, isLocked, refresh) {
   refresh();
 }
 
-function makeScheduleRow(block, refresh) {
-  const row = document.createElement("div");
-  row.className = "task-schedule-row";
-  const label = document.createElement("span");
-  label.className = "muted";
-  label.textContent = `Scheduled: ${formatBlockTime(block)}`;
-  row.appendChild(label);
+/* The slot, and its lock, as one keyed value -- the lock belongs beside the
+ * time it locks rather than in a row of its own. */
+function makeSlotValue(block, refresh) {
+  const wrap = document.createElement("span");
+  wrap.className = "task-schedule-row";
+  wrap.appendChild(document.createTextNode(formatBlockTime(block)));
 
   if (block.granularity === "slot") {
     const pinBtn = document.createElement("button");
@@ -100,9 +92,9 @@ function makeScheduleRow(block, refresh) {
     pinBtn.title = block.is_locked ? "Unlock this slot" : "Lock to this slot";
     pinBtn.textContent = block.is_locked ? "Locked" : "Lock";
     pinBtn.addEventListener("click", () => setBlockLocked(block.id, !block.is_locked, refresh));
-    row.appendChild(pinBtn);
+    wrap.appendChild(pinBtn);
   }
-  return row;
+  return wrap;
 }
 
 function defaultActualMinutes(task, block) {
@@ -230,15 +222,17 @@ async function render(taskId, onChange) {
   const refresh = () => render(taskId, onChange);
 
   const header = document.createElement("div");
-  header.className = "task-card-header";
+  header.className = "dr-titleblock";
+  const field = document.createElement("div");
+  field.className = "dr-titleblock-field";
+  const kind = document.createElement("span");
+  kind.className = "dr-micro";
+  kind.textContent = `Task \u00b7 ${task.status}`;
   const h3 = document.createElement("h3");
-  h3.className = "task-title";
+  h3.className = "dr-title panel-title";
   h3.textContent = task.title;
-  header.appendChild(h3);
-  const status = document.createElement("span");
-  status.className = "muted";
-  status.textContent = task.status;
-  header.appendChild(status);
+  field.append(kind, h3);
+  header.appendChild(field);
 
   const closeBtn = document.createElement("button");
   closeBtn.className = "btn";
@@ -248,36 +242,23 @@ async function render(taskId, onChange) {
   const card = document.createElement("div");
   card.className = "task-card task-panel-card";
 
-  if (task.description) {
-    const desc = document.createElement("p");
-    desc.className = "muted";
-    desc.textContent = task.description;
-    card.appendChild(desc);
-  }
-  card.appendChild(makeChipsRow(task));
-  if (task.measurable_goal) {
-    const goal = document.createElement("p");
-    goal.className = "task-goal";
-    goal.textContent = task.measurable_goal;
-    card.appendChild(goal);
-  }
+  const currentBlock = (blocks || []).filter((b) => b.kind === "task").slice(-1)[0];
+  const done = task.status === "done" || task.status === "partial";
 
-  if (task.status === "done" || task.status === "partial") {
-    const row = document.createElement("div");
-    row.className = "task-actuals";
-    const label = document.createElement("span");
-    label.className = "muted";
-    label.textContent = task.status === "partial" ? "Partially completed" : "Done";
-    row.appendChild(label);
-    if (actual) {
-      if (actual.actual_minutes != null) row.appendChild(makeStaticChip(formatMinutes(actual.actual_minutes)));
-      if (actual.actual_importance != null) row.appendChild(makeStaticChip(`importance ${actual.actual_importance}`));
-      if (actual.actual_difficulty != null) row.appendChild(makeStaticChip(`difficulty ${actual.actual_difficulty}`));
-    }
-    card.appendChild(row);
-  } else if (task.status !== "abandoned") {
-    const currentBlock = (blocks || []).filter((b) => b.kind === "task").slice(-1)[0];
-    if (currentBlock) card.appendChild(makeScheduleRow(currentBlock, refresh));
+  // One key for the whole task. Entries that resolve to nothing are dropped
+  // before numbering, so the sequence never has a hole in it.
+  card.appendChild(makeKey([
+    ["Estimate", formatMinutes(task.est_minutes)],
+    ["Importance", task.importance != null ? String(task.importance) : null],
+    ["Difficulty", task.difficulty != null ? String(task.difficulty) : null],
+    ["Deadline", task.deadline],
+    ["Slot", currentBlock && !done ? makeSlotValue(currentBlock, refresh) : null],
+    ["Spent", done && actual?.actual_minutes != null ? formatMinutes(actual.actual_minutes) : null],
+    ["Goal", task.measurable_goal, { wide: true }],
+    ["Notes", task.description, { wide: true }],
+  ]));
+
+  if (!done && task.status !== "abandoned") {
     card.appendChild(makeActionsRow(task, currentBlock, refresh, onChange));
   }
 

@@ -1,3 +1,13 @@
+// NOT USED BY THE WEEK VIEW ANY MORE. The schedule surface is drawn in the
+// drafting language (see static/drafting.css), where colour is scarce by
+// rule -- one red and one cool wash, and nothing else -- so a deliverable is
+// keyed by NUMBER instead: calendar.js builds a stable 1..n index per
+// deliverable in the visible range, marks each block with it, and draws the
+// key under the calendar. Kept because it is still a correct implementation
+// of a stable per-deliverable hue if a surface outside the drafting scope
+// ever wants one; do not wire it back into the calendar without deciding
+// what happens to the colour rule.
+//
 // A stable colour per deliverable, for the week/day/month calendars to key
 // task blocks by (see CLAUDE.md's neumorphic rule 6: "do not introduce new
 // colours"). deliverables carry no colour of their own in the data model

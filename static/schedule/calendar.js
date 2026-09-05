@@ -3,7 +3,7 @@
  * adds should be numDays: 1 against the same component, not a copy of it.
  * (Month view is a fundamentally different layout -- a grid of day cells,
  * no hourly axis -- so it won't call createCalendar at all; it can still
- * reuse loadCalendarData/effectiveBandWindow/deliverableColour below.)
+ * reuse loadCalendarData/effectiveBandWindow below.)
  *
  * Owns: fetching everything a range needs in one pass, laying out commitments
  * and scheduled blocks against an hourly axis, the working/domestic hour
@@ -18,7 +18,6 @@
  * component, not part of what a calendar grid is. schedule.js owns them and
  * reads at-risk data back out through onDataLoaded.
  */
-import { deliverableColour } from "./colour.js";
 
 const PX_PER_MIN = 1; // 60px/hour -- keeps every time<->pixel conversion a plain subtraction
 // A day, for scheduling purposes, starts at 5am and runs a full 24 hours --
@@ -333,6 +332,11 @@ export function createCalendar(container, options = {}) {
   let startDate = snapDate(options.startDate || todayStr());
   let data = null;
   let nowTimer = null;
+  // Rebuilt on every load: which tasks the scheduler flagged, and a stable
+  // 1..n index per deliverable in the visible range. The index is what the
+  // blocks are keyed by -- see the deliverable key drawn under the calendar.
+  let atRiskTaskIds = new Set();
+  let deliverableIndex = new Map();
   let gesture = null; // the one in-flight pointer gesture, band-resize or block-drag
 
   container.classList.add("schedule-calendar");
@@ -341,13 +345,26 @@ export function createCalendar(container, options = {}) {
       <button type="button" class="btn schedule-nav-prev">&larr;</button>
       <button type="button" class="btn schedule-nav-today">Today</button>
       <button type="button" class="btn schedule-nav-next">&rarr;</button>
-      <span class="schedule-range-label muted"></span>
+      <span class="schedule-range-label"></span>
+      <span class="schedule-toggles">
+        <label class="dr-toggle">
+          <input type="checkbox" class="schedule-construction-switch" checked>
+          <span class="dr-toggle-box"></span>
+          Construction
+        </label>
+        <label class="dr-toggle">
+          <input type="checkbox" class="schedule-texture-switch" checked>
+          <span class="dr-toggle-box"></span>
+          Texture
+        </label>
+      </span>
     </div>
     <p class="schedule-empty-banner muted" hidden></p>
     <div class="schedule-calendar-body">
-      <div class="schedule-hour-axis"></div>
+      <div class="schedule-hour-axis dr-axis"></div>
       <div class="schedule-day-columns"></div>
     </div>
+    <div class="schedule-deliverable-key dr-key" hidden></div>
   `;
 
   const prevBtn = container.querySelector(".schedule-nav-prev");
@@ -358,6 +375,18 @@ export function createCalendar(container, options = {}) {
   const bodyEl = container.querySelector(".schedule-calendar-body");
   const hourAxis = container.querySelector(".schedule-hour-axis");
   const columnsEl = container.querySelector(".schedule-day-columns");
+  const deliverableKeyEl = container.querySelector(".schedule-deliverable-key");
+
+  /* The two print switches. Both flip a class on <body> -- the whole layer is
+   * one custom property either way (see drafting.css), so neither costs a
+   * re-render, and neither is persisted: they are how the sheet is printed
+   * today, not something the user made (CLAUDE.md hard rule 2). */
+  container.querySelector(".schedule-construction-switch").addEventListener("change", (e) => {
+    document.body.classList.toggle("dr-no-construction", !e.target.checked);
+  });
+  container.querySelector(".schedule-texture-switch").addEventListener("change", (e) => {
+    document.body.classList.toggle("dr-no-texture", !e.target.checked);
+  });
 
   // Set once, on the grid itself rather than on .schedule-day-columns: a
   // custom property only cascades to descendants, and grid-template-columns
@@ -373,7 +402,9 @@ export function createCalendar(container, options = {}) {
   for (let i = 0; i < 24; i++) {
     const wallHour = (START_HOUR + i) % 24;
     const label = document.createElement("div");
-    label.className = "schedule-hour-label";
+    // Every third figure carries more weight, so the rule can be counted in
+    // threes without being read (drafting.css's .is-major).
+    label.className = `dr-axis-figure${i % 3 === 0 ? " is-major" : ""}`;
     label.style.top = `${yForElapsed(i * 60)}px`;
     label.textContent = formatTime(wallHour * 60);
     hourAxis.appendChild(label);
@@ -487,7 +518,10 @@ export function createCalendar(container, options = {}) {
 
   function makeBandEl(band, kind, dateStr) {
     const el = document.createElement("div");
-    el.className = `schedule-band schedule-band-${kind}`;
+    // A tone over a transparent ground, never a fill -- which is what lets a
+    // working and a domestic band that cover the same hour both survive and
+    // read as two materials at once.
+    el.className = `dr-band dr-band--${kind}`;
     // Working/domestic hours never cross midnight, so both edges are always
     // this same date -- elapsedInColumn's same-day branch.
     const top = yForElapsed(elapsedInColumn(dateStr, dateStr, minutesOfIso(`${dateStr}T${band.opens}:00`)));
@@ -495,10 +529,15 @@ export function createCalendar(container, options = {}) {
     el.style.top = `${top}px`;
     el.style.height = `${Math.max(bottom - top, 0)}px`;
 
+    const label = document.createElement("span");
+    label.className = "dr-band-label";
+    label.textContent = kind;
+    el.appendChild(label);
+
     const topHandle = document.createElement("div");
-    topHandle.className = "schedule-band-handle schedule-band-handle-top";
+    topHandle.className = "dr-band-handle dr-band-handle--top";
     const bottomHandle = document.createElement("div");
-    bottomHandle.className = "schedule-band-handle schedule-band-handle-bottom";
+    bottomHandle.className = "dr-band-handle dr-band-handle--bottom";
     el.append(topHandle, bottomHandle);
 
     wireBandResize(topHandle, kind, dateStr, "opens");
@@ -536,10 +575,14 @@ export function createCalendar(container, options = {}) {
     return `${minutes} min travel · leave ${leaveByLabel(commitment.start, minutes)}`;
   }
 
+  /* A block is a drawn object: paper ground and an edge, and what KIND of
+   * thing it is is said by that edge -- never by a fill and never by a hue.
+   * Travel is the one exception, because it is not an object at all: it is
+   * the line between two of them, so makeTravelEl draws it as one. */
   function makeEventEl(ev, dateStr) {
     const el = document.createElement("div");
-    const kindClass = ev.type === "commitment" ? "commitment" : ev.block.kind;
-    el.className = `schedule-block schedule-block-${kindClass}`;
+    const kindClass = ev.type === "commitment" ? "timetabled" : ev.block.kind;
+    el.className = `dr-block dr-block--${kindClass}`;
     el.dataset.kind = kindClass;
 
     const top = yForElapsed(ev.startMin);
@@ -549,15 +592,16 @@ export function createCalendar(container, options = {}) {
     el.style.left = `${(ev.lane / ev.laneCount) * 100}%`;
     el.style.width = `${(1 / ev.laneCount) * 100}%`;
 
-    if (ev.type === "block" && ev.block.kind === "task" && ev.task?.deliverable_id) {
-      const dot = document.createElement("span");
-      dot.className = "schedule-block-deliverable-dot";
-      dot.style.background = deliverableColour(ev.task.deliverable_id);
-      el.appendChild(dot);
+    if (ev.type === "block" && ev.block.kind === "task" && atRiskTaskIds.has(ev.block.task_id)) {
+      el.classList.add("dr-block--at-risk");
+      const flag = document.createElement("span");
+      flag.className = "dr-flag";
+      flag.textContent = "At risk";
+      el.appendChild(flag);
     }
 
     const label = document.createElement("span");
-    label.className = "schedule-block-label";
+    label.className = "dr-block-label";
     label.textContent = labelForBlock(ev);
     el.appendChild(label);
 
@@ -568,7 +612,7 @@ export function createCalendar(container, options = {}) {
       const subtitle = subtitleForCommitment(ev.commitment);
       if (subtitle && height > 44) {
         const sub = document.createElement("span");
-        sub.className = "schedule-block-subtitle muted";
+        sub.className = "dr-block-sub";
         sub.textContent = subtitle;
         el.appendChild(sub);
       }
@@ -576,8 +620,8 @@ export function createCalendar(container, options = {}) {
 
     if (height > 32) {
       const time = document.createElement("span");
-      time.className = "schedule-block-time muted";
-      time.textContent = `${formatElapsed(ev.startMin)}–${formatElapsed(ev.endMin)}`;
+      time.className = "dr-block-time";
+      time.textContent = `${formatElapsed(ev.startMin)}\u2013${formatElapsed(ev.endMin)}`;
       el.appendChild(time);
     }
 
@@ -585,18 +629,33 @@ export function createCalendar(container, options = {}) {
       const travelHint = height > 60 ? travelHintForCommitment(ev.commitment) : null;
       if (travelHint) {
         const travel = document.createElement("span");
-        travel.className = "schedule-block-travel-hint muted";
+        travel.className = "dr-block-sub";
         travel.textContent = travelHint;
         el.appendChild(travel);
       }
     }
 
+    // The deliverable is keyed by number rather than by colour: this language
+    // has one red and one wash to spend and a rotating hue palette is not in
+    // it (see deliverableIndex, and the key drawn under the calendar).
+    if (ev.type === "block" && ev.block.kind === "task" && ev.task?.deliverable_id) {
+      const idx = deliverableIndex.get(ev.task.deliverable_id);
+      if (idx && height > 26) {
+        const mark = document.createElement("span");
+        mark.className = "dr-index";
+        mark.textContent = String(idx).padStart(2, "0");
+        el.appendChild(mark);
+      }
+    }
+
+    // Locked to a slot: a datum mark -- a drawing fixes a point with a circle
+    // and a cross through it, which is exactly what a pinned block is.
     if (ev.type === "block" && ev.block.kind === "task" && ev.block.is_locked) {
-      const pin = document.createElement("span");
-      pin.className = "schedule-block-pin";
-      pin.title = "Locked to this slot";
-      pin.textContent = "\u{1F4CC}";
-      el.appendChild(pin);
+      el.classList.add("dr-block--locked");
+      const datum = document.createElement("span");
+      datum.className = "dr-datum";
+      datum.title = "Locked to this slot";
+      el.appendChild(datum);
     }
 
     const isDraggableTask = ev.type === "block" && ev.block.kind === "task";
@@ -605,6 +664,26 @@ export function createCalendar(container, options = {}) {
     } else if (ev.type === "commitment") {
       el.addEventListener("click", () => onOpenCommitment(ev.commitment));
     }
+    return el;
+  }
+
+  /* Travel is not a block. It is the line between two things, so it is drawn
+   * as one: a dashed leader down the left of the track with an arrowhead
+   * where it arrives, and the duration lettered beside it. Nothing is boxed,
+   * because nothing is happening in that time except moving. */
+  function makeTravelEl(ev) {
+    const el = document.createElement("div");
+    el.className = "dr-leader";
+    const top = yForElapsed(ev.startMin);
+    el.style.top = `${top}px`;
+    el.style.height = `${Math.max(yForElapsed(ev.endMin) - top, 8)}px`;
+    el.style.left = "10%";
+
+    const minutes = Math.round(ev.endMin - ev.startMin);
+    const label = document.createElement("span");
+    label.className = "dr-leader-label";
+    label.textContent = `${minutes} min`;
+    el.appendChild(label);
     return el;
   }
 
@@ -620,11 +699,14 @@ export function createCalendar(container, options = {}) {
       const chip = document.createElement("button");
       chip.type = "button";
       chip.className = "schedule-day-list-item";
-      if (task?.deliverable_id) {
-        chip.style.setProperty("--deliverable-colour", deliverableColour(task.deliverable_id));
-        chip.classList.add("has-deliverable");
+      const idx = task?.deliverable_id ? deliverableIndex.get(task.deliverable_id) : null;
+      if (idx) {
+        const mark = document.createElement("span");
+        mark.className = "dr-index";
+        mark.textContent = String(idx).padStart(2, "0");
+        chip.appendChild(mark);
       }
-      chip.textContent = task ? task.title : "Task";
+      chip.appendChild(document.createTextNode(task ? task.title : "Task"));
       chip.addEventListener("click", () => onOpenTask(block.task_id));
       wrap.appendChild(chip);
     });
@@ -633,7 +715,7 @@ export function createCalendar(container, options = {}) {
 
   function makeBedtimeEl(dateStr, marker) {
     const el = document.createElement("div");
-    el.className = "schedule-bedtime-marker";
+    el.className = "dr-marker";
     // A bedtime that rolls past midnight (e.g. 00:30) is still tonight's
     // marker -- elapsedInColumn is what places it proportionally in the
     // 12am-4am stretch at the bottom of this column instead of clamping it
@@ -644,8 +726,8 @@ export function createCalendar(container, options = {}) {
     const y = yForElapsed(elapsedInColumn(dateStr, bedtimeDateStr, rawMinutes));
     el.style.top = `${y}px`;
     const label = document.createElement("span");
-    label.className = "schedule-bedtime-label";
-    label.textContent = `Suggested bedtime ${formatTime(rawMinutes)}${rolledPastMidnight ? " (after midnight)" : ""}`;
+    label.className = "dr-marker-label";
+    label.textContent = `Bedtime ${formatTime(rawMinutes)}${rolledPastMidnight ? " (past midnight)" : ""}`;
     el.appendChild(label);
     return el;
   }
@@ -662,14 +744,66 @@ export function createCalendar(container, options = {}) {
     // something worth a second column lookup for.
     if (rawMinutes < START_HOUR * 60) return null;
     const el = document.createElement("div");
-    el.className = "schedule-now-line";
+    el.className = "dr-now";
     el.style.top = `${yForElapsed(elapsedInColumn(dateStr, dateStr, rawMinutes))}px`;
+    const label = document.createElement("span");
+    label.className = "dr-now-label";
+    label.textContent = "Now";
+    el.appendChild(label);
     return el;
+  }
+
+  /* --- Deadlines: a compass arc struck from the point ---------------------
+   * A task deadline is a date, not a time, so the point is the close of that
+   * day's working band (or 5pm if none is set) -- "by the end of the day you
+   * are willing to work". The rule and its label are information and stay
+   * whatever the construction layer is doing; the two sweeps back into the
+   * run-up are setting-out, drawn once per DATE rather than once per task. */
+  function deadlineFor(dateStr) {
+    const tasks = Object.values(data.tasksById || {})
+      .filter((t) => t.deadline === dateStr && t.status !== "done" && t.status !== "abandoned");
+    if (!tasks.length) return null;
+    const working = bandsFor(dateStr).working;
+    const closes = working ? working.closes : "17:00";
+    return { tasks, elapsed: elapsedInColumn(dateStr, dateStr, minutesOfIso(`${dateStr}T${closes}:00`)) };
+  }
+
+  function makeDeadlineEls(dateStr, deadline) {
+    const y = yForElapsed(deadline.elapsed);
+    const els = [];
+
+    // Struck first so the arcs sit behind everything they generated.
+    [110, 190].forEach((r) => {
+      const arc = document.createElement("div");
+      arc.className = "dr-arc dr-construction";
+      arc.style.top = `${y}px`;
+      arc.style.setProperty("--dr-arc-r", `${r}px`);
+      els.push(arc);
+    });
+
+    const point = document.createElement("div");
+    point.className = "dr-point";
+    point.style.top = `${y}px`;
+    point.style.left = "50%";
+    els.push(point);
+
+    const rule = document.createElement("div");
+    rule.className = "dr-deadline";
+    rule.style.top = `${y}px`;
+    const label = document.createElement("span");
+    label.className = "dr-deadline-label";
+    label.textContent = deadline.tasks.length === 1
+      ? `Due: ${deadline.tasks[0].title}`
+      : `${deadline.tasks.length} due today`;
+    rule.appendChild(label);
+    els.push(rule);
+
+    return els;
   }
 
   function renderDayColumn(dateStr) {
     const col = document.createElement("div");
-    col.className = "schedule-day-col";
+    col.className = "schedule-day-col dr-col";
     if (dateStr === todayStr()) col.classList.add("is-today");
 
     const header = document.createElement("div");
@@ -703,7 +837,7 @@ export function createCalendar(container, options = {}) {
     }
 
     const track = document.createElement("div");
-    track.className = "schedule-day-track";
+    track.className = "schedule-day-track dr-track";
     track.style.height = `${GRID_HEIGHT}px`;
     track.dataset.date = dateStr;
 
@@ -711,8 +845,21 @@ export function createCalendar(container, options = {}) {
     if (working) track.appendChild(makeBandEl(working, "working", dateStr));
     if (domestic) track.appendChild(makeBandEl(domestic, "domestic", dateStr));
 
+    // The deadline is set out before anything is drawn on top of it.
+    const deadline = deadlineFor(dateStr);
+    if (deadline) makeDeadlineEls(dateStr, deadline).forEach((el) => track.appendChild(el));
+
     const laned = layoutLanes(slotEventsFor(dateStr));
-    laned.forEach((ev) => track.appendChild(makeEventEl(ev, dateStr)));
+    laned.forEach((ev) => {
+      track.appendChild(ev.type === "block" && ev.block.kind === "travel"
+        ? makeTravelEl(ev)
+        : makeEventEl(ev, dateStr));
+    });
+
+    // The one-second question the week view has to answer: where is the next
+    // thing. Marked with the loudest annotation the language allows, and only
+    // ever on today.
+    if (dateStr === todayStr()) markNextBlock(track);
 
     const bedtime = bedtimeFor(dateStr);
     if (bedtime) track.appendChild(makeBedtimeEl(dateStr, bedtime));
@@ -724,9 +871,65 @@ export function createCalendar(container, options = {}) {
     return col;
   }
 
+  /* The next task or commitment still to come today, marked with a red
+   * bracket set OUTSIDE its own edge so it reads as an annotation pointing at
+   * the block rather than as a change to it. Runs on the finished track, so
+   * it does not need to know how the blocks were built. */
+  function markNextBlock(track) {
+    const now = new Date();
+    const rawMinutes = now.getHours() * 60 + now.getMinutes();
+    if (rawMinutes < START_HOUR * 60) return;
+    const nowY = yForElapsed(rawMinutes - START_HOUR * 60);
+    let best = null;
+    track.querySelectorAll(".dr-block--task, .dr-block--timetabled").forEach((el) => {
+      const top = parseFloat(el.style.top);
+      if (top >= nowY && (!best || top < parseFloat(best.style.top))) best = el;
+    });
+    if (best) best.classList.add("is-next");
+  }
+
+  /* Every deliverable with work in the visible range, numbered, as a key at
+   * the corner of the sheet. This is what the index marks on the blocks refer
+   * to -- the drafting answer to "which project is this", where the
+   * neumorphic version spent a rotating hue palette on it. */
+  function renderDeliverableKey() {
+    deliverableIndex = new Map();
+    const seen = [];
+    (data.schedule.blocks || []).forEach((b) => {
+      const task = b.task_id ? data.tasksById[b.task_id] : null;
+      const id = task?.deliverable_id;
+      if (id && !deliverableIndex.has(id)) {
+        deliverableIndex.set(id, seen.length + 1);
+        seen.push(id);
+      }
+    });
+
+    deliverableKeyEl.innerHTML = "";
+    deliverableKeyEl.hidden = seen.length === 0;
+    seen.forEach((id, i) => {
+      const row = document.createElement("div");
+      row.className = "dr-key-row";
+      const num = document.createElement("span");
+      num.className = "dr-key-num";
+      num.textContent = String(i + 1).padStart(2, "0");
+      const term = document.createElement("span");
+      term.className = "dr-key-term";
+      term.textContent = "Deliverable";
+      const leader = document.createElement("span");
+      leader.className = "dr-key-leader";
+      const value = document.createElement("span");
+      value.className = "dr-key-value";
+      value.textContent = data.deliverablesById[id]?.title || "Untitled";
+      row.append(num, term, leader, value);
+      deliverableKeyEl.appendChild(row);
+    });
+  }
+
   function render() {
     renderRangeLabel();
     renderEmptyBanner();
+    atRiskTaskIds = new Set((data.schedule.at_risk || []).map((e) => e.task_id).filter(Boolean));
+    renderDeliverableKey();
     columnsEl.innerHTML = "";
     visibleDates().forEach((d) => columnsEl.appendChild(renderDayColumn(d)));
   }
@@ -774,7 +977,17 @@ export function createCalendar(container, options = {}) {
     if (!gesture.active) {
       if (Math.abs(dy) < DRAG_THRESHOLD) return;
       gesture.active = true;
-      if (gesture.kind === "block-move") gesture.el.classList.add("is-dragging");
+      if (gesture.kind === "block-move") {
+        gesture.el.classList.add("is-dragging");
+        // The slot it came from, left on the sheet the way a mechanism is
+        // drawn through its arc -- construction, so it goes with that layer.
+        const ghost = document.createElement("div");
+        ghost.className = "dr-block dr-block--ghost dr-construction";
+        ghost.style.cssText = gesture.el.style.cssText;
+        ghost.style.top = `${gesture.startTop}px`;
+        gesture.ghost = ghost;
+        gesture.el.parentElement.appendChild(ghost);
+      }
     }
     e.preventDefault();
 
@@ -820,6 +1033,7 @@ export function createCalendar(container, options = {}) {
       }
     } else if (g.kind === "block-move") {
       g.el.classList.remove("is-dragging");
+      g.ghost?.remove();
       if (!wasDrag) {
         // A click, not a drag -- open the task.
         if (g.block.task_id) onOpenTask(g.block.task_id);
@@ -845,6 +1059,7 @@ export function createCalendar(container, options = {}) {
 
   function onPointerCancel(e) {
     if (!gesture || e.pointerId !== gesture.pointerId) return;
+    gesture.ghost?.remove();
     gesture = null;
     render(); // discard any in-progress visual preview
   }

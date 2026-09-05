@@ -9,6 +9,8 @@
 //
 // Exports openCommitmentPanel(commitment, locationsById).
 
+import { makeKey } from "./key.js";
+
 let overlay = null;
 let box = null;
 
@@ -41,20 +43,6 @@ function formatTimeRange(startIso, endIso) {
   const sameDay = startIso.slice(0, 10) === endIso.slice(0, 10);
   return sameDay ? `${fmt(startIso)}–${fmt(endIso)}`
     : `${fmt(startIso)} – ${new Date(endIso).toLocaleDateString()} ${fmt(endIso)}`;
-}
-
-function makeRow(label, value) {
-  if (!value) return null;
-  const row = document.createElement("div");
-  row.className = "commitment-panel-row";
-  const dt = document.createElement("span");
-  dt.className = "commitment-panel-label muted";
-  dt.textContent = label;
-  const dd = document.createElement("span");
-  dd.className = "commitment-panel-value";
-  dd.textContent = value;
-  row.append(dt, dd);
-  return row;
 }
 
 /* A parser that could not confidently name every field keeps the feed's own
@@ -98,17 +86,17 @@ export function openCommitmentPanel(commitment, locationsById = {}) {
   const location = commitment.location_id ? locationsById[commitment.location_id] : null;
 
   const header = document.createElement("div");
-  header.className = "task-card-header";
+  header.className = "dr-titleblock";
+  const field = document.createElement("div");
+  field.className = "dr-titleblock-field";
+  const kind = document.createElement("span");
+  kind.className = "dr-micro";
+  kind.textContent = meta.delivery_type || "Commitment";
   const h3 = document.createElement("h3");
-  h3.className = "task-title";
+  h3.className = "dr-title panel-title";
   h3.textContent = meta.module_name || commitment.title;
-  header.appendChild(h3);
-  if (meta.delivery_type) {
-    const kind = document.createElement("span");
-    kind.className = "muted";
-    kind.textContent = meta.delivery_type;
-    header.appendChild(kind);
-  }
+  field.append(kind, h3);
+  header.appendChild(field);
 
   const closeBtn = document.createElement("button");
   closeBtn.className = "btn";
@@ -117,15 +105,15 @@ export function openCommitmentPanel(commitment, locationsById = {}) {
 
   const card = document.createElement("div");
   card.className = "task-card commitment-panel-card";
-  [
-    makeRow("Time", formatTimeRange(commitment.start, commitment.end)),
-    makeRow("Module code", meta.module_code),
-    makeRow("Lecturer", (meta.lecturer || []).join(", ")),
-    makeRow("Details", meta.details),
-    makeRow("Site", meta.site),
-    makeRow("Room", meta.room),
-    makeRow("Location", location ? location.name : null),
-  ].filter(Boolean).forEach((row) => card.appendChild(row));
+  card.appendChild(makeKey([
+    ["Time", formatTimeRange(commitment.start, commitment.end)],
+    ["Module code", meta.module_code],
+    ["Lecturer", (meta.lecturer || []).join(", ")],
+    ["Site", meta.site],
+    ["Room", meta.room],
+    ["Location", location ? location.name : null],
+    ["Details", meta.details, { wide: true }],
+  ]));
 
   const raw = makeRawSection(meta);
   if (raw) card.appendChild(raw);

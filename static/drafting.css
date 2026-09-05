@@ -1358,6 +1358,7 @@
   position: absolute;
   box-sizing: border-box;
   overflow: hidden;
+  border-radius: 0;
   padding: 2px 5px 2px 6px;
   background: var(--dr-paper);
   font-family: var(--dr-face);
@@ -1659,7 +1660,12 @@
 .dr-deadline-label {
   position: absolute;
   left: 2px;
-  top: 1px;
+  right: 2px;
+  top: -0.72rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: var(--dr-paper);
   font-family: var(--dr-face);
   font-size: var(--dr-t-micro);
   letter-spacing: var(--dr-track-micro);
@@ -1818,11 +1824,17 @@
   white-space: nowrap;
 }
 
-/* The leader itself. A dotted rule filling whatever gap is left, dropped to
-   sit on the baseline rather than under it. */
+/* The leader itself: a dotted rule filling whatever gap is left, sitting on
+   the baseline rather than under it. Drawn as a repeating gradient and not as
+   a `dotted` border -- a sub-pixel dotted border is rendered by the browser as
+   an uneven, patchy dash, which is exactly the look a ruled leader must not
+   have. */
 .dr-key-leader {
-  border-bottom: var(--dr-w-construction) dotted var(--dr-c-hair);
-  transform: translateY(-0.24em);
+  height: 1px;
+  align-self: baseline;
+  margin-bottom: 0.24em;
+  background-image: repeating-linear-gradient(to right,
+    var(--dr-c-hair) 0 1px, transparent 1px 4px);
 }
 
 .dr-key-value {
@@ -2062,3 +2074,198 @@
 
 .dr-toggle input:checked + .dr-toggle-box::before { left: 50%; top: 1px; bottom: 1px; width: var(--dr-w-line); }
 .dr-toggle input:checked + .dr-toggle-box::after { top: 50%; left: 1px; right: 1px; height: var(--dr-w-line); }
+
+/* ==========================================================================
+   13. THE SCHEDULE SURFACE
+   Where the language meets the markup schedule.html and calendar.js actually
+   produce. Everything above is a primitive; this section is the only place
+   that knows a `.schedule-*` class exists.
+
+   style.css is still loaded for the modals, forms and the calendar's grid
+   layout -- that subgrid arrangement is load-bearing and is left completely
+   alone. What is overridden here is only its *appearance*: the rounded
+   corners, the tinted today column, the borders that the drawn rules now
+   provide, and the neumorphic chips. Blanking --raise-*/--press-* higher up
+   already removed every shadow.
+   ========================================================================== */
+
+.drafting header {
+  background: var(--dr-paper);
+  border-bottom: var(--dr-rule-cut);
+  align-items: flex-end;
+  gap: 2rem;
+  padding: 1.1rem 1.6rem 0.6rem;
+}
+
+.drafting header nav { gap: 0.4rem; margin-left: auto; }
+.drafting main { padding: 1.4rem 1.6rem 4rem; }
+
+/* --- The calendar body ---------------------------------------------------
+   No radius and no well: a drawing is not inset into the page. The frame is
+   two drawn rules, the way a sheet's border is. */
+.drafting .schedule-calendar-body {
+  border-radius: 0;
+  background: var(--dr-paper);
+  border-top: var(--dr-rule-line);
+  border-bottom: var(--dr-rule-line);
+  /* The construction field is inset by a NEGATIVE --dr-overrun, which counts
+     as scrollable overflow in a container that already scrolls vertically --
+     without this the sheet grows a horizontal scrollbar it has no content
+     for. Clipping costs only the overrun at the two outermost edges; every
+     overrun between columns, which is the one that reads, is untouched. */
+  overflow-x: hidden;
+}
+
+.drafting .schedule-calendar-toolbar { gap: 0.5rem; margin-bottom: 1rem; }
+.drafting .schedule-range-label { font-family: var(--dr-face); font-size: var(--dr-t-label);
+  letter-spacing: var(--dr-track-label); text-transform: uppercase; color: var(--dr-ink); }
+
+/* The two switches sit at the right of the toolbar, where a sheet keeps its
+   print options. */
+.drafting .schedule-toggles { margin-left: auto; display: flex; gap: 1rem; align-items: center; }
+
+.drafting .schedule-empty-banner {
+  border-radius: 0;
+  background: transparent;
+  border-left: var(--dr-rule-cut);
+  padding: 0.4rem 0 0.4rem 0.7rem;
+}
+
+/* --- Columns -------------------------------------------------------------
+   The border and the today tint both go: .dr-col::after draws the separator
+   as a rule that overruns, and today is said with weight rather than colour. */
+.drafting .schedule-day-col { border-right: 0; }
+.drafting .schedule-day-col.is-today { background: none; }
+
+.drafting .schedule-day-header {
+  background: var(--dr-paper);
+  border-bottom: var(--dr-rule-line);
+  align-items: baseline;
+  padding: 0.4rem 0.5rem 0.3rem;
+}
+
+.drafting .schedule-day-weekday {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  color: var(--dr-ink-3);
+}
+
+.drafting .schedule-day-date {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-figure);
+  color: var(--dr-ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.drafting .schedule-day-col.is-today .schedule-day-date { color: var(--dr-ink); font-weight: 500; }
+
+.drafting .schedule-start-day-input {
+  border-bottom: var(--dr-rule-hair);
+  font-size: var(--dr-t-micro);
+  padding: 0 0.1rem;
+}
+
+/* --- The "later this week" list ------------------------------------------
+   One ruled line per thing, the same idiom the month grid uses -- not chips. */
+.drafting .schedule-day-list { padding: 0.3rem 0.4rem; }
+
+.drafting .schedule-day-list-item {
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  border-left: var(--dr-rule-line);
+  padding: 0 0 0 5px;
+  margin-bottom: 3px;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  line-height: 1.4;
+  color: var(--dr-ink-2);
+}
+
+.drafting .schedule-day-list-item:hover { border-left-color: var(--dr-c-cut); color: var(--dr-ink); }
+
+/* The deliverable is keyed by number, not by hue -- see .dr-index. The dot
+   the neumorphic version used is exactly the "colour as a fill" this language
+   does not have. */
+.drafting .schedule-day-list-item.has-deliverable { padding-left: 5px; }
+.drafting .schedule-day-list-item.has-deliverable::before { content: none; }
+
+/* --- Cards and chips on the Tasks tab ------------------------------------ */
+.drafting .task-card,
+.drafting .task-entry,
+.drafting .settings-section,
+.drafting .task-at-risk-panel {
+  border-radius: 0;
+  background: transparent;
+  border-left: var(--dr-rule-hair);
+  padding-left: 0.9rem;
+}
+
+.drafting .task-chip,
+.drafting .task-slip-badge {
+  border-radius: 0;
+  border: var(--dr-rule-hair);
+  background: transparent;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+}
+
+.drafting .task-chip:hover { border-color: var(--dr-c-line); color: var(--dr-ink); }
+.drafting .task-chip.generated::after { background: var(--dr-ink-4); }
+
+.drafting .task-title,
+.drafting .task-goal { border-radius: 0; background: transparent; }
+
+.drafting .task-pin-btn.active { border-color: var(--dr-c-cut); color: var(--dr-ink); }
+
+/* --- A numbered key, on the sheet ----------------------------------------
+   Which deliverable a block belongs to is said by an index, the way a part on
+   a mechanism drawing is keyed to a list at the corner -- not by a colour,
+   which this language does not have to spend. */
+.dr-index {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: 0.06em;
+  color: var(--dr-ink-3);
+  font-variant-numeric: tabular-nums;
+  margin-right: 0.3rem;
+}
+
+.dr-block .dr-index { position: absolute; bottom: 1px; right: 3px; margin: 0; }
+
+.schedule-deliverable-key {
+  margin-top: 0.9rem;
+  padding-top: 0.5rem;
+  border-top: var(--dr-rule-hair);
+  columns: 2;
+  column-gap: 2rem;
+}
+
+.schedule-deliverable-key .dr-key-row { break-inside: avoid; padding: 0.12rem 0; }
+
+/* --- Detail panels -------------------------------------------------------
+   A block's detail opens as a key with a title block over it, not as a card
+   of label/value pairs. The panel title is a heading inside a modal, not the
+   name of a sheet, so it drops to head size and the sheet's letterspacing. */
+.drafting .modal-box .dr-titleblock { margin-bottom: 1.1rem; gap: 1rem; }
+
+.drafting .panel-title {
+  font-size: var(--dr-t-head);
+  letter-spacing: var(--dr-track-label);
+}
+
+.drafting .task-panel-card,
+.drafting .commitment-panel-card { border-left: 0; padding-left: 0; }
+
+/* The lock control sits inside its own keyed value, so it needs to sit on the
+   value's baseline rather than starting a line of its own. */
+.drafting .task-schedule-row {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0;
+}
