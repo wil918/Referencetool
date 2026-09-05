@@ -631,6 +631,30 @@ function makeTaskCard(task, lookups) {
     card.appendChild(meta);
   }
 
+  // The task's deliverable, settable here as well as from the Deliverables
+  // tab -- only meaningful once the task has a project, since a deliverable
+  // belongs to one. A change can move the task's effective deadline (it
+  // inherits its deliverable's due date), so the list is refreshed after.
+  if (task.project_id) {
+    const options = lookups.deliverablesByProject[task.project_id] || [];
+    const wrap = document.createElement("label");
+    wrap.className = "task-deliverable-row";
+    wrap.textContent = "Deliverable ";
+    const select = document.createElement("select");
+    select.innerHTML = '<option value="">No deliverable</option>';
+    options.forEach((d) => {
+      const opt = document.createElement("option");
+      opt.value = d.id;
+      opt.textContent = d.title;
+      select.appendChild(opt);
+    });
+    select.value = task.deliverable_id || "";
+    select.addEventListener("change", () =>
+      saveTaskFields(task.id, { deliverable_id: select.value || null }));
+    wrap.appendChild(select);
+    card.appendChild(wrap);
+  }
+
   const chips = makeGeneratedChips(task);
   if (chips.children.length) card.appendChild(chips);
 
@@ -767,6 +791,16 @@ export async function refreshTaskList() {
 
   const projectsById = Object.fromEntries(projects.map((p) => [p.id, p.title]));
   const locationsById = Object.fromEntries(locations.map((l) => [l.id, l.name]));
+
+  // Deliverables for every project a listed task belongs to, so each card can
+  // offer its own deliverable picker -- one request per distinct project.
+  const taskProjectIds = [...new Set(tasks.map((t) => t.project_id).filter(Boolean))];
+  const deliverableLists = await Promise.all(
+    taskProjectIds.map((pid) =>
+      fetch(`/api/projects/${pid}/deliverables`).then((r) => r.json()).then((d) => [pid, d])
+    )
+  );
+  const deliverablesByProject = Object.fromEntries(deliverableLists);
   const blocksByTask = Object.fromEntries(
     (schedule.blocks || []).filter((b) => b.kind === "task" && b.task_id).map((b) => [b.task_id, b])
   );
@@ -784,7 +818,14 @@ export async function refreshTaskList() {
   emptyEl.hidden = tasks.length > 0;
   tasks.forEach((task) => {
     listEl.appendChild(
-      makeTaskCard(task, { projectsById, locationsById, actualsByTask, blocksByTask, slippingIds })
+      makeTaskCard(task, {
+        projectsById,
+        locationsById,
+        actualsByTask,
+        blocksByTask,
+        slippingIds,
+        deliverablesByProject,
+      })
     );
   });
 }

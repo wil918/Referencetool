@@ -97,6 +97,41 @@ function makeSlotValue(block, refresh) {
   return wrap;
 }
 
+/* The task's deliverable, settable from the task itself -- the same control
+ * the Deliverables tab offers, so a block on the calendar can be filed under
+ * a deliverable without leaving the drawing. A change here shifts what the
+ * deliverable owes and can move the task's effective deadline (a task inherits
+ * its deliverable's due date -- see scheduling._own_deadline), so onChange
+ * fires for the caller to reload. */
+async function setDeliverable(taskId, deliverableId, refresh, onChange) {
+  await fetch(`/api/tasks/${taskId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deliverable_id: deliverableId || null }),
+  });
+  refresh();
+  onChange();
+}
+
+function makeDeliverableValue(task, deliverables, refresh, onChange) {
+  const select = document.createElement("select");
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "No deliverable";
+  select.appendChild(none);
+  deliverables.forEach((d) => {
+    const opt = document.createElement("option");
+    opt.value = d.id;
+    opt.textContent = d.title;
+    select.appendChild(opt);
+  });
+  select.value = task.deliverable_id || "";
+  select.setAttribute("aria-label", "Move this task to another deliverable");
+  select.addEventListener("change", () =>
+    setDeliverable(task.id, select.value, refresh, onChange));
+  return select;
+}
+
 function defaultActualMinutes(task, block) {
   if (block) return Math.round((new Date(block.end) - new Date(block.start)) / 60000);
   return task.est_minutes || "";
@@ -219,6 +254,14 @@ async function render(taskId, onChange) {
     return;
   }
 
+  // Only a task with a project can have a deliverable -- deliverables belong
+  // to one project (db.py).
+  const deliverables = task.project_id
+    ? await fetch(`/api/projects/${task.project_id}/deliverables`)
+        .then((r) => (r.ok ? r.json() : []))
+        .catch(() => [])
+    : [];
+
   const refresh = () => render(taskId, onChange);
 
   const header = document.createElement("div");
@@ -252,6 +295,9 @@ async function render(taskId, onChange) {
     ["Importance", task.importance != null ? String(task.importance) : null],
     ["Difficulty", task.difficulty != null ? String(task.difficulty) : null],
     ["Deadline", task.deadline],
+    ["Deliverable", task.project_id
+      ? makeDeliverableValue(task, deliverables, refresh, onChange)
+      : null],
     ["Slot", currentBlock && !done ? makeSlotValue(currentBlock, refresh) : null],
     ["Spent", done && actual?.actual_minutes != null ? formatMinutes(actual.actual_minutes) : null],
     ["Goal", task.measurable_goal, { wide: true }],

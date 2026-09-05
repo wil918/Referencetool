@@ -12,6 +12,7 @@ import { initCommitments } from "../commitments.js";
 import { refreshSchedule } from "./schedule.js";
 import { refreshDay } from "./day.js";
 import { createMonth } from "./month.js";
+import { refreshDeliverables } from "./deliverables.js";
 import { initScheduleSettings } from "./settings.js";
 import { startBedtimeWatch } from "./bedtime-watch.js";
 
@@ -30,6 +31,7 @@ function activateTab(name) {
   if (name === "tasks") tasks.refreshTaskList();
   if (name === "schedule") refreshSchedule();
   if (name === "month") refreshMonth();
+  if (name === "deliverables") refreshDeliverables();
   return true;
 }
 

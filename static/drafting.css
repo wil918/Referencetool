@@ -2332,6 +2332,23 @@
 
 .drafting .task-pin-btn.active { border-color: var(--dr-c-cut); color: var(--dr-ink); }
 
+.drafting .task-deliverable-row {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-label);
+  letter-spacing: var(--dr-track-label);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+}
+
+.drafting .task-deliverable-row select {
+  font-size: var(--dr-t-micro);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 /* --- A numbered key, on the sheet ----------------------------------------
    Which deliverable a block belongs to is said by an index, the way a part on
    a mechanism drawing is keyed to a list at the corner -- not by a colour,
@@ -2587,4 +2604,136 @@
 .dr-key-swatch--buffer {
   background-image: var(--dr-hatch-b);
   border-top: var(--dr-w-hair) dashed var(--dr-red-faint);
+}
+
+/* ==========================================================================
+   16. THE DELIVERABLES VIEW
+   schedule/deliverables.js: one sheet per deliverable -- a title block, a
+   numbered key of facts and progress, the brief's spec rendered readably, and
+   the tasks under it. Composes primitives from the sections above; the one
+   thing particular to this view is that risk is stated once, at the
+   deliverable, with a red left rule (section 8's "red is the edge, never a
+   fill").
+   ========================================================================== */
+
+.drafting .deliverable-toolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 1.2rem;
+  margin-bottom: 1.4rem;
+}
+
+.drafting .deliverable-list { display: flex; flex-direction: column; gap: 2.4rem; }
+
+/* A sheet is left-ruled and otherwise invisible -- no fill, no box -- the same
+   idiom the Tasks tab's cards use. */
+.drafting .deliverable-sheet {
+  border-left: var(--dr-rule-line);
+  padding-left: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.drafting .deliverable-sheet--unassigned { border-left: var(--dr-rule-hair); }
+
+.drafting .deliverable-sheet .dr-titleblock { margin-bottom: 0.3rem; }
+
+/* --- The spec, whatever shape it is ----------------------------------- */
+.drafting .deliverable-spec {
+  margin-top: 0.4rem;
+  padding-top: 0.5rem;
+  border-top: var(--dr-rule-hair);
+}
+
+.drafting .deliverable-spec-heading { margin: 0.7rem 0 0.25rem; }
+.drafting .deliverable-spec-heading:first-child { margin-top: 0; }
+
+.drafting .deliverable-check-row {
+  grid-template-columns: auto 1fr;
+  gap: 0.55rem;
+}
+
+.drafting .deliverable-check-row .dr-toggle { align-self: center; }
+
+/* --- Risk, stated once ------------------------------------------------- */
+.drafting .deliverable-risk {
+  border-left: var(--dr-w-cut) solid var(--dr-red-line);
+  padding-left: 0.8rem;
+  margin: 0.5rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.drafting .deliverable-risk-head { color: var(--dr-red); margin: 0; }
+
+.drafting .deliverable-risk-list {
+  margin: 0.2rem 0 0;
+  padding-left: 1.1rem;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+  color: var(--dr-ink-2);
+}
+
+.drafting .deliverable-risk-list li { margin: 0.15rem 0; }
+
+/* --- Tasks under a deliverable --------------------------------------- */
+.drafting .deliverable-tasks-label { margin: 0.7rem 0 0.15rem; }
+
+.drafting .deliverable-task-row {
+  display: grid;
+  grid-template-columns: 1fr auto minmax(9rem, auto);
+  align-items: baseline;
+  gap: 0.7rem;
+  padding: 0.3rem 0;
+  border-top: var(--dr-rule-hair);
+}
+
+.drafting .deliverable-task-row:last-child { border-bottom: var(--dr-rule-hair); }
+
+.drafting .deliverable-task-title {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+  color: var(--dr-ink);
+}
+
+.drafting .deliverable-task-row.is-done .deliverable-task-title {
+  color: var(--dr-ink-4);
+  text-decoration: line-through;
+}
+
+.drafting .deliverable-task-move { font-size: var(--dr-t-micro); padding: 0.15rem 0.1rem; }
+
+/* --- The editor ------------------------------------------------------ */
+.drafting .deliverable-editor-box { max-width: 44rem; width: 92vw; }
+
+.drafting .deliverable-editor-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.9rem 1.4rem;
+  margin-bottom: 0.9rem;
+}
+
+.drafting .deliverable-editor-grid label:nth-child(4),
+.drafting .deliverable-editor-box > label { grid-column: 1 / -1; }
+
+.drafting .deliverable-editor-box label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-label);
+  letter-spacing: var(--dr-track-label);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+}
+
+.drafting .deliverable-spec-json {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: var(--dr-t-body);
+  letter-spacing: 0;
+  text-transform: none;
+  border: var(--dr-rule-hair);
+  padding: 0.5rem;
 }
