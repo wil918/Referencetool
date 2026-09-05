@@ -183,6 +183,9 @@ export async function loadCalendarData(startDate, endDate) {
 
   return {
     schedule: schedule || { blocks: [], at_risk: [], at_risk_by_deliverable: [], chronically_slipping: [] },
+    // Minutes reserved before each deadline for finishing work. Only the month
+    // view (month.js) draws this; the hourly grid ignores it.
+    finishingBufferMinutes: schedule?.finishing_buffer_minutes ?? 24 * 60,
     commitments: visibleCommitments,
     workingHours: workingHours || [],
     domesticHours: domesticHours || [],
@@ -1126,6 +1129,13 @@ export function createCalendar(container, options = {}) {
   return {
     reload,
     goToToday: () => todayBtn.click(),
+    // Jump to an arbitrary date -- the month view calls this to open a day
+    // the user clicked. Snaps the same way Today does, so a week view lands
+    // on that date's Monday and a day view lands on the date itself.
+    goToDate: (dateStr) => {
+      startDate = snapDate(dateStr);
+      reload();
+    },
     getStartDate: () => startDate,
     destroy() {
       clearInterval(nowTimer);

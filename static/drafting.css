@@ -1897,8 +1897,66 @@
   position: relative;
   min-height: 5.5rem;
   padding: 1.35rem 0.4rem 0.4rem;
+  border: 0;
   border-right: var(--dr-rule-hair);
   border-bottom: var(--dr-rule-hair);
+  /* A cell is a button so the whole day is the click target that opens the
+     day view -- reset the UA chrome that comes with that. */
+  -webkit-appearance: none;
+  appearance: none;
+  border-radius: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  color: var(--dr-ink-2);
+  cursor: pointer;
+}
+
+.dr-month-cell:hover { background-color: var(--dr-paper-2); }
+
+/* --- Per-day load: tone, not a count ----------------------------------------
+   The same stipple as the working band, tightened step by step -- denser
+   specks read as a heavier day the way closer hatching reads as a darker
+   surface on a drawing. No new tone, just less space between the dots. */
+.dr-month-cell.is-load-1 { background-image: var(--dr-stipple); background-size: 74px 74px; }
+.dr-month-cell.is-load-2 { background-image: var(--dr-stipple); background-size: 48px 48px; }
+.dr-month-cell.is-load-3 { background-image: var(--dr-stipple); background-size: 30px 30px; }
+.dr-month-cell.is-load-4 { background-image: var(--dr-stipple); background-size: 19px 19px; }
+
+/* --- At risk: a red edge, never a fill (section 8's rule for blocks) -------- */
+.dr-month-cell.is-at-risk {
+  border: var(--dr-w-line) solid var(--dr-red-faint);
+}
+
+.dr-month-cell.is-at-risk .dr-flag { top: 0.25rem; right: 0.3rem; }
+
+/* --- The finishing buffer: reserved, and it says so ------------------------
+   Hatch B is "time being taken, not a thing being done" (section 8's break) --
+   exactly what a protected window is -- bounded by a dashed red-faint rule so
+   it reads as held rather than merely busy. */
+.dr-month-cell.is-buffer {
+  background-image: var(--dr-hatch-b);
+  border-top: var(--dr-w-hair) dashed var(--dr-red-faint);
+}
+
+.dr-month-tag {
+  position: absolute;
+  right: 0.35rem;
+  bottom: 0.3rem;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  color: var(--dr-ink-4);
+  pointer-events: none;
+}
+
+.dr-month-more {
+  position: absolute;
+  left: 0.4rem;
+  bottom: 0.3rem;
+  color: var(--dr-ink-4);
+  pointer-events: none;
 }
 
 /* The date figure sits in the corner of its cell as a plate number does. */
@@ -1947,6 +2005,58 @@
 
 .dr-month-entry--timetabled { border-left: 3px double var(--dr-c-cut); padding-left: 3px; }
 .dr-month-entry--at-risk { border-left-color: var(--dr-red-line); }
+
+/* A deadline is a red rule at the head of the day, its WEIGHT carrying the
+   importance -- hairline / object / structural, the three the system has, not
+   a fourth. The lettering stays ink; red is only ever the edge (section 8). */
+.dr-month-entry--deadline {
+  border-left-color: var(--dr-red-line);
+  color: var(--dr-ink);
+  font-weight: 500;
+}
+.dr-month-entry--deadline.is-minor { border-left-width: var(--dr-w-hair); }
+.dr-month-entry--deadline.is-major { border-left-width: var(--dr-w-cut); }
+.dr-month-entry--deadline .dr-index { margin-right: 0.25rem; }
+
+/* --- The construction layer -----------------------------------------------
+   One overlay over the whole month: compass arcs struck back from each
+   deadline and projection lines run across its week and down its column, so
+   the run-up to a hand-in is drawn as geometry. `.dr-construction` on the
+   container is what takes the entire layer off with `.dr-no-construction` --
+   nothing that has to be read at a glance lives here. */
+.dr-month-grid-wrap { position: relative; }
+
+.dr-month-construction {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Projection lines: a pencil rule across the deadline's row and down its
+   column, overrunning the grid the way all the setting-out does. */
+.dr-month-projection { position: absolute; }
+
+.dr-month-projection--h {
+  left: 0;
+  right: 0;
+  height: 6px;
+  transform: translateY(-50%);
+  background-image: var(--dr-pencil-h);
+  background-size: 600px 6px;
+  background-repeat: repeat-x;
+}
+
+.dr-month-projection--v {
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  transform: translateX(-50%);
+  background-image: var(--dr-pencil-v);
+  background-size: 6px auto;
+  background-repeat: repeat-y;
+}
 
 /* ==========================================================================
    11. CONTROLS
@@ -2281,6 +2391,12 @@
 
 .drafting .day-view { display: flex; flex-direction: column; gap: 1.5rem; }
 
+/* The check-in and ledger set their own display, so -- as everywhere in this
+   codebase -- the hidden attribute has to be re-asserted over it. day.js
+   hides both when the month view opens this track on a day that is not today. */
+.drafting .dr-checkin[hidden],
+.drafting .day-ledger[hidden] { display: none; }
+
 /* --- The energy check-in ------------------------------------------------
    A graduated scale, read low (spent) on the left to full on the right. One
    tap sets a station; the station already set is the control's own undo. */
@@ -2426,3 +2542,49 @@
 }
 
 .dr-outcomes input.is-invalid { border-bottom-color: var(--dr-red-line); }
+
+/* ==========================================================================
+   15. THE MONTH VIEW
+   The single-month drawing (schedule/month.js): the .dr-month primitive from
+   section 10, with the four overlays a month is for arranged on it. Like
+   section 14, every rule here composes primitives from sections above and
+   introduces no colour, weight or type size of its own.
+   ========================================================================== */
+
+.drafting .schedule-month { display: block; }
+
+.drafting .schedule-month-toolbar { margin-bottom: 1rem; }
+
+/* The grid frame is two drawn rules, like the week's calendar body -- no well,
+   no radius. A drawing is not inset into the page. */
+.drafting .dr-month {
+  border-top: var(--dr-rule-line);
+  border-bottom: var(--dr-rule-line);
+}
+
+/* --- The key: a drawing carries its own -----------------------------------
+   The deliverables in view, numbered as the blocks are keyed, then a short
+   legend of the marks so the tones are readable without having learnt them. */
+.dr-month-key {
+  margin-top: 1rem;
+  padding-top: 0.6rem;
+  border-top: var(--dr-rule-hair);
+  columns: 2;
+  column-gap: 2.4rem;
+}
+
+.dr-month-key .dr-key-row { break-inside: avoid; padding: 0.14rem 0; }
+
+.dr-month-key .dr-key-row--legend { grid-template-columns: 1.6rem auto minmax(1.5rem, 1fr) auto; }
+
+/* Each legend swatch is the actual mark it explains, at key size. */
+.dr-key-swatch { width: 1.5rem; height: 0.9rem; align-self: center; }
+.dr-key-swatch--load {
+  background-image: var(--dr-stipple);
+  background-size: 26px 26px;
+}
+.dr-key-swatch--risk { border: var(--dr-w-line) solid var(--dr-red-faint); }
+.dr-key-swatch--buffer {
+  background-image: var(--dr-hatch-b);
+  border-top: var(--dr-w-hair) dashed var(--dr-red-faint);
+}

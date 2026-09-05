@@ -624,39 +624,78 @@
     </section>
 
     <!-- 09 MONTH -->
-    <section class="plate">
+    <section class="plate plate--wide">
       <div class="plate-head">
         <span class="dr-key-num">09</span>
         <span class="dr-key-term">Month grid</span>
         <span class="dr-key-leader"></span>
-        <span class="dr-micro">Primitive · no hourly axis</span>
+        <span class="dr-micro">No hourly axis · load as tone · deadlines set out</span>
       </div>
-      <div class="dr-month">
-        <div class="dr-month-head">Mon</div><div class="dr-month-head">Tue</div>
-        <div class="dr-month-head">Wed</div><div class="dr-month-head">Thu</div>
-        <div class="dr-month-head">Fri</div><div class="dr-month-head">Sat</div>
-        <div class="dr-month-head">Sun</div>
+      <div class="dr-month-grid-wrap">
+        <div class="dr-month">
+          <div class="dr-month-head">Mon</div><div class="dr-month-head">Tue</div>
+          <div class="dr-month-head">Wed</div><div class="dr-month-head">Thu</div>
+          <div class="dr-month-head">Fri</div><div class="dr-month-head">Sat</div>
+          <div class="dr-month-head">Sun</div>
 
-        <div class="dr-month-cell is-outside"><span class="dr-month-figure">28</span></div>
-        <div class="dr-month-cell is-outside"><span class="dr-month-figure">29</span></div>
-        <div class="dr-month-cell is-outside"><span class="dr-month-figure">30</span></div>
-        <div class="dr-month-cell"><span class="dr-month-figure">1</span>
-          <button class="dr-month-entry dr-month-entry--timetabled">Contextual studies</button>
+          <div class="dr-month-cell is-outside"><span class="dr-month-figure">29</span></div>
+          <div class="dr-month-cell is-outside"><span class="dr-month-figure">30</span></div>
+          <div class="dr-month-cell is-load-1"><span class="dr-month-figure">1</span>
+            <span class="dr-month-entry dr-month-entry--timetabled">Contextual studies</span>
+          </div>
+          <div class="dr-month-cell is-load-2"><span class="dr-month-figure">2</span></div>
+          <div class="dr-month-cell is-load-3"><span class="dr-month-figure">3</span></div>
+          <div class="dr-month-cell is-load-4"><span class="dr-month-figure">4</span>
+            <span class="dr-month-more dr-micro">+3</span>
+          </div>
+          <div class="dr-month-cell"><span class="dr-month-figure">5</span></div>
+
+          <div class="dr-month-cell is-load-1"><span class="dr-month-figure">6</span></div>
+          <div class="dr-month-cell is-load-2"><span class="dr-month-figure">7</span></div>
+          <div class="dr-month-cell is-buffer"><span class="dr-month-figure">8</span>
+            <span class="dr-month-tag">Reserved</span>
+          </div>
+          <div class="dr-month-cell is-buffer"><span class="dr-month-figure">9</span>
+            <span class="dr-month-tag">Finishing</span>
+            <span class="dr-month-entry dr-month-entry--deadline is-major">
+              <span class="dr-index">01</span>Portfolio hand-in
+            </span>
+          </div>
+          <div class="dr-month-cell is-today is-load-2"><span class="dr-month-figure">10</span>
+            <span class="dr-month-entry dr-month-entry--deadline is-minor">Return library books</span>
+          </div>
+          <div class="dr-month-cell is-at-risk">
+            <span class="dr-flag">At risk</span>
+            <span class="dr-month-figure">11</span>
+            <span class="dr-month-entry dr-month-entry--deadline">
+              <span class="dr-index">02</span>Sample book
+            </span>
+          </div>
+          <div class="dr-month-cell"><span class="dr-month-figure">12</span></div>
         </div>
-        <div class="dr-month-cell is-today"><span class="dr-month-figure">2</span>
-          <button class="dr-month-entry">Pattern cutting</button>
-          <button class="dr-month-entry dr-month-entry--at-risk">Sample book</button>
-        </div>
-        <div class="dr-month-cell"><span class="dr-month-figure">3</span></div>
-        <div class="dr-month-cell"><span class="dr-month-figure">4</span>
-          <button class="dr-month-entry">Reading</button>
+        <div class="dr-month-construction dr-construction" aria-hidden="true">
+          <div class="dr-arc" style="left:46%; top:74%; --dr-arc-r:120px; --dr-radius-angle:-140deg;"></div>
+          <div class="dr-arc" style="left:46%; top:74%; --dr-arc-r:230px; --dr-radius-angle:-140deg;"></div>
+          <div class="dr-month-projection dr-month-projection--h" style="top:74%;"></div>
+          <div class="dr-month-projection dr-month-projection--v" style="left:46%;"></div>
         </div>
       </div>
       <p class="note dr-body">
-        Closer to a plan than a section: a grid of cells, a plate number in each corner, one
-        ruled line per thing. Crosshatch for cells outside the month — the drafting meaning of
-        crosshatch is "not our material". Defined now so session 11 inherits the language
-        rather than inventing a second one.
+        Closer to a plan than a section: a grid of cells, a plate number in each corner, and no
+        block drawn — a month of packed rectangles says nothing. What it carries instead is the
+        four things a month is <em>for</em>. Load is read as <em>tone</em>, the working band's
+        stipple tightened step by step against the day's own hours, never as a counted list.
+        A deadline is a red rule at the head of its day, its <em>weight</em> the importance —
+        hairline, object or structural, the three the system already has. The finishing buffer
+        before a hand-in is hatched and dashed: held, not merely busy. An at-risk day takes the
+        red edge and the flag, the same as an at-risk block.
+        <br><br>
+        And this is where the construction geometry earns its keep: compass arcs are struck back
+        from each deadline and projection lines run across its week and down its column, so the
+        run-up is drawn as geometry rather than counted in cells. All of it is one overlay
+        carrying <span class="dr-micro">.dr-construction</span> — take the layer off and every
+        tone, rule, flag and buffer is still there. Crosshatch stays "not our material": the days
+        outside the month.
       </p>
     </section>
 

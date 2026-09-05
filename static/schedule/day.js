@@ -24,6 +24,11 @@ const calendarEl = document.getElementById("day-calendar");
 
 let calendar = null;
 let locationsById = {};
+// The check-in and the ledger are "today so far" instruments -- they only
+// mean anything when the day on screen is now. The month view can open this
+// track on any date; when it does, those two are hidden and only the drawn
+// day remains.
+let viewingToday = true;
 
 // --- small shared helpers ---------------------------------------------------
 
@@ -308,22 +313,30 @@ function openTask(taskId) {
 
 // --- entry point ---------------------------------------------------------
 
-export function refreshDay() {
-  renderCheckin();
-  if (!calendar) {
-    calendar = createCalendar(calendarEl, {
-      numDays: 1,
-      // A single-day view showing Monday when it is Thursday would be
-      // nonsense -- this is the option that exists for exactly this case.
-      snapToWeek: false,
-      onOpenTask: openTask,
-      onOpenCommitment: (commitment) => openCommitmentPanel(commitment, locationsById),
-      onDataLoaded: (data) => {
-        locationsById = data.locationsById;
-        renderLedger(data);
-      },
-    });
-  } else {
-    calendar.reload();
+export function refreshDay(dateStr) {
+  viewingToday = !dateStr || dateStr === todayStr();
+  checkinEl.hidden = !viewingToday;
+  ledgerEl.hidden = !viewingToday;
+  if (viewingToday) renderCheckin();
+
+  if (calendar) {
+    // Navigate the existing track: to the day the month view asked for, or
+    // back to today when this is a plain Today-tab activation.
+    calendar.goToDate(dateStr || todayStr());
+    return;
   }
+  calendar = createCalendar(calendarEl, {
+    numDays: 1,
+    // A single-day view showing Monday when it is Thursday would be
+    // nonsense -- this is the option that exists for exactly this case.
+    snapToWeek: false,
+    // Defaults to today; set only when the month view opened us on a date.
+    startDate: dateStr || undefined,
+    onOpenTask: openTask,
+    onOpenCommitment: (commitment) => openCommitmentPanel(commitment, locationsById),
+    onDataLoaded: (data) => {
+      locationsById = data.locationsById;
+      if (viewingToday) renderLedger(data);
+    },
+  });
 }

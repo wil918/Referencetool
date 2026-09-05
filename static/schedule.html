@@ -27,6 +27,7 @@
       <button class="tab-btn active" data-tab="today">Today</button>
       <button class="tab-btn" data-tab="tasks">Tasks</button>
       <button class="tab-btn" data-tab="schedule">Schedule</button>
+      <button class="tab-btn" data-tab="month">Month</button>
       <button class="tab-btn" data-tab="settings">Settings</button>
       <a class="nav-link" href="/index.html">Archive</a>
       <a class="nav-link" href="/graph.html">3D Graph</a>
@@ -145,6 +146,14 @@
         <div id="schedule-calendar"></div>
         <div id="schedule-at-risk-panel" class="task-at-risk-panel schedule-at-risk-panel" hidden></div>
       </div>
+    </section>
+
+    <section id="tab-month" class="tab">
+      <!-- The month view. schedule/month.js draws the drafting language's
+           .dr-month primitive here -- no hourly axis, load read as tone,
+           deadlines and their finishing buffers set out with construction
+           geometry. Clicking a day opens it in the Today tab. -->
+      <div id="month-calendar"></div>
     </section>
 
     <section id="tab-settings" class="tab">

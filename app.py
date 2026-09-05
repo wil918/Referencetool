@@ -2354,6 +2354,11 @@ def api_get_schedule():
         "chronically_slipping": result["chronically_slipping"],
         "horizon_end": result["horizon_end"],
         "slot_detail_until": result["slot_detail_until"],
+        # How much time before each deadline is reserved for finishing work
+        # (see scheduling.FINISHING_BUFFER_MINUTES). The month view draws that
+        # reservation directly on the grid; the week and day views don't need
+        # it, so it rode along unused until now.
+        "finishing_buffer_minutes": result["finishing_buffer_minutes"],
     })
 
 
