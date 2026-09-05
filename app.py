@@ -161,10 +161,11 @@ def _file_kind(ext):
 
 @app.get("/")
 def index():
-    # The 3D similarity graph is the homepage; the library app itself is
-    # still reachable (static serving already exposes every file under
-    # static/ at its own path, so /index.html works with no extra route).
-    return send_from_directory(app.static_folder, "graph.html")
+    # The schedule (tasks + calendar) is the homepage -- it's what opening the
+    # app is for day to day. The archive and the 3D graph are still reachable
+    # (static serving already exposes every file under static/ at its own
+    # path, so /index.html and /graph.html work with no extra route).
+    return send_from_directory(app.static_folder, "schedule.html")
 
 
 @app.get("/api/references")

@@ -76,7 +76,8 @@ These are not preferences. Violating one means the change gets reverted.
 | Page | Entry | Notes |
 |---|---|---|
 | `static/index.html` | `app.js` | The SPA: Add / Archive / Projects / Settings tabs. |
-| `static/graph.html` | `graph.js` | 3D similarity graph. **This is the homepage** — `GET /` serves it, not `index.html`. |
+| `static/schedule.html` | `schedule/main.js` | Tasks + calendar, and the schedule's own settings (locations, calendar import, personal events, hours, suggested bedtime). **This is the homepage** — `GET /` serves it, not `index.html`. |
+| `static/graph.html` | `graph.js` | 3D similarity graph, reachable at `/graph.html`. |
 | `static/connections.html` | `connections.js` | Flat 2D view the 3D graph folds into. |
 | `static/colour-connections.html` | `colour-connections.js` | Flat colour view. |
 | `static/project.html` | `project/main.js` | Project shell. Created in session 2. **Has no `<header>`** — see below. |
@@ -207,6 +208,6 @@ Do not make these consistent with each other. The difference is the point.
 - Add a build step, `package.json`, or an npm dependency.
 - Use `localStorage` for anything the user created.
 - Give a surface a background fill or a border.
-- Refactor `app.js` beyond what the current task requires — it is ~1380 lines and mostly working.
+- Refactor `app.js` beyond what the current task requires — it is ~870 lines and mostly working.
 - Change the behaviour of an existing endpoint while adding a scoped variant of it.
 - Break `/graph.html`, `/connections.html` or `/colour-connections.html` while extracting shared code from them. Verify by hand.

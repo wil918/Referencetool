@@ -60,7 +60,7 @@
   #top-bar h1 { font-family: var(--serif); font-size: 1.25rem; margin: 0; font-weight: 500; }
   #status-line { font-family: var(--serif); font-size: 0.8rem; color: var(--muted); margin-top: 0.15rem; }
 
-  #back-link {
+  .top-link {
     font-family: var(--sans);
     font-size: 0.85rem;
     color: var(--ink);
@@ -74,7 +74,7 @@
     transition: box-shadow 0.22s ease, transform 0.22s ease;
   }
 
-  #back-link:active { box-shadow: var(--press-sm); transform: scale(0.985); }
+  .top-link:active { box-shadow: var(--press-sm); transform: scale(0.985); }
 
   #hint { bottom: 1.25rem; left: 1.5rem; font-family: var(--serif); font-size: 0.8rem; color: var(--muted); }
 
@@ -284,7 +284,8 @@
         <button type="button" data-mode="colour">Colour</button>
         <button type="button" data-mode="constellation">Constellation</button>
       </div>
-      <a id="back-link" href="/index.html">&larr; Back to library</a>
+      <a class="top-link" href="/schedule.html">Schedule</a>
+      <a id="back-link" class="top-link" href="/index.html">&larr; Back to library</a>
     </div>
   </div>
 
