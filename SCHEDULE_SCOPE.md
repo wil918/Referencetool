@@ -63,9 +63,21 @@ scheduled_blocks   id, task_id, start, end, is_locked, generated_at
 
 commitments        id, title, start, end, kind, location_id (nullable),
                    support_level, source, external_uid, energy_cost,
-                   home_first, prep_minutes
+                   home_first, prep_minutes, meta (JSON)
+                   -- meta holds the structured fields an institutional feed
+                   -- packs into SUMMARY/LOCATION/DESCRIPTION: delivery_type,
+                   -- site, room, details, module_name, module_code, lecturer.
+                   -- JSON because the export format changes when the
+                   -- university changes it -- same reasoning as
+                   -- deliverables.spec.
 
-locations          id, name, address, travel_minutes_from_home, notes
+locations          id, name, address, travel_minutes_from_home, notes,
+                   parent_location_id (nullable), is_remote
+                   -- parent_location_id is the umbrella (Harrow Campus).
+                   -- Display uses the specific place; travel resolves to the
+                   -- root of the parent chain, so two rooms in one building
+                   -- are zero travel apart. is_remote (Online) means no travel
+                   -- from anywhere AND no change to where you are.
 
 location_hours     location_id, weekday, opens, closes    PK (location_id, weekday)
 
@@ -113,6 +125,8 @@ So support is a spectrum, and it is a property of both the window and the task:
 - `tasks.support_level` — `needs` (a new technique, schedule into a priority window), `prefers` (ambient is fine), `independent` (any open hours)
 
 The scheduler matches the two. Work you already know how to do fills ordinary studio hours; work you need help with is placed against a supported window, and flagged if none exists before the deadline.
+
+**Display and travel are different jobs.** A location names somewhere specific — Studio 3, the Library, E1.01 — because that is what you need to be told. Travel is computed against its *umbrella*, the building or campus it sits in, because the walk from home is the same either way. Two blocks in different rooms of one building generate no travel between them; an online session generates none from anywhere and leaves you wherever you already were.
 
 **`required_location_id` is a hard constraint**, distinct from travel cost. Pattern cutting cannot happen at home, so those tasks are only ever placed inside that location's open hours.
 
