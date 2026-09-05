@@ -49,6 +49,32 @@ These are not preferences. Violating one means the change gets reverted.
 6. **Respect the neumorphic CSS system.** Depth comes from paired shadows (`--raise-sm`, `--raise-md`, `--raise-lg`, `--press-sm`, `--press-md`) cast by surfaces that are *the same colour as the page*. Panel fills and borders are absent by design — adding `background: #fff` or `border: 1px solid …` to a surface breaks the illusion. Use the existing custom properties in `static/style.css`; do not introduce new colours.
    **The shadow pair is derived from the active background.** `--light` and `--dark` are tuned for the default page colour; a project that sets a custom background must recompute them from it, or the shadows stop reading as depth (a pale shadow on a dark surface, or a near-white highlight that glares). `appearance.js` derives both from `--project-bg` before first paint and redefines `--light` / `--dark` on the project root — because `--raise-*` and `--press-*` resolve `var(--light)` at point of use, every shadow in the subtree recomputes automatically. Never hard-code a shadow colour.
    **Exception — project widgets.** A widget on the project grid has **no shadow at rest**. Its content provides the structure; the container is invisible. Shadow is opt-in per widget (`config.shadow`), and edit mode forces it on for every widget so boxes are visible while arranging. Never compensate for the missing shadow with a border or a fill — flat means flat.
+   **Exception — the schedule surface does not use this system at all.** It is drawn in a
+   technical-drafting language instead: paper ground, four line weights, hatch and stipple
+   for tone, two colours, uppercase letterspaced labels. Depth is *absent* there by design —
+   a drawing has no depth — so borders and rules are not only allowed but are the entire
+   hierarchy, and this rule's ban on them does not apply. The two systems are not to be
+   reconciled; rule 6 still governs `index.html`, `project.html` and the graph pages exactly
+   as written. A page opts in by carrying `class="drafting"` on `<body>` and linking
+   `/drafting.css` after `/style.css`; nothing else changes for it.
+   **Adoption so far:** the specimen sheet only. `schedule.html` is still neumorphic and
+   takes the language when session 9c's screens land — the system was signed off before the
+   screens were restyled, deliberately.
+   **Where it lives:** every value — line weights, tones, hatch pitches, the two accents, the
+   type scale, the measure — is defined once at the top of `static/drafting.css`, scoped under
+   `.drafting`, and nothing further down that file may introduce a colour, weight or size of
+   its own. That scope is the guarantee: a rule that cannot match outside those two documents
+   cannot regress the archive. The file also blanks `--raise-*`/`--press-*` inside its scope,
+   which is what switches the soft-UI off for everything `schedule.html` inherits from
+   `style.css` without editing `style.css` at all. `static/schedule/specimen.html` is the
+   specimen sheet: every primitive drawn once, in both themes, with the construction layer on
+   and off. It is not linked from the app and ships as a design artefact — change a value in
+   `drafting.css` and check it there first.
+   **The construction layer is texture, never information.** The setting-out (quarter-hour
+   rules, half-hour ticks, compass arcs struck from a deadline, ghosted repetitions of a
+   recurring task) resolves its colour through the single `--dr-construction-ink` property;
+   `.dr-no-construction` on the root blanks it and the whole layer goes with no re-render.
+   Nothing that has to be read at 8am may live in that layer or carry `.dr-construction`.
 7. **Raw `sqlite3`, no ORM.** Schema as string constants at the top of `db.py`, registered in `init_db()`, accessed through the `get_conn()` context manager. No SQLAlchemy, no models, no service layer.
 8. **Derived data gets its own table**, versioned and recomputable — never extra columns on `reference_items`. `colour_analysis` and `captures` both follow this.
 
@@ -77,6 +103,7 @@ These are not preferences. Violating one means the change gets reverted.
 |---|---|---|
 | `static/index.html` | `app.js` | The SPA: Add / Archive / Projects / Settings tabs. |
 | `static/schedule.html` | `schedule/main.js` | Tasks + calendar, and the schedule's own settings (locations, calendar import, personal events, hours, suggested bedtime). **This is the homepage** — `GET /` serves it, not `index.html`. |
+| `static/schedule/specimen.html` | — | The drafting language's specimen sheet. Static, unlinked, no logic. Reached directly at `/schedule/specimen.html`. |
 | `static/graph.html` | `graph.js` | 3D similarity graph, reachable at `/graph.html`. |
 | `static/connections.html` | `connections.js` | Flat 2D view the 3D graph folds into. |
 | `static/colour-connections.html` | `colour-connections.js` | Flat colour view. |
@@ -123,6 +150,8 @@ Three modules, none of which own a page:
 **Textures and geometries are shared across scenes.** `graph-common.js`'s `disposeSubtree` frees what a subtree genuinely owns and skips anything marked `userData.shared` (the page-wide plane geometries and tag-label cache, and a view's own dot/ring textures, which it disposes itself). Disposing a shared resource from one widget's teardown breaks every other scene still on the page.
 
 Shared: `graph-common.js` (Three.js constants, themes, sprite helpers, the dispose rule), `theme.js` (dark mode, loaded synchronously in `<head>` to avoid a flash of the wrong theme), `ui-effects.js` (button press pulse), `style.css`.
+
+`static/drafting.css` is the schedule surface's own system and is loaded **after** `style.css`, by `schedule.html` and the specimen sheet only — see hard rule 6's schedule exception. Its typeface, IBM Plex Sans Condensed, is vendored under `static/vendor/fonts/` with its OFL licence and provenance beside it, the same way Ballet is under `static/fonts/`; it is bound to `--dr-face`, never to `--display`.
 
 ---
 

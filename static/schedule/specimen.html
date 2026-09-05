@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drafting language — specimen</title>
+<!--
+  A specimen sheet for the schedule surface's drafting language.
+
+  Every primitive static/drafting.css defines, drawn once, on one page, in
+  both themes and with the construction layer on and off. It exists because
+  the language has to be judged before it is applied: a whole calendar is
+  hard to react to precisely, a specimen is not ("the hairline is too heavy,
+  try 0.35"). Not linked from the app and not routed to -- it ships as a
+  design artefact and is reached directly at /schedule/specimen.html.
+
+  It carries no logic. The only script is the two switches in the title
+  block, which flip a class and a theme; the geometry below is hand-placed
+  the same way calendar.js places it, so what is on this page is what the
+  screens will render.
+-->
+<script src="/theme.js"></script>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/drafting.css">
+<style>
+  /* Sheet layout only -- nothing here defines a value. Every colour, weight,
+     tone and size on this page comes from drafting.css. */
+  body { margin: 0; }
+
+  .sheet { max-width: 1180px; margin: 0 auto; padding: 2rem 2.2rem 5rem; }
+
+  .plates {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(248px, 1fr));
+    gap: 2.6rem 2.4rem;
+    margin-top: 2rem;
+  }
+
+  .plate--wide { grid-column: 1 / -1; }
+
+  .plate-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding-bottom: 0.3rem;
+    margin-bottom: 0.9rem;
+    border-bottom: var(--dr-rule-line);
+  }
+
+  .plate-head .dr-key-leader { flex: 1; }
+
+  .specimen-row {
+    display: grid;
+    grid-template-columns: 7.5rem 1fr auto;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.32rem 0;
+  }
+
+  .specimen-swatch { height: 2.6rem; border: var(--dr-rule-hair); }
+  .specimen-swatch--tall { height: 4.2rem; }
+
+  /* A stage: a fragment of a real track, so the axis, bands, blocks and
+     annotation are seen against what they will actually sit on. */
+  .stage {
+    position: relative;
+    height: 300px;
+    overflow: hidden;
+  }
+
+  .stage-grid { display: grid; grid-template-columns: 3.6rem 1fr; height: 100%; }
+  .stage-grid--three { grid-template-columns: 3.6rem 1fr 1fr; }
+  .stage-track { position: relative; height: 100%; }
+
+  .type-row { display: flex; align-items: baseline; gap: 0.9rem; padding: 0.3rem 0; }
+  .type-row .dr-micro { flex: 0 0 8.5rem; color: var(--dr-ink-4); }
+
+  .note { margin: 0.9rem 0 0; max-width: 62ch; }
+</style>
+</head>
+<body class="drafting">
+
+<div class="sheet">
+
+  <!-- The title block: what the drawing is, at what scale, and the two
+       switches that change how it is printed. -->
+  <div class="dr-titleblock">
+    <div class="dr-titleblock-field">
+      <span class="dr-micro">Fashion reference tool — schedule surface</span>
+      <h1 class="dr-title">Drafting language</h1>
+    </div>
+    <div class="dr-titleblock-field">
+      <span class="dr-micro">Sheet</span>
+      <span class="dr-figure">01 / 01</span>
+    </div>
+    <div class="dr-titleblock-field">
+      <span class="dr-micro">Scale</span>
+      <span class="dr-figure">1 H : 60 PX</span>
+    </div>
+    <div class="dr-titleblock-field">
+      <span class="dr-micro">Face</span>
+      <span class="dr-figure">IBM Plex Sans Cond.</span>
+    </div>
+    <div class="dr-titleblock-field" style="margin-left:auto; gap:0.4rem;">
+      <label class="dr-toggle">
+        <input type="checkbox" id="construction-switch" checked>
+        <span class="dr-toggle-box"></span>
+        Construction layer
+      </label>
+      <label class="dr-toggle">
+        <input type="checkbox" id="theme-switch">
+        <span class="dr-toggle-box"></span>
+        Night print
+      </label>
+    </div>
+  </div>
+  <div class="dr-titleblock-under"></div>
+
+  <p class="note dr-body">
+    Every primitive the system defines, drawn once. The two switches above print the
+    same sheet on the other material and with the setting-out taken off — nothing
+    that has to be read may disappear when it is.
+  </p>
+
+  <div class="plates">
+
+    <!-- 01 GROUND -->
+    <section class="plate">
+      <div class="plate-head">
+        <span class="dr-key-num">01</span>
+        <span class="dr-key-term">Ground</span>
+        <span class="dr-key-leader"></span>
+        <span class="dr-micro">Paper</span>
+      </div>
+      <div class="specimen-row">
+        <span class="dr-label">Sheet</span>
+        <div class="specimen-swatch" style="background: var(--dr-paper);"></div>
+        <span class="dr-micro">--dr-paper</span>
+      </div>
+      <div class="specimen-row">
+        <span class="dr-label">Second sheet</span>
+        <div class="specimen-swatch" style="background: var(--dr-paper-2);"></div>
+        <span class="dr-micro">--dr-paper-2</span>
+      </div>
+      <div class="specimen-row">
+        <span class="dr-label">Recess</span>
+        <div class="specimen-swatch" style="background: var(--dr-paper-3);"></div>
+        <span class="dr-micro">--dr-paper-3</span>
+      </div>
+      <p class="note dr-body">
+        Warm, not blue; near-white, not grey. All three opaque, because a block has to
+        cover the tone of the band behind it.
+      </p>
+    </section>
+
+    <!-- 02 LINE -->
+    <section class="plate">
+      <div class="plate-head">
+        <span class="dr-key-num">02</span>
+        <span class="dr-key-term">Line</span>
+        <span class="dr-key-leader"></span>
+        <span class="dr-micro">Four weights</span>
+      </div>
+      <div class="specimen-row">
+        <span class="dr-label">Construction</span>
+        <hr class="dr-rule dr-rule--construction">
+        <span class="dr-micro">0.5px · .20</span>
+      </div>
+      <div class="specimen-row">
+        <span class="dr-label">Hairline</span>
+        <hr class="dr-rule dr-rule--hair">
+        <span class="dr-micro">0.75px · .32</span>
+      </div>
+      <div class="specimen-row">
+        <span class="dr-label">Object</span>
+        <hr class="dr-rule dr-rule--line">
+        <span class="dr-micro">1px · .58</span>
+      </div>
+      <div class="specimen-row">
+        <span class="dr-label">Structural</span>
+        <hr class="dr-rule dr-rule--cut">
+        <span class="dr-micro">1.75px · .88</span>
+      </div>
+      <p class="note dr-body">
+        Weight is width and tone together — a structural line is not just thicker, it is
+        denser, which is how a pencil behaves. Nothing in this system is bold; things are
+        heavier.
+      </p>
+    </section>
+
+    <!-- 03 TONE -->
+    <section class="plate">
+      <div class="plate-head">
+        <span class="dr-key-num">03</span>
+        <span class="dr-key-term">Tone</span>
+        <span class="dr-key-leader"></span>
+        <span class="dr-micro">Hatch &amp; stipple</span>
+      </div>
+      <div class="specimen-row">
+        <span class="dr-label">Stipple</span>
+        <div class="specimen-swatch dr-tone--stipple"></div>
+        <span class="dr-micro">5px</span>
+      </div>
+      <div class="specimen-row">
+        <span class="dr-label">Hatch A</span>
+        <div class="specimen-swatch dr-tone--hatch-a"></div>
+        <span class="dr-micro">45° · 7px</span>
+      </div>
+      <div class="specimen-row">
+        <span class="dr-label">Hatch B</span>
+        <div class="specimen-swatch dr-tone--hatch-b"></div>
+        <span class="dr-micro">135° · 4px</span>
+      </div>
+      <div class="specimen-row">
+        <span class="dr-label">Crosshatch</span>
+        <div class="specimen-swatch dr-tone--cross"></div>
+        <span class="dr-micro">45/135° · 8px</span>
+      </div>
+      <p class="note dr-body">
+        Four materials, told apart by pitch <em>and</em> angle so they stay distinct in a
+        screenshot and to a colourblind reader. Never a flat fill. Stipple is the lightest,
+        which is why the band most blocks sit on gets it.
+      </p>
+    </section>
+
+    <!-- 04 COLOUR -->
+    <section class="plate">
+      <div class="plate-head">
+        <span class="dr-key-num">04</span>
+        <span class="dr-key-term">Colour</span>
+        <span class="dr-key-leader"></span>
+        <span class="dr-micro">Two, and no more</span>
+      </div>
+      <div class="specimen-row">
+        <span class="dr-label">Annotation</span>
+        <hr class="dr-rule" style="border-top: var(--dr-w-line) solid var(--dr-red-line);">
+        <span class="dr-micro" style="color: var(--dr-red);">--dr-red</span>
+      </div>
+      <div class="specimen-row">
+        <span class="dr-label">Warning</span>
+        <hr class="dr-rule" style="border-top: var(--dr-w-line) dashed var(--dr-red-faint);">
+        <span class="dr-micro" style="color: var(--dr-red);">at risk</span>
+      </div>
+      <div class="specimen-row">
+        <span class="dr-label">Secondary</span>
+        <hr class="dr-rule" style="border-top: var(--dr-w-line) solid var(--dr-cool-line);">
+        <span class="dr-micro" style="color: var(--dr-cool);">--dr-cool</span>
+      </div>
+      <div class="specimen-row">
+        <span class="dr-label">Cool wash</span>
+        <div class="specimen-swatch dr-tone--wash"></div>
+        <span class="dr-micro">.13</span>
+      </div>
+      <p class="note dr-body">
+        One red for annotation, warning and now, always at the weight of a fine pen line.
+        One cool wash for secondary emphasis. Colour is never a fill behind text —
+        an at-risk block goes red at the <em>edge</em>, and its lettering stays ink.
+      </p>
+    </section>
+
+    <!-- 05 TYPE -->
+    <section class="plate plate--wide">
+      <div class="plate-head">
+        <span class="dr-key-num">05</span>
+        <span class="dr-key-term">Type</span>
+        <span class="dr-key-leader"></span>
+        <span class="dr-micro">IBM Plex Sans Condensed — 400 / 500 — SIL OFL 1.1</span>
+      </div>
+      <div class="type-row">
+        <span class="dr-micro">Micro · 0.56rem · .2em</span>
+        <span class="dr-micro">Tick figures · key numbers · flags</span>
+      </div>
+      <div class="type-row">
+        <span class="dr-micro">Label · 0.66rem · .15em</span>
+        <span class="dr-label">Working hours · Domestic · At risk</span>
+      </div>
+      <div class="type-row">
+        <span class="dr-micro">Body · 0.79rem</span>
+        <span class="dr-body">Sentence case for anything that is content rather than a label.</span>
+      </div>
+      <div class="type-row">
+        <span class="dr-micro">Lead · 0.92rem · 500</span>
+        <span class="dr-block-label" style="position:static;">Pattern cutting — toile fitting</span>
+      </div>
+      <div class="type-row">
+        <span class="dr-micro">Figure · 1.1rem</span>
+        <span class="dr-figure">0123456789 · 09:45–11:30</span>
+      </div>
+      <div class="type-row">
+        <span class="dr-micro">Title · 1.6rem · .3em</span>
+        <span class="dr-title">Week 37</span>
+      </div>
+      <p class="note dr-body">
+        Small, uppercase and letterspaced for labels; sentence case for content. One family
+        throughout — a drawing is lettered in one hand — and tabular figures everywhere, because a
+        measured rule whose hour numerals change width is not a measured rule.
+      </p>
+    </section>
+
+    <!-- 06 THE MEASURED AXIS -->
+    <section class="plate plate--wide">
+      <div class="plate-head">
+        <span class="dr-key-num">06</span>
+        <span class="dr-key-term">Construction geometry</span>
+        <span class="dr-key-leader"></span>
+        <span class="dr-micro">Axis · bands · arcs · ghosts · leaders</span>
+      </div>
+      <div class="stage">
+        <div class="stage-grid stage-grid--three">
+
+          <!-- The measured rule: two gradients and one border on one element. -->
+          <div class="dr-axis">
+            <span class="dr-axis-figure is-major" style="top:0px;">9 am</span>
+            <span class="dr-axis-figure" style="top:60px;">10 am</span>
+            <span class="dr-axis-figure" style="top:120px;">11 am</span>
+            <span class="dr-axis-figure is-major" style="top:180px;">12 pm</span>
+            <span class="dr-axis-figure" style="top:240px;">1 pm</span>
+          </div>
+
+          <!-- Column A: bands, ghosting, now. -->
+          <div class="dr-col dr-track stage-track">
+            <div class="dr-band dr-band--working" style="top:0px; height:210px;">
+              <span class="dr-band-label">Working</span>
+            </div>
+            <div class="dr-band dr-band--domestic" style="top:210px; height:90px;">
+              <span class="dr-band-label">Domestic</span>
+            </div>
+
+            <!-- Ghosted repetition: the same task at its other occurrences,
+                 the way a wheel is drawn through its arc. Construction. -->
+            <div class="dr-block dr-block--ghost dr-construction" style="top:12px; left:4%; width:60%; height:44px;">
+              <span class="dr-block-label">Studio — draping</span>
+              <span class="dr-block-time">Mon 9:15</span>
+            </div>
+            <div class="dr-block dr-block--ghost dr-construction" style="top:132px; left:4%; width:60%; height:44px;">
+              <span class="dr-block-label">Studio — draping</span>
+              <span class="dr-block-time">Wed 11:15</span>
+            </div>
+
+            <div class="dr-block dr-block--task" style="top:72px; left:4%; width:60%; height:52px;">
+              <span class="dr-block-label">Studio — draping</span>
+              <span class="dr-block-time">10:12–11:04</span>
+            </div>
+
+            <div class="dr-now" style="top:96px;"><span class="dr-now-label">Now</span></div>
+            <div class="dr-marker" style="top:270px;"><span class="dr-marker-label">Bedtime 11:40 pm</span></div>
+          </div>
+
+          <!-- Column B: deadline arcs, travel leader, prep bracket. -->
+          <div class="dr-col dr-track stage-track">
+            <!-- One element per deadline, not per block: the arcs are a
+                 border plus one spread shadow on a single circle. -->
+            <div class="dr-arc dr-construction" style="top:186px; --dr-arc-r: 120px;"></div>
+            <div class="dr-arc dr-construction" style="top:186px; --dr-arc-r: 220px;"></div>
+            <div class="dr-deadline" style="top:186px;">
+              <span class="dr-deadline-label">Deadline — brief hand-in</span>
+            </div>
+            <div class="dr-point" style="top:186px; left:50%;"></div>
+
+            <div class="dr-block dr-block--timetabled" style="top:6px; left:6%; width:56%; height:54px;">
+              <span class="dr-block-label">Contextual studies</span>
+              <span class="dr-block-sub">Lecture · E1.04</span>
+              <span class="dr-block-time">9:00–10:00</span>
+            </div>
+
+            <!-- Travel is the line between two things, so it is drawn as one. -->
+            <div class="dr-leader" style="top:60px; left:14%; height:25px;">
+              <span class="dr-leader-label">25 min · leave 10:00</span>
+            </div>
+
+            <div class="dr-block dr-block--prep" style="top:85px; left:6%; width:56%; height:26px;">
+              <span class="dr-block-label">Getting ready</span>
+            </div>
+
+            <div class="dr-block dr-block--task dr-block--at-risk is-next" style="top:118px; left:6%; width:56%; height:60px;">
+              <span class="dr-flag">At risk</span>
+              <span class="dr-block-label">Finish sample book</span>
+              <span class="dr-block-time">11:00–12:00</span>
+            </div>
+
+            <div class="dr-block dr-block--break" style="top:200px; left:6%; width:56%; height:22px;">
+              <span class="dr-block-label">Break</span>
+            </div>
+
+            <div class="dr-block dr-block--task dr-block--locked" style="top:232px; left:6%; width:56%; height:46px;">
+              <span class="dr-datum"></span>
+              <span class="dr-block-label">Tutorial prep</span>
+              <span class="dr-block-time">1:00–1:45</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="note dr-body">
+        The setting-out is left in: quarter-hour rules across the tracks, half-hour ticks on the
+        axis, compass arcs struck back from the deadline point, and the recurring task ghosted at
+        its other two occurrences. All of it is construction ink — take the layer off and the hour
+        rules, the bands, the blocks, the deadline, the now line and the bedtime marker are all
+        still there. The blue-cool wash appears only on a band handle under the pointer.
+      </p>
+    </section>
+
+    <!-- 07 BLOCKS -->
+    <section class="plate plate--wide">
+      <div class="plate-head">
+        <span class="dr-key-num">07</span>
+        <span class="dr-key-term">Blocks</span>
+        <span class="dr-key-leader"></span>
+        <span class="dr-micro">Every state, at rest</span>
+      </div>
+      <div class="stage" style="height: 250px;">
+        <div class="stage-grid" style="grid-template-columns: repeat(4, 1fr); gap: 1.6rem;">
+          <div class="stage-track">
+            <span class="dr-micro" style="position:absolute; top:0;">01 — Task</span>
+            <div class="dr-block dr-block--task" style="top:20px; left:0; right:0; height:56px;">
+              <span class="dr-block-label">Pattern cutting</span>
+              <span class="dr-block-time">2:00–3:00 pm</span>
+            </div>
+            <span class="dr-micro" style="position:absolute; top:96px;">05 — At risk</span>
+            <div class="dr-block dr-block--task dr-block--at-risk" style="top:116px; left:0; right:0; height:56px;">
+              <span class="dr-flag">At risk</span>
+              <span class="dr-block-label">Sample book</span>
+              <span class="dr-block-time">3:00–4:00 pm</span>
+            </div>
+          </div>
+
+          <div class="stage-track">
+            <span class="dr-micro" style="position:absolute; top:0;">02 — Timetabled</span>
+            <div class="dr-block dr-block--timetabled" style="top:20px; left:0; right:0; height:56px;">
+              <span class="dr-block-label">Contextual studies</span>
+              <span class="dr-block-sub">Seminar · A2.11</span>
+              <span class="dr-block-time">2:00–3:00 pm</span>
+            </div>
+            <span class="dr-micro" style="position:absolute; top:96px;">06 — Locked</span>
+            <div class="dr-block dr-block--task dr-block--locked" style="top:116px; left:0; right:0; height:56px;">
+              <span class="dr-datum"></span>
+              <span class="dr-block-label">Tutorial</span>
+              <span class="dr-block-time">3:00–4:00 pm</span>
+            </div>
+          </div>
+
+          <div class="stage-track">
+            <span class="dr-micro" style="position:absolute; top:0;">03 — Travel</span>
+            <div class="dr-leader" style="top:20px; left:14px; height:56px;">
+              <span class="dr-leader-label">25 min · leave 1:35</span>
+            </div>
+            <span class="dr-micro" style="position:absolute; top:96px;">07 — Ghosted</span>
+            <div class="dr-block dr-block--ghost dr-construction" style="top:116px; left:0; right:0; height:56px;">
+              <span class="dr-block-label">Pattern cutting</span>
+              <span class="dr-block-time">Thu 2:00 pm</span>
+            </div>
+          </div>
+
+          <div class="stage-track">
+            <span class="dr-micro" style="position:absolute; top:0;">04 — Prep</span>
+            <div class="dr-block dr-block--prep" style="top:20px; left:0; right:0; height:34px;">
+              <span class="dr-block-label">Getting ready</span>
+            </div>
+            <span class="dr-micro" style="position:absolute; top:66px;">08 — Break</span>
+            <div class="dr-block dr-block--break" style="top:86px; left:0; right:0; height:28px;">
+              <span class="dr-block-label">Break</span>
+            </div>
+            <span class="dr-micro" style="position:absolute; top:126px;">09 — Next up</span>
+            <div class="dr-block dr-block--task is-next" style="top:150px; left:6px; right:0; height:56px;">
+              <span class="dr-block-label">Finish toile</span>
+              <span class="dr-block-time">4:00–5:00 pm</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="note dr-body">
+        What a block <em>is</em> is said by its edge, never by a fill and never by a hue.
+        A task carries the heaviest line in the system on its spine, because it is the subject of
+        the drawing. Timetabled is a double rule — a given, fixed. Prep is bracketed, not boxed;
+        a break is hatched with no edge at all; travel is not a block but the line between two.
+        Locked takes a datum mark, at risk takes a red spine and a flag, ghosted is outline only in
+        construction ink. "Next up" is the loudest mark the system allows: a red bracket set
+        <em>outside</em> the block, so it reads as an annotation pointing at it.
+      </p>
+    </section>
+
+    <!-- 08 THE NUMBERED KEY -->
+    <section class="plate">
+      <div class="plate-head">
+        <span class="dr-key-num">08</span>
+        <span class="dr-key-term">Detail key</span>
+        <span class="dr-key-leader"></span>
+        <span class="dr-micro">Not a tooltip</span>
+      </div>
+      <div class="dr-key">
+        <div class="dr-key-row">
+          <span class="dr-key-num">01</span><span class="dr-key-term">Task</span>
+          <span class="dr-key-leader"></span><span class="dr-key-value">Finish sample book</span>
+        </div>
+        <div class="dr-key-row">
+          <span class="dr-key-num">02</span><span class="dr-key-term">Deliverable</span>
+          <span class="dr-key-leader"></span><span class="dr-key-value">FS402 — Portfolio</span>
+        </div>
+        <div class="dr-key-row">
+          <span class="dr-key-num">03</span><span class="dr-key-term">Slot</span>
+          <span class="dr-key-leader"></span><span class="dr-key-value">Wed 11:00–12:00</span>
+        </div>
+        <div class="dr-key-row">
+          <span class="dr-key-num">04</span><span class="dr-key-term">Estimate</span>
+          <span class="dr-key-leader"></span><span class="dr-key-value">90 min</span>
+        </div>
+        <div class="dr-key-row">
+          <span class="dr-key-num">05</span><span class="dr-key-term">Deadline</span>
+          <span class="dr-key-leader"></span><span class="dr-key-value">Fri 5:00 pm</span>
+        </div>
+        <div class="dr-key-row">
+          <span class="dr-key-num">06</span><span class="dr-key-term">Goal</span>
+          <span class="dr-key-value dr-key-value--wide">Twelve mounted swatches, captioned, in the ring binder.</span>
+        </div>
+      </div>
+      <p class="note dr-body">
+        A number, a term, a dotted leader running the gap, the value — the key block from the
+        corner of a mechanism drawing. A tooltip is gone the moment you look away from it;
+        a drawing's key is part of the drawing.
+      </p>
+    </section>
+
+    <!-- 09 MONTH -->
+    <section class="plate">
+      <div class="plate-head">
+        <span class="dr-key-num">09</span>
+        <span class="dr-key-term">Month grid</span>
+        <span class="dr-key-leader"></span>
+        <span class="dr-micro">Primitive · no hourly axis</span>
+      </div>
+      <div class="dr-month">
+        <div class="dr-month-head">Mon</div><div class="dr-month-head">Tue</div>
+        <div class="dr-month-head">Wed</div><div class="dr-month-head">Thu</div>
+        <div class="dr-month-head">Fri</div><div class="dr-month-head">Sat</div>
+        <div class="dr-month-head">Sun</div>
+
+        <div class="dr-month-cell is-outside"><span class="dr-month-figure">28</span></div>
+        <div class="dr-month-cell is-outside"><span class="dr-month-figure">29</span></div>
+        <div class="dr-month-cell is-outside"><span class="dr-month-figure">30</span></div>
+        <div class="dr-month-cell"><span class="dr-month-figure">1</span>
+          <button class="dr-month-entry dr-month-entry--timetabled">Contextual studies</button>
+        </div>
+        <div class="dr-month-cell is-today"><span class="dr-month-figure">2</span>
+          <button class="dr-month-entry">Pattern cutting</button>
+          <button class="dr-month-entry dr-month-entry--at-risk">Sample book</button>
+        </div>
+        <div class="dr-month-cell"><span class="dr-month-figure">3</span></div>
+        <div class="dr-month-cell"><span class="dr-month-figure">4</span>
+          <button class="dr-month-entry">Reading</button>
+        </div>
+      </div>
+      <p class="note dr-body">
+        Closer to a plan than a section: a grid of cells, a plate number in each corner, one
+        ruled line per thing. Crosshatch for cells outside the month — the drafting meaning of
+        crosshatch is "not our material". Defined now so session 11 inherits the language
+        rather than inventing a second one.
+      </p>
+    </section>
+
+    <!-- 10 SINGLE WIDE COLUMN -->
+    <section class="plate plate--wide">
+      <div class="plate-head">
+        <span class="dr-key-num">10</span>
+        <span class="dr-key-term">Single wide column</span>
+        <span class="dr-key-leader"></span>
+        <span class="dr-micro">Primitive · dimensioned both edges</span>
+      </div>
+      <div class="stage" style="height: 200px;">
+        <div class="dr-grid dr-grid--single" style="height:100%;">
+          <div class="dr-axis">
+            <span class="dr-axis-figure is-major" style="top:0px;">9 am</span>
+            <span class="dr-axis-figure" style="top:60px;">10 am</span>
+            <span class="dr-axis-figure" style="top:120px;">11 am</span>
+            <span class="dr-axis-figure is-major" style="top:180px;">12 pm</span>
+          </div>
+          <div class="dr-col dr-track stage-track">
+            <div class="dr-band dr-band--working" style="top:0; height:200px;">
+              <span class="dr-band-label">Working</span>
+            </div>
+            <div class="dr-block dr-block--timetabled" style="top:8px; left:2%; width:44%; height:52px;">
+              <span class="dr-block-label">Contextual studies</span>
+              <span class="dr-block-sub">Lecture · E1.04</span>
+              <span class="dr-block-time">9:00–10:00</span>
+            </div>
+            <div class="dr-block dr-block--task" style="top:72px; left:2%; width:66%; height:74px;">
+              <span class="dr-block-label">Pattern cutting — toile fitting</span>
+              <span class="dr-block-time">10:12–11:26</span>
+              <span class="dr-block-sub">Studio 2 · needs support</span>
+            </div>
+            <div class="dr-now" style="top:104px;"><span class="dr-now-label">Now</span></div>
+          </div>
+          <div class="dr-axis dr-axis--mirrored">
+            <span class="dr-axis-figure is-major" style="top:0px;">9</span>
+            <span class="dr-axis-figure" style="top:60px;">10</span>
+            <span class="dr-axis-figure" style="top:120px;">11</span>
+            <span class="dr-axis-figure is-major" style="top:180px;">12</span>
+          </div>
+        </div>
+      </div>
+      <p class="note dr-body">
+        The day view's shape: the same track at the same scale, dimensioned on both edges the way a
+        drafting sheet is, with room on a block for the third line a week column has no width for.
+        Session 10's caller sets <span class="dr-micro">--dr-days: 1</span> and changes nothing else.
+      </p>
+    </section>
+
+  </div>
+</div>
+
+<script>
+  // The two switches in the title block. The construction one flips exactly
+  // the class the calendar will flip -- so what this sheet demonstrates is
+  // the real mechanism, not an approximation of it.
+  const construction = document.getElementById("construction-switch");
+  construction.addEventListener("change", () => {
+    document.body.classList.toggle("dr-no-construction", !construction.checked);
+  });
+
+  const themeSwitch = document.getElementById("theme-switch");
+  themeSwitch.checked = document.documentElement.dataset.theme === "dark";
+  themeSwitch.addEventListener("change", () => {
+    window.themeControl.apply(themeSwitch.checked ? "dark" : "light");
+  });
+</script>
+</body>
+</html>

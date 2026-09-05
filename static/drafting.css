@@ -1,0 +1,1219 @@
+/* The drafting language -- the visual system for the schedule surface.
+ *
+ * This DELIBERATELY REPLACES the neumorphic system (CLAUDE.md hard rule 6)
+ * on this one surface. Everything here is scoped under `.drafting`, which
+ * only schedule.html and schedule/specimen.html carry, so the archive SPA,
+ * the project shell and the three graph pages are untouched by construction:
+ * a rule that cannot match outside those two documents cannot regress them.
+ *
+ * References: architectural section drawings, anatomical plates, urban
+ * plans, astronomical charts -- see design-references/README.md. Four ideas
+ * carry the whole thing:
+ *
+ *   GROUND is paper -- warm, near-white, never grey.
+ *   LINE carries the hierarchy -- four weights, hairline to structural.
+ *     Nothing is bold; things are heavier.
+ *   TONE is hatching and stipple, never a flat fill.
+ *   COLOUR is scarce -- one red at the weight of a fine pen line, one cool
+ *     wash, and nothing else. Colour is never a fill behind text.
+ *
+ * THE RATIO THAT MATTERS: in every reference the construction geometry is
+ * faint and the subject is dark. The construction layer here is texture,
+ * never information -- it is driven by a single custom property
+ * (--dr-construction-ink) so that blanking that one value switches the whole
+ * layer off without a re-render, and by `.dr-construction` on the handful of
+ * elements that exist only to be construction. Nothing readable may live in
+ * either. A calendar checked every morning that takes effort to parse has
+ * failed regardless of how it looks.
+ */
+
+/* IBM Plex Sans Condensed -- IBM's engineering grotesque, condensed cut.
+ * Vendored, not CDN-loaded (CLAUDE.md hard rule 1). SIL OFL 1.1, which
+ * permits redistribution; the licence and provenance sit beside the files in
+ * static/vendor/fonts/. Bound to --dr-face below, NOT to --display, which is
+ * Ballet and belongs to the archive. */
+@font-face {
+  font-family: "IBM Plex Sans Condensed";
+  src: url("/vendor/fonts/IBMPlexSansCondensed-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "IBM Plex Sans Condensed";
+  src: url("/vendor/fonts/IBMPlexSansCondensed-Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ==========================================================================
+   1. THE SYSTEM
+   Every value the surface is built from, in one place. A language invented
+   per screen is not a language, so nothing below this block may introduce a
+   colour, a line weight or a type size of its own.
+   ========================================================================== */
+
+.drafting {
+  /* --- Ground: paper ---------------------------------------------------
+     Warm rather than blue, and only just off white. --dr-paper-2 is a second
+     sheet laid under the first (a well, a header strip); --dr-paper-3 is the
+     deepest recess. All three are opaque, because a block has to cover the
+     tone of the band behind it. */
+  --dr-paper: #f4f1e9;
+  --dr-paper-2: #ece8dc;
+  --dr-paper-3: #e2ddcd;
+
+  /* --- Ink: one warm graphite at five densities ------------------------
+     Every line tone, hatch and type colour in the system is an alpha of this
+     single triplet, which is what makes dark mode six declarations rather
+     than a second stylesheet. */
+  --dr-ink-rgb: 35, 33, 29;
+  --dr-ink: rgb(var(--dr-ink-rgb));
+  --dr-ink-2: rgba(var(--dr-ink-rgb), 0.74); /* secondary content */
+  --dr-ink-3: rgba(var(--dr-ink-rgb), 0.52); /* annotation */
+  --dr-ink-4: rgba(var(--dr-ink-rgb), 0.34); /* faint annotation, ghost text */
+
+  /* --- Line: four weights, hairline to structural ----------------------
+     Weight is width AND tone together -- a structural line is not just
+     thicker, it is denser, which is how a pencil actually behaves. Sub-pixel
+     widths are deliberate: on the retina display this app is used on, 0.5px
+     is a real half-pixel line, and on a 1x display the browser antialiases
+     it to a lighter 1px, which is the right degradation. */
+  --dr-w-construction: 0.5px; /* setting-out: never information */
+  --dr-w-hair: 0.75px;        /* annotation, secondary structure */
+  --dr-w-line: 1px;           /* object lines: the edges of things */
+  --dr-w-cut: 1.75px;         /* structural: a section cut, the spine */
+
+  --dr-c-construction: rgba(var(--dr-ink-rgb), 0.20);
+  --dr-c-hair: rgba(var(--dr-ink-rgb), 0.32);
+  --dr-c-line: rgba(var(--dr-ink-rgb), 0.58);
+  --dr-c-cut: rgba(var(--dr-ink-rgb), 0.88);
+
+  /* Composites, so a surface writes `border: var(--dr-rule-line)` rather
+     than repeating the width/tone pairing and getting one of them wrong. */
+  --dr-rule-construction: var(--dr-w-construction) solid var(--dr-c-construction);
+  --dr-rule-hair: var(--dr-w-hair) solid var(--dr-c-hair);
+  --dr-rule-line: var(--dr-w-line) solid var(--dr-c-line);
+  --dr-rule-cut: var(--dr-w-cut) solid var(--dr-c-cut);
+
+  /* --- The construction layer's own ink --------------------------------
+     THE toggle. Everything drawn as setting-out resolves its colour through
+     this one property; `.dr-no-construction` blanks it and the entire layer
+     disappears with no JavaScript beyond a classList.toggle and no re-render.
+     It is deliberately fainter than --dr-c-construction, which is a real (if
+     light) drawn line -- setting-out sits further back still. */
+  --dr-construction-ink: rgba(var(--dr-ink-rgb), 0.11);
+
+  /* --- Tone: hatching and stipple, never a flat fill -------------------
+     Four tones, distinguished by BOTH pitch and angle so they stay apart at
+     a glance and in a screenshot. Stipple is the lightest, which is why the
+     working band -- the band most blocks sit on top of -- gets it.
+     Hatch values are plain background-images; only the stipple needs a size
+     to go with it, hence the paired --dr-stipple-pitch. */
+  --dr-stipple: radial-gradient(circle, rgba(var(--dr-ink-rgb), 0.22) 0.6px, transparent 0.7px);
+  --dr-stipple-pitch: 6px 6px;
+  --dr-hatch-a: repeating-linear-gradient(45deg,
+    rgba(var(--dr-ink-rgb), 0.17) 0 1px, transparent 1px 7px);
+  --dr-hatch-b: repeating-linear-gradient(135deg,
+    rgba(var(--dr-ink-rgb), 0.15) 0 1px, transparent 1px 4px);
+  --dr-hatch-cross:
+    repeating-linear-gradient(45deg, rgba(var(--dr-ink-rgb), 0.16) 0 1px, transparent 1px 8px),
+    repeating-linear-gradient(135deg, rgba(var(--dr-ink-rgb), 0.16) 0 1px, transparent 1px 8px);
+
+  /* --- Colour: two, and no more ----------------------------------------
+     The red is the app's existing --accent (#c23b2e), which was already the
+     right red. It carries annotation, warning and now, always at the weight
+     of a fine pen line and never as a fill behind text. The cool is the pale
+     wash from the urban-plan reference: secondary emphasis only. */
+  --dr-red: #c23b2e;
+  --dr-red-line: rgba(194, 59, 46, 0.92);
+  --dr-red-faint: rgba(194, 59, 46, 0.34);
+  --dr-cool: #3f7f99;
+  --dr-cool-line: rgba(63, 127, 153, 0.6);
+  --dr-cool-wash: rgba(63, 127, 153, 0.13);
+
+  /* --- Type ------------------------------------------------------------
+     Small, uppercase and letterspaced for labels; sentence case for content.
+     One family throughout -- a drawing is lettered in one hand. */
+  --dr-face: "IBM Plex Sans Condensed", "Helvetica Neue Condensed",
+    "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+
+  --dr-t-micro: 0.56rem;  /* tick figures, key numbers, flags */
+  --dr-t-label: 0.66rem;  /* uppercase letterspaced labels */
+  --dr-t-body: 0.79rem;   /* sentence-case content */
+  --dr-t-lead: 0.92rem;   /* the one line of a block that matters */
+  --dr-t-figure: 1.1rem;  /* dimension figures, date numerals */
+  --dr-t-head: 1.15rem;
+  --dr-t-title: 1.6rem;
+
+  --dr-track-label: 0.15em;
+  --dr-track-micro: 0.2em;
+  --dr-track-title: 0.3em;
+
+  /* --- Measure ---------------------------------------------------------
+     One hour is --dr-hour tall. Every vertical geometry -- axis ticks, hour
+     rules, the quarter-hour construction grid -- is derived from it, so the
+     day view (session 10) can change the scale of the drawing by setting
+     this one property rather than by re-deriving a second set of pitches. */
+  --dr-hour: 60px;
+  --dr-tick-major: 11px;
+  --dr-tick-minor: 6px;
+  /* How far a drawn rule runs past its content, as a drawn rule does. */
+  --dr-extend: 7px;
+
+  /* --- Defusing the neumorphic system ----------------------------------
+     style.css is still loaded here for the modals, forms and buttons this
+     page shares with the archive, and every one of its surfaces reads
+     --raise-*/--press-* at point of use. Blanking the five of them switches
+     the whole soft-UI illusion off inside this scope alone, without editing
+     a single rule in style.css and therefore without any way to reach the
+     pages that do want it. The few declarations that put a raise/press in a
+     COMMA LIST (a focus ring after a press) can't take `none` and are
+     restated explicitly in section 9. */
+  --raise-sm: none;
+  --raise-md: none;
+  --raise-lg: none;
+  --press-sm: none;
+  --press-md: none;
+
+  /* Rebinding style.css's own tokens is what carries the paper and the
+     lettering into everything this page inherits -- headings, .muted, form
+     controls -- rather than restating a colour on each. */
+  --bg: var(--dr-paper);
+  --sunken: var(--dr-paper-2);
+  --edge: var(--dr-c-hair);
+  --ink: var(--dr-ink);
+  --ink-strong: var(--dr-ink);
+  --muted: var(--dr-ink-3);
+  --header-bg: var(--dr-paper);
+  --serif: var(--dr-face);
+  --sans: var(--dr-face);
+  --slate: var(--dr-ink-3);
+
+  background: var(--dr-paper);
+  color: var(--dr-ink);
+  font-family: var(--dr-face);
+  /* Tabular figures: a measured rule whose hour numerals jitter in width is
+     not a measured rule. */
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* --- Dark: a different material, not an inversion -------------------------
+   A paper aesthetic has no natural dark equivalent; white-on-black reads as
+   a photographic negative. So dark mode is a DIFFERENT PRINT: the dark
+   ground and pale linework of an astronomical chart, cool rather than warm,
+   with the same drawing on it. Because every tone in the system is an alpha
+   of --dr-ink-rgb, swapping the ground and the ink triplet re-derives all
+   four line weights, all four tones and every type colour at once; only the
+   alphas need retuning, because a light line on a dark ground reads heavier
+   than a dark line on a light one at the same opacity. */
+:root[data-theme="dark"] .drafting {
+  --dr-paper: #14181c;
+  --dr-paper-2: #1b2025;
+  --dr-paper-3: #0f1215;
+
+  --dr-ink-rgb: 226, 233, 238;
+  --dr-ink-2: rgba(var(--dr-ink-rgb), 0.7);
+  --dr-ink-3: rgba(var(--dr-ink-rgb), 0.48);
+  --dr-ink-4: rgba(var(--dr-ink-rgb), 0.3);
+
+  --dr-c-construction: rgba(var(--dr-ink-rgb), 0.16);
+  --dr-c-hair: rgba(var(--dr-ink-rgb), 0.26);
+  --dr-c-line: rgba(var(--dr-ink-rgb), 0.48);
+  --dr-c-cut: rgba(var(--dr-ink-rgb), 0.82);
+  --dr-construction-ink: rgba(var(--dr-ink-rgb), 0.09);
+
+  --dr-stipple: radial-gradient(circle, rgba(var(--dr-ink-rgb), 0.2) 0.6px, transparent 0.7px);
+  --dr-hatch-a: repeating-linear-gradient(45deg,
+    rgba(var(--dr-ink-rgb), 0.13) 0 1px, transparent 1px 7px);
+  --dr-hatch-b: repeating-linear-gradient(135deg,
+    rgba(var(--dr-ink-rgb), 0.11) 0 1px, transparent 1px 4px);
+  --dr-hatch-cross:
+    repeating-linear-gradient(45deg, rgba(var(--dr-ink-rgb), 0.12) 0 1px, transparent 1px 8px),
+    repeating-linear-gradient(135deg, rgba(var(--dr-ink-rgb), 0.12) 0 1px, transparent 1px 8px);
+
+  /* The one place the two modes genuinely disagree. #c23b2e is a printer's
+     red on paper and a muddy brown on a dark plate, so the dark chart uses a
+     brighter one at the same hue. This does NOT touch --accent, which the
+     graph pages draw their threads in and which stays identical across
+     themes by design (style.css). */
+  --dr-red: #e2604e;
+  --dr-red-line: rgba(226, 96, 78, 0.92);
+  --dr-red-faint: rgba(226, 96, 78, 0.34);
+  --dr-cool: #77aecb;
+  --dr-cool-line: rgba(119, 174, 203, 0.6);
+  --dr-cool-wash: rgba(119, 174, 203, 0.12);
+}
+
+/* THE construction toggle. One property; see --dr-construction-ink above.
+   `.dr-construction` covers the handful of elements that exist ONLY as
+   setting-out (arcs, ghosts, projection rays) and so have nothing left to
+   show once their ink is gone -- blanking their colour would leave them
+   holding layout space. Nothing that must be read may carry this class. */
+.drafting.dr-no-construction { --dr-construction-ink: transparent; }
+.drafting.dr-no-construction .dr-construction { display: none; }
+
+/* ==========================================================================
+   2. LETTERING
+   ========================================================================== */
+
+.drafting h1,
+.drafting h2,
+.drafting h3,
+.drafting h4 {
+  font-family: var(--dr-face);
+  font-weight: 500;
+  letter-spacing: var(--dr-track-label);
+  text-transform: uppercase;
+  color: var(--dr-ink);
+}
+
+.drafting h1 { font-size: var(--dr-t-head); letter-spacing: var(--dr-track-title); }
+.drafting h2 { font-size: var(--dr-t-head); }
+.drafting h3 { font-size: var(--dr-t-label); }
+.drafting h4 { font-size: var(--dr-t-label); }
+
+/* .muted is style.css's secondary-copy class and appears all over the
+   schedule markup; here it is annotation, so it takes annotation ink and the
+   drafting face rather than the archive's Times. Sentence case -- it is
+   content, not a label. */
+.drafting .muted {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+  color: var(--dr-ink-3);
+}
+
+/* The label/content distinction, as two classes rather than as a rule each
+   surface has to remember. */
+.dr-label {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-label);
+  font-weight: 500;
+  letter-spacing: var(--dr-track-label);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+}
+
+.dr-micro {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+}
+
+.dr-body {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--dr-ink-2);
+}
+
+.dr-figure {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-figure);
+  font-weight: 400;
+  color: var(--dr-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.dr-title {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-title);
+  font-weight: 400;
+  letter-spacing: var(--dr-track-title);
+  text-transform: uppercase;
+  color: var(--dr-ink);
+  margin: 0;
+}
+
+/* Emphasis is weight, not boldness -- 500 against 400, one step. */
+.dr-heavier { font-weight: 500; color: var(--dr-ink); }
+
+/* ==========================================================================
+   3. RULES AND TONE -- the primitives themselves
+   ========================================================================== */
+
+.dr-rule { border: 0; border-top: var(--dr-rule-line); margin: 0; }
+.dr-rule--construction { border-top: var(--dr-rule-construction); }
+.dr-rule--hair { border-top: var(--dr-rule-hair); }
+.dr-rule--line { border-top: var(--dr-rule-line); }
+.dr-rule--cut { border-top: var(--dr-rule-cut); }
+
+.dr-tone { background-color: transparent; }
+.dr-tone--stipple {
+  background-image: var(--dr-stipple);
+  background-size: var(--dr-stipple-pitch);
+}
+.dr-tone--hatch-a { background-image: var(--dr-hatch-a); }
+.dr-tone--hatch-b { background-image: var(--dr-hatch-b); }
+.dr-tone--cross { background-image: var(--dr-hatch-cross); }
+.dr-tone--wash { background-color: var(--dr-cool-wash); }
+
+/* ==========================================================================
+   4. THE SHEET AND ITS TITLE BLOCK
+   A drawing is a sheet with a title block, not a page with a header. The
+   title block is the drawing's own identification: what it is, at what
+   scale, covering what.
+   ========================================================================== */
+
+.dr-sheet {
+  background: var(--dr-paper);
+  padding: 1.6rem 1.8rem;
+}
+
+.dr-titleblock {
+  display: flex;
+  align-items: flex-end;
+  gap: 2rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.6rem;
+  border-bottom: var(--dr-rule-cut);
+  margin-bottom: 0.35rem;
+}
+
+/* The second, lighter rule under the cut -- a drawn border is two lines, not
+   one, and the pair is what makes it read as a frame rather than an
+   underline. */
+.dr-titleblock + .dr-titleblock-under {
+  border-top: var(--dr-rule-hair);
+  margin-bottom: 1.4rem;
+}
+
+.dr-titleblock-field { display: flex; flex-direction: column; gap: 0.15rem; }
+.dr-titleblock-field > .dr-micro { color: var(--dr-ink-4); }
+
+/* ==========================================================================
+   5. THE MEASURED AXIS
+   The hour axis is a rule with tick marks, not a list of times: a structural
+   rule down its edge, a major tick at every hour and a minor tick at every
+   half hour. All of it is TWO background gradients on ONE element -- the
+   whole axis is drawn in a single paint no matter how many hours it spans,
+   which is what keeps a week of it off the critical path when a block is
+   being dragged.
+   ========================================================================== */
+
+.dr-axis {
+  position: relative;
+  border-right: var(--dr-rule-line);
+  background-image:
+    repeating-linear-gradient(to bottom,
+      var(--dr-c-line) 0 var(--dr-w-line), transparent var(--dr-w-line) var(--dr-hour)),
+    repeating-linear-gradient(to bottom,
+      var(--dr-construction-ink) 0 var(--dr-w-line), transparent var(--dr-w-line) var(--dr-hour));
+  background-size: var(--dr-tick-major) 100%, var(--dr-tick-minor) 100%;
+  background-position: right top, right calc(var(--dr-hour) / 2);
+  background-repeat: no-repeat;
+}
+
+/* The hour figure hangs off its own tick and hard against the rule, the way
+   a station figure hangs off a levelling staff -- not centred on the tick,
+   which is what makes a list of times rather than a measured edge. Below the
+   tick rather than above it so the first hour of a scrolling track is not
+   half-clipped by the top of its own container. */
+.dr-axis-figure {
+  position: absolute;
+  right: calc(var(--dr-tick-major) + 3px);
+  padding-top: 1px;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: 0.04em;
+  color: var(--dr-ink-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Every third figure (the 3-hourly ones) carries more weight, so the eye can
+   count the rule in threes without reading it. */
+.dr-axis-figure.is-major { color: var(--dr-ink-2); font-weight: 500; }
+
+/* The mirrored rule on the far edge of a single wide column -- a drafting
+   sheet dimensions both sides. Session 10's day view is the caller; defined
+   here so it inherits the language rather than inventing a second axis. */
+.dr-axis--mirrored {
+  border-right: 0;
+  border-left: var(--dr-rule-line);
+  background-position: left top, left calc(var(--dr-hour) / 2);
+}
+
+.dr-axis--mirrored .dr-axis-figure {
+  right: auto;
+  left: calc(var(--dr-tick-major) + 3px);
+}
+
+/* ==========================================================================
+   6. TRACKS, COLUMNS AND EXTENSION LINES
+   ========================================================================== */
+
+/* Hour rules at annotation weight, quarter-hour rules in construction ink.
+   Two gradients on the track element itself: the sub-grid costs one paint
+   per column rather than one element per line, which is the difference
+   between a week view that drags smoothly and one that does not. */
+.dr-track {
+  position: relative;
+  background-image:
+    repeating-linear-gradient(to bottom,
+      var(--dr-c-construction) 0 var(--dr-w-line), transparent var(--dr-w-line) var(--dr-hour)),
+    repeating-linear-gradient(to bottom,
+      var(--dr-construction-ink) 0 var(--dr-w-construction),
+      transparent var(--dr-w-construction) calc(var(--dr-hour) / 4));
+}
+
+/* A drawn rule runs fractionally past what it divides. The separator is a
+   pseudo-element rather than a border precisely so it can overrun the
+   column's own box at both ends. */
+.dr-col { position: relative; }
+
+.dr-col::after {
+  content: "";
+  position: absolute;
+  top: calc(-1 * var(--dr-extend));
+  bottom: calc(-1 * var(--dr-extend));
+  right: 0;
+  width: var(--dr-w-hair);
+  background: var(--dr-c-hair);
+  pointer-events: none;
+}
+
+.dr-col:last-child::after { display: none; }
+
+/* Today. Not a tint -- colour is never a fill -- but the two rules that
+   bound the column drawn at structural weight, which is how a drawing says
+   "this one" without saying it in ink of a different colour. */
+.dr-col.is-today::after { background: var(--dr-c-cut); width: var(--dr-w-line); }
+
+.dr-col.is-today::before {
+  content: "";
+  position: absolute;
+  top: calc(-1 * var(--dr-extend));
+  bottom: calc(-1 * var(--dr-extend));
+  left: calc(-1 * var(--dr-w-line));
+  width: var(--dr-w-line);
+  background: var(--dr-c-cut);
+  pointer-events: none;
+}
+
+/* ==========================================================================
+   7. BANDS -- tone, never a fill
+   Working, domestic and unavailable are three materials, told apart by pitch
+   AND angle so they survive a screenshot and a colourblind reader alike.
+   Bounded top and bottom by a hairline, because a hatched area in a drawing
+   always has an edge.
+   ========================================================================== */
+
+.dr-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  border-top: var(--dr-rule-hair);
+  border-bottom: var(--dr-rule-hair);
+}
+
+/* Stipple is the lightest tone in the system, which is why the band that
+   most blocks sit on top of gets it. */
+.dr-band--working {
+  background-image: var(--dr-stipple);
+  background-size: var(--dr-stipple-pitch);
+}
+
+.dr-band--domestic { background-image: var(--dr-hatch-a); }
+
+/* Unavailable: crosshatch, the densest tone. Reserved for time that is
+   genuinely shut -- a day marked off, a month cell outside its month. */
+.dr-band--closed { background-image: var(--dr-hatch-cross); }
+
+/* The band's own label, set into its top edge in the margin -- a hatched
+   area in a drawing is named, not left to be guessed. */
+.dr-band-label {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  color: var(--dr-ink-4);
+}
+
+/* A band edge is dragged to resize it; the handle is invisible until the
+   pointer is on it, then it shows the pair of dimension ticks that say the
+   edge is a measurement. */
+.dr-band-handle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 9px;
+  cursor: ns-resize;
+  pointer-events: auto;
+}
+
+.dr-band-handle--top { top: -4px; }
+.dr-band-handle--bottom { bottom: -4px; }
+.dr-band-handle:hover { background: var(--dr-cool-wash); }
+
+/* ==========================================================================
+   8. BLOCKS
+   A block is a drawn object: paper ground and an edge. What KIND of thing it
+   is, is said by the edge -- weight, doubling, bracketing, dashing -- never
+   by a fill and never by a hue.
+   ========================================================================== */
+
+.dr-block {
+  position: absolute;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 2px 5px 2px 6px;
+  background: var(--dr-paper);
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+  line-height: 1.22;
+  color: var(--dr-ink-2);
+}
+
+.dr-block-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--dr-t-lead);
+  font-weight: 500;
+  color: var(--dr-ink);
+}
+
+.dr-block-sub,
+.dr-block-time {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--dr-t-micro);
+  letter-spacing: 0.06em;
+  color: var(--dr-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A task: the subject of the drawing. The heaviest edge in the system on its
+   left -- a section cut -- and object lines round the rest. */
+.dr-block--task {
+  border: var(--dr-rule-line);
+  border-left: var(--dr-rule-cut);
+  cursor: pointer;
+}
+
+/* Timetabled: a given, a boundary condition rather than the subject. Same
+   footprint, but a double rule on the spine -- the drafting convention for
+   something fixed -- and object lines one step lighter than a task's. */
+.dr-block--timetabled {
+  border: var(--dr-rule-hair);
+  border-left: 3px double var(--dr-c-cut);
+  padding-left: 5px;
+  cursor: pointer;
+}
+
+/* Prep: not an object, a preparation. Corner brackets only, no closed
+   outline -- the drawing says "this region" without drawing a thing in it. */
+.dr-block--prep {
+  border: 0;
+  background: transparent;
+  color: var(--dr-ink-3);
+}
+
+.dr-block--prep::before,
+.dr-block--prep::after {
+  content: "";
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  pointer-events: none;
+}
+
+.dr-block--prep::before {
+  top: 0;
+  left: 0;
+  border-top: var(--dr-rule-line);
+  border-left: var(--dr-rule-line);
+}
+
+.dr-block--prep::after {
+  bottom: 0;
+  right: 0;
+  border-bottom: var(--dr-rule-line);
+  border-right: var(--dr-rule-line);
+}
+
+.dr-block--prep .dr-block-label {
+  font-size: var(--dr-t-body);
+  font-weight: 400;
+  color: var(--dr-ink-3);
+  padding-left: 6px;
+}
+
+/* A break: hatched sliver, no edge at all. It is time being taken, not a
+   thing being done. */
+.dr-block--break {
+  border: 0;
+  background-color: transparent;
+  background-image: var(--dr-hatch-b);
+  color: var(--dr-ink-3);
+}
+
+.dr-block--break .dr-block-label {
+  font-size: var(--dr-t-micro);
+  font-weight: 400;
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+}
+
+/* At risk: the red enters as a line, never as a fill. The spine goes red and
+   a flag is set in the corner; the lettering stays ink, because red text at
+   this size is harder to read, not more urgent. */
+.dr-block--at-risk {
+  border-color: var(--dr-red-faint);
+  border-left-color: var(--dr-red-line);
+}
+
+.dr-flag {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  color: var(--dr-red);
+  pointer-events: none;
+}
+
+/* Locked to a slot: a datum mark. A drawing fixes a point with a circle and
+   a cross through it, and that is exactly what a pinned block is. */
+.dr-datum {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 10px;
+  height: 10px;
+  border: var(--dr-rule-line);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.dr-datum::before,
+.dr-datum::after {
+  content: "";
+  position: absolute;
+  background: var(--dr-c-line);
+}
+
+.dr-datum::before { left: 50%; top: 1px; bottom: 1px; width: var(--dr-w-line); }
+.dr-datum::after { top: 50%; left: 1px; right: 1px; height: var(--dr-w-line); }
+
+.dr-block--locked { padding-right: 15px; }
+
+/* Ghosted repetition -- the way a rotating mechanism is drawn through its
+   arc. A recurring task at its OTHER occurrences: the outline only, in
+   construction ink, with the lettering faint. Construction layer, because
+   the real occurrence is drawn properly somewhere else on the same sheet:
+   turning the layer off loses nothing that is not stated elsewhere. */
+.dr-block--ghost {
+  background: transparent;
+  border: var(--dr-w-construction) solid var(--dr-construction-ink);
+  border-left-width: var(--dr-w-construction);
+  color: var(--dr-ink-4);
+  pointer-events: none;
+}
+
+.dr-block--ghost .dr-block-label {
+  font-weight: 400;
+  color: var(--dr-ink-4);
+}
+
+/* Hover and drag: weight, not shadow. A block being dragged is inked in --
+   the line the draughtsman is currently working goes over in pen. */
+.dr-block--task:hover,
+.dr-block--timetabled:hover { border-color: var(--dr-c-cut); }
+.dr-block--task:hover { border-left-color: var(--dr-c-cut); }
+
+.dr-block.is-dragging {
+  border-color: var(--dr-c-cut);
+  background: var(--dr-paper);
+  z-index: 40;
+  cursor: grabbing;
+}
+
+/* The next block on today's column. This is the one-second question the week
+   view has to answer, so it gets the loudest mark the system allows: a red
+   bracket set OUTSIDE the block's own edge, so it reads as an annotation
+   pointing at the block rather than as a change to the block itself. */
+.dr-block.is-next::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: -3px;
+  bottom: -3px;
+  width: 4px;
+  border: var(--dr-w-line) solid var(--dr-red-line);
+  border-right: 0;
+  pointer-events: none;
+}
+
+/* ==========================================================================
+   9. ANNOTATION -- now, deadlines, leaders, keys
+   ========================================================================== */
+
+/* Now: a fine pen line across the column with a solid pointer at the rule.
+   1px, not 2 -- it is an annotation, and the accent is only ever allowed at
+   the weight of a fine pen line. */
+.dr-now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: var(--dr-w-line) solid var(--dr-red-line);
+  z-index: 30;
+  pointer-events: none;
+}
+
+.dr-now::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: -3.5px;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  border-left: 5px solid var(--dr-red);
+}
+
+.dr-now-label {
+  position: absolute;
+  right: 2px;
+  top: -0.72rem;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  color: var(--dr-red);
+  background: var(--dr-paper);
+  padding: 0 2px;
+}
+
+/* Suggested bedtime: advice, not an event. A dashed rule at annotation
+   weight in ink -- not red, which is reserved for warning and now. */
+.dr-marker {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: var(--dr-w-hair) dashed var(--dr-c-line);
+  z-index: 20;
+  pointer-events: none;
+}
+
+.dr-marker-label {
+  position: absolute;
+  right: 2px;
+  top: -0.72rem;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+  background: var(--dr-paper);
+  padding: 0 2px;
+}
+
+/* --- Deadlines: a compass arc struck from the point ----------------------
+   The point itself is information -- a red rule and a label, which stay
+   whatever the construction layer is doing. The ARCS are setting-out: two
+   concentric sweeps back into the run-up, drawn as one element and one
+   spread shadow (a spread shadow follows border-radius, so a single box
+   gives both rings) and clipped to the upper half, which is the half that
+   means "the approach". One element per deadline, not per block. */
+.dr-deadline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: var(--dr-w-line) solid var(--dr-red-line);
+  z-index: 20;
+  pointer-events: none;
+}
+
+.dr-deadline-label {
+  position: absolute;
+  left: 2px;
+  top: 1px;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  color: var(--dr-red);
+}
+
+.dr-arc {
+  position: absolute;
+  left: 50%;
+  width: var(--dr-arc-r, 92px);
+  height: var(--dr-arc-r, 92px);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: var(--dr-w-construction) solid var(--dr-construction-ink);
+  background: none;
+  clip-path: inset(0 0 50% 0);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* The centre of the sweep: a small cross, the drafting mark for a point. */
+.dr-point {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.dr-point::before,
+.dr-point::after {
+  content: "";
+  position: absolute;
+  background: var(--dr-red-line);
+}
+
+.dr-point::before { left: 50%; top: 0; bottom: 0; width: var(--dr-w-line); }
+.dr-point::after { top: 50%; left: 0; right: 0; height: var(--dr-w-line); }
+
+/* --- Travel: a dashed leader, not a block --------------------------------
+   Travel is the line BETWEEN two things, so it is drawn as one: a dashed
+   leader down the left of the track with an arrowhead where it arrives, and
+   the duration lettered beside it. Nothing is boxed, because nothing is
+   happening in that time except moving. */
+.dr-leader {
+  position: absolute;
+  border-left: var(--dr-w-hair) dashed var(--dr-c-line);
+  pointer-events: none;
+  z-index: 10;
+}
+
+.dr-leader::after {
+  content: "";
+  position: absolute;
+  left: calc(-3.5px + var(--dr-w-hair) / 2);
+  bottom: -1px;
+  border-left: 3.5px solid transparent;
+  border-right: 3.5px solid transparent;
+  border-top: 5px solid var(--dr-c-line);
+}
+
+.dr-leader-label {
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--dr-ink-3);
+}
+
+/* A leader that points at something rather than spanning a duration -- the
+   horizontal kind, for a callout from a key to the thing it names. */
+.dr-leader--callout {
+  border-left: 0;
+  border-top: var(--dr-w-hair) solid var(--dr-c-hair);
+  height: 0;
+}
+
+.dr-leader--callout::after {
+  left: auto;
+  right: -1px;
+  bottom: -3.5px;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  border-left: 5px solid var(--dr-c-hair);
+  border-right: 0;
+}
+
+/* --- The numbered key ----------------------------------------------------
+   Detail opens as a key, the way a mechanism's parts are keyed to a list at
+   the corner of the sheet -- a number, a term, a dotted leader running the
+   gap, and the value. Not a tooltip: a tooltip is gone the moment you look
+   away from it, and a drawing's key is part of the drawing. */
+.dr-key { margin: 0; }
+
+.dr-key-row {
+  display: grid;
+  grid-template-columns: 1.6rem auto minmax(1.5rem, 1fr) auto;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.22rem 0;
+}
+
+.dr-key-num {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: 0.08em;
+  color: var(--dr-ink-4);
+  font-variant-numeric: tabular-nums;
+}
+
+.dr-key-term {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-label);
+  letter-spacing: var(--dr-track-label);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+  white-space: nowrap;
+}
+
+/* The leader itself. A dotted rule filling whatever gap is left, dropped to
+   sit on the baseline rather than under it. */
+.dr-key-leader {
+  border-bottom: var(--dr-w-construction) dotted var(--dr-c-hair);
+  transform: translateY(-0.24em);
+}
+
+.dr-key-value {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+  color: var(--dr-ink);
+  text-align: right;
+}
+
+.dr-key-value--wide {
+  grid-column: 2 / -1;
+  text-align: left;
+  color: var(--dr-ink-2);
+}
+
+/* ==========================================================================
+   10. LAYOUT PRIMITIVES the three views are built from
+   Defined here, not in a view, so the day and month views (sessions 10 and
+   11) inherit the language instead of each inventing a layout of its own.
+   ========================================================================== */
+
+/* A week: an axis gutter plus N equal columns. --dr-days is what a day view
+   sets to 1. */
+.dr-grid {
+  display: grid;
+  grid-template-columns: var(--dr-gutter, 3.6rem) repeat(var(--dr-days, 7), 1fr);
+  background: var(--dr-paper);
+}
+
+/* A single wide column -- the day view's shape: the same track, dimensioned
+   on both edges, with room for the detail a week has no width for. */
+.dr-grid--single {
+  --dr-days: 1;
+  grid-template-columns: var(--dr-gutter, 3.6rem) 1fr var(--dr-gutter, 3.6rem);
+}
+
+/* A month: seven columns of day cells and no hourly axis at all -- a
+   different drawing of the same material, closer to a plan than a section.
+   Cells are separated by drawn rules that overrun, same as the week's. */
+.dr-month {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  border-top: var(--dr-rule-line);
+  border-left: var(--dr-rule-hair);
+  background: var(--dr-paper);
+}
+
+.dr-month-head {
+  padding: 0.3rem 0.45rem;
+  border-right: var(--dr-rule-hair);
+  border-bottom: var(--dr-rule-line);
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+}
+
+.dr-month-cell {
+  position: relative;
+  min-height: 5.5rem;
+  padding: 1.35rem 0.4rem 0.4rem;
+  border-right: var(--dr-rule-hair);
+  border-bottom: var(--dr-rule-hair);
+}
+
+/* The date figure sits in the corner of its cell as a plate number does. */
+.dr-month-figure {
+  position: absolute;
+  top: 0.2rem;
+  left: 0.4rem;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+  color: var(--dr-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.dr-month-cell.is-today { border: var(--dr-rule-cut); }
+.dr-month-cell.is-today .dr-month-figure { color: var(--dr-ink); font-weight: 500; }
+
+/* Outside the month: the densest tone in the system, which is exactly what
+   crosshatch means on a drawing -- not our material. */
+.dr-month-cell.is-outside {
+  background-image: var(--dr-hatch-cross);
+}
+
+.dr-month-cell.is-outside .dr-month-figure { color: var(--dr-ink-4); }
+
+/* One line per thing in a month cell -- no boxes at this scale, just a rule
+   and a name, which is all a plan has room for. */
+.dr-month-entry {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-left: var(--dr-rule-line);
+  border-radius: 0;
+  background: transparent;
+  padding: 0 0 0 4px;
+  margin-bottom: 2px;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  line-height: 1.35;
+  color: var(--dr-ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.dr-month-entry--timetabled { border-left: 3px double var(--dr-c-cut); padding-left: 3px; }
+.dr-month-entry--at-risk { border-left-color: var(--dr-red-line); }
+
+/* ==========================================================================
+   11. CONTROLS
+   The page still uses style.css's .btn, inputs and modals. With the
+   raise/press pair blanked above they are already flat; these give them a
+   drawn edge instead of a moulded one.
+   ========================================================================== */
+
+.drafting .btn,
+.drafting .tab-btn,
+.drafting .nav-link {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-label);
+  letter-spacing: var(--dr-track-label);
+  text-transform: uppercase;
+  border-radius: 0;
+  padding: 0.35rem 0.85rem;
+  border: var(--dr-rule-hair);
+  color: var(--dr-ink-3);
+  background: transparent;
+}
+
+.drafting .btn:hover,
+.drafting .tab-btn:hover,
+.drafting .nav-link:hover { border-color: var(--dr-c-line); color: var(--dr-ink); }
+
+.drafting .btn:active:not(:disabled),
+.drafting .nav-link:active { transform: none; border-color: var(--dr-c-cut); }
+
+/* Active/primary is the heavier edge, not a fill -- the same "weight, not
+   colour" rule the blocks follow. */
+.drafting .tab-btn.active,
+.drafting .btn.primary { border: var(--dr-rule-line); border-bottom: var(--dr-rule-cut); color: var(--dr-ink); }
+
+.drafting .btn.danger { border-color: var(--dr-red-faint); color: var(--dr-red); }
+
+.drafting .btn:disabled {
+  color: var(--dr-ink-4);
+  border-color: var(--dr-c-construction);
+  background-image: var(--dr-hatch-b);
+}
+
+/* The press-pulse keyframes interpolate raise -> press -> raise, which are
+   all `none` in this scope; the animation would be a no-op that still forces
+   a repaint on every click. Off. */
+.drafting .pulsing { animation: none; }
+
+.drafting input[type="text"],
+.drafting input[type="url"],
+.drafting input[type="date"],
+.drafting input[type="time"],
+.drafting input[type="number"],
+.drafting input[type="datetime-local"],
+.drafting select,
+.drafting textarea {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+  border-radius: 0;
+  border: 0;
+  border-bottom: var(--dr-rule-line);
+  background: transparent;
+  color: var(--dr-ink);
+  padding: 0.25rem 0.2rem;
+}
+
+.drafting input:focus,
+.drafting select:focus,
+.drafting textarea:focus {
+  outline: none;
+  border-bottom: var(--dr-w-line) solid var(--dr-red-line);
+}
+
+/* style.css puts these focus rings in a comma list with var(--press-sm),
+   which cannot take `none` -- the whole declaration would be dropped and the
+   ring would vanish. Restated as a drawn edge. */
+.drafting .task-title:hover,
+.drafting .task-goal:hover { border-bottom: var(--dr-rule-line); }
+
+.drafting .task-title:focus,
+.drafting .task-goal:focus {
+  outline: none;
+  box-shadow: none;
+  border-bottom: var(--dr-w-line) solid var(--dr-red-line);
+}
+
+.drafting .modal-box {
+  border-radius: 0;
+  background: var(--dr-paper);
+  border: var(--dr-rule-cut);
+}
+
+/* ==========================================================================
+   12. THE CONSTRUCTION TOGGLE'S OWN CONTROL
+   ========================================================================== */
+
+.dr-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+  user-select: none;
+}
+
+.dr-toggle-box {
+  width: 10px;
+  height: 10px;
+  border: var(--dr-rule-line);
+  position: relative;
+}
+
+/* Checked shows the cross, unchecked an empty square -- a drawn checkbox. */
+.dr-toggle input { position: absolute; opacity: 0; pointer-events: none; }
+
+.dr-toggle input:checked + .dr-toggle-box::before,
+.dr-toggle input:checked + .dr-toggle-box::after {
+  content: "";
+  position: absolute;
+  background: var(--dr-c-cut);
+}
+
+.dr-toggle input:checked + .dr-toggle-box::before { left: 50%; top: 1px; bottom: 1px; width: var(--dr-w-line); }
+.dr-toggle input:checked + .dr-toggle-box::after { top: 50%; left: 1px; right: 1px; height: var(--dr-w-line); }
