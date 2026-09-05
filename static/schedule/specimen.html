@@ -14,8 +14,8 @@
   try 0.35"). Not linked from the app and not routed to -- it ships as a
   design artefact and is reached directly at /schedule/specimen.html.
 
-  It carries no logic. The only script is the two switches in the title
-  block, which flip a class and a theme; the geometry below is hand-placed
+  It carries no logic. The only script is the three switches in the title
+  block, which flip two classes and a theme; the geometry below is hand-placed
   the same way calendar.js places it, so what is on this page is what the
   screens will render.
 -->
@@ -76,9 +76,58 @@
   .type-row .dr-micro { flex: 0 0 8.5rem; color: var(--dr-ink-4); }
 
   .note { margin: 0.9rem 0 0; max-width: 62ch; }
+
+  /* Plate 11 only: each texture shown ruled beside drawn. */
+  .tex-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 1.1rem 1.4rem;
+  }
+
+  .tex-cell { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
+  .tex-cell > .dr-micro { grid-column: 1 / -1; color: var(--dr-ink-4); }
+  .tex-cell .specimen-swatch { height: 3.2rem; }
+
+  /* The grain shown in isolation has to be pushed well past its working
+     opacity to be visible at all as a swatch -- at 0.5 over the whole
+     viewport it is felt rather than seen, which is the point. */
+  .tex-blank { background: var(--dr-paper-2); }
+
+  /* Shown through the real blend rather than as a raw grey rectangle, so the
+     swatch demonstrates what the grain actually does on each material --
+     taking light out of paper, putting light into a plate. */
+  .tex-grain { background: var(--dr-paper-2); position: relative; overflow: hidden; }
+  .tex-grain::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: var(--dr-grain);
+    background-size: var(--dr-grain-size);
+    mix-blend-mode: var(--dr-ink-blend);
+    /* Well past the 0.16/0.09 it runs at on the sheet -- at working strength
+       the tooth is felt rather than seen, which is the point of it, and a
+       swatch has to be seen. */
+    opacity: 0.55;
+  }
+
+  .tex-cross { position: relative; overflow: hidden; }
+  .tex-cross::before,
+  .tex-cross::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+  }
+  .tex-cross::before { background-image: var(--dr-hatch-a-rough); }
+  .tex-cross::after { background-image: var(--dr-hatch-b-rough); }
+  .tex-cross--blend::after { mix-blend-mode: var(--dr-ink-blend); }
 </style>
 </head>
 <body class="drafting">
+
+<!-- The paper. One element, fixed to the viewport, multiplied over everything
+     below it; it never re-renders. Every page that carries class="drafting"
+     needs exactly this one div and nothing else. -->
+<div class="dr-grain" aria-hidden="true"></div>
 
 <div class="sheet">
 
@@ -108,6 +157,11 @@
         Construction layer
       </label>
       <label class="dr-toggle">
+        <input type="checkbox" id="texture-switch" checked>
+        <span class="dr-toggle-box"></span>
+        Texture
+      </label>
+      <label class="dr-toggle">
         <input type="checkbox" id="theme-switch">
         <span class="dr-toggle-box"></span>
         Night print
@@ -117,9 +171,10 @@
   <div class="dr-titleblock-under"></div>
 
   <p class="note dr-body">
-    Every primitive the system defines, drawn once. The two switches above print the
-    same sheet on the other material and with the setting-out taken off — nothing
-    that has to be read may disappear when it is.
+    Every primitive the system defines, drawn once. The three switches above print the
+    same sheet on the other material, with the setting-out taken off, and with the
+    texture taken off — nothing that has to be read may disappear when any of them is,
+    and the system underneath must still stand up with texture gone entirely.
   </p>
 
   <div class="plates">
@@ -200,7 +255,7 @@
       <div class="specimen-row">
         <span class="dr-label">Stipple</span>
         <div class="specimen-swatch dr-tone--stipple"></div>
-        <span class="dr-micro">6px</span>
+        <span class="dr-micro">90px tile</span>
       </div>
       <div class="specimen-row">
         <span class="dr-label">Hatch A</span>
@@ -557,6 +612,72 @@
       </p>
     </section>
 
+    <!-- 11 TEXTURE -->
+    <section class="plate plate--wide">
+      <div class="plate-head">
+        <span class="dr-key-num">11</span>
+        <span class="dr-key-term">Texture</span>
+        <span class="dr-key-leader"></span>
+        <span class="dr-micro">Ruled · drawn — each in isolation</span>
+      </div>
+      <div class="tex-grid">
+        <div class="tex-cell">
+          <span class="dr-micro">Paper tooth — exaggerated</span>
+          <div class="specimen-swatch tex-blank"></div>
+          <div class="specimen-swatch tex-grain"></div>
+        </div>
+        <div class="tex-cell">
+          <span class="dr-micro">Stipple</span>
+          <div class="specimen-swatch" style="background-image: var(--dr-stipple-smooth); background-size: var(--dr-stipple-pitch-smooth);"></div>
+          <div class="specimen-swatch" style="background-image: var(--dr-stipple-rough); background-size: 90px 90px;"></div>
+        </div>
+        <div class="tex-cell">
+          <span class="dr-micro">Hatch A</span>
+          <div class="specimen-swatch" style="background-image: var(--dr-hatch-a-smooth);"></div>
+          <div class="specimen-swatch" style="background-image: var(--dr-hatch-a-rough);"></div>
+        </div>
+        <div class="tex-cell">
+          <span class="dr-micro">Hatch B</span>
+          <div class="specimen-swatch" style="background-image: var(--dr-hatch-b-smooth);"></div>
+          <div class="specimen-swatch" style="background-image: var(--dr-hatch-b-rough);"></div>
+        </div>
+        <div class="tex-cell">
+          <span class="dr-micro">Crosshatch</span>
+          <div class="specimen-swatch" style="background-image: var(--dr-hatch-cross-smooth);"></div>
+          <div class="specimen-swatch" style="background-image: var(--dr-hatch-cross-rough);"></div>
+        </div>
+        <div class="tex-cell">
+          <span class="dr-micro">Cool wash</span>
+          <div class="specimen-swatch" style="background-color: var(--dr-cool-wash-flat);"></div>
+          <div class="specimen-swatch" style="background-image: var(--dr-wash-rough); background-size: 100% 100%;"></div>
+        </div>
+        <div class="tex-cell">
+          <span class="dr-micro">Construction grid</span>
+          <div class="specimen-swatch" style="background-image: var(--dr-grid-smooth);"></div>
+          <div class="specimen-swatch" style="background-image: var(--dr-grid-rough); background-size: var(--dr-grid-rough-size);"></div>
+        </div>
+        <div class="tex-cell">
+          <span class="dr-micro">Crossing strokes — normal · multiply</span>
+          <div class="specimen-swatch tex-cross tex-cross--plain"></div>
+          <div class="specimen-swatch tex-cross tex-cross--blend"></div>
+        </div>
+      </div>
+      <p class="note dr-body">
+        Ruled on the left, drawn on the right. The tooth is stitched fractal noise, so it
+        tiles with no seam and no asset; the hatches vary in density rather than in
+        geometry, because a displaced stroke will not meet its own continuation across a
+        tile edge and a seam every 60px is worse than a straight hairline.
+        <br><br>
+        The last pair is the one that decided the architecture — two hatches crossing, laid
+        over each other normally and then multiplied. They are near enough identical, because
+        dark ink on light paper already darkens under ordinary compositing: 0.2 over 0.2 is
+        0.36. So the surface does not blend every tone, which would cost a compositing layer
+        per band and per arc for a difference nobody can see. It spends blending on the two
+        places it changes the picture: the grain, which must darken the sheet rather than
+        veil it, and the wash, which is colour laid over ink. Nothing that moves carries it.
+      </p>
+    </section>
+
     <!-- 10 SINGLE WIDE COLUMN -->
     <section class="plate plate--wide">
       <div class="plate-head">
@@ -614,6 +735,11 @@
   const construction = document.getElementById("construction-switch");
   construction.addEventListener("change", () => {
     document.body.classList.toggle("dr-no-construction", !construction.checked);
+  });
+
+  const texture = document.getElementById("texture-switch");
+  texture.addEventListener("change", () => {
+    document.body.classList.toggle("dr-no-texture", !texture.checked);
   });
 
   const themeSwitch = document.getElementById("theme-switch");

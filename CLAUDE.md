@@ -55,8 +55,10 @@ These are not preferences. Violating one means the change gets reverted.
    a drawing has no depth — so borders and rules are not only allowed but are the entire
    hierarchy, and this rule's ban on them does not apply. The two systems are not to be
    reconciled; rule 6 still governs `index.html`, `project.html` and the graph pages exactly
-   as written. A page opts in by carrying `class="drafting"` on `<body>` and linking
-   `/drafting.css` after `/style.css`; nothing else changes for it.
+   as written. A page opts in by carrying `class="drafting"` on `<body>`, linking
+   `/drafting.css` after `/style.css`, and adding one `<div class="dr-grain">` as the
+   first child of `<body>` — that div is the paper, and a page without it is a drawing
+   floating on nothing.
    **Adoption so far:** the specimen sheet only. `schedule.html` is still neumorphic and
    takes the language when session 9c's screens land — the system was signed off before the
    screens were restyled, deliberately.
@@ -75,6 +77,19 @@ These are not preferences. Violating one means the change gets reverted.
    recurring task) resolves its colour through the single `--dr-construction-ink` property;
    `.dr-no-construction` on the root blanks it and the whole layer goes with no re-render.
    Nothing that has to be read at 8am may live in that layer or carry `.dr-construction`.
+   **Physicality is texture, and it comes off in one class too.** Paper tooth, toothed
+   hatching and the ragged wash live in section 1b of `drafting.css` and are switched off
+   by `.dr-no-texture`, which repoints the four tones at their `--smooth` twins. Those
+   twins are not dead code: the ruled system underneath has to stand up on its own, and if
+   the drawing only reads with texture on, the texture is doing work the system should be.
+   **Texture is never live.** Every grain, hatch, stipple and wash is an SVG data URI used
+   as a `background-image`, so its `feTurbulence` runs once in the image decoder. There is
+   not one `filter:` in the file, and exactly one `mix-blend-mode` layer (the grain, plus a
+   wash wherever one is drawn) — because a live filter or a blend is recomputed whenever
+   the element moves, and this calendar re-renders on every drag. **A task block carries no
+   filter, no blend and no mask, ever.** Its edges are ruled lines, which is what the
+   subject of a drawing is anyway. Every `feTurbulence` is seeded explicitly; an unseeded
+   one may differ between renders and the drawing would shimmer.
 7. **Raw `sqlite3`, no ORM.** Schema as string constants at the top of `db.py`, registered in `init_db()`, accessed through the `get_conn()` context manager. No SQLAlchemy, no models, no service layer.
 8. **Derived data gets its own table**, versioned and recomputable — never extra columns on `reference_items`. `colour_analysis` and `captures` both follow this.
 
