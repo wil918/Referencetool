@@ -57,15 +57,15 @@
 
 .drafting {
   /* --- Ground: paper ---------------------------------------------------
-     Near-white, with only enough warmth left in it to keep the sheet from
-     reading as screen-white or as grey -- five or six points of red over
-     blue, not the twenty that made it cream. --dr-paper-2 is a second sheet
-     laid under the first (a well, a header strip); --dr-paper-3 is the
-     deepest recess. All three are opaque, because a block has to cover the
-     tone of the band behind it. */
-  --dr-paper: #faf9f5;
-  --dr-paper-2: #f2f1ea;
-  --dr-paper-3: #e8e7de;
+     Barely off the screen's own white, with two or three points of red over
+     blue left in it -- just enough that the sheet is not the browser's #fff
+     and not grey either, and nowhere near the twenty points that made it
+     cream. --dr-paper-2 is a second sheet laid under the first (a well, a
+     header strip); --dr-paper-3 is the deepest recess. All three are opaque,
+     because a block has to cover the tone of the band behind it. */
+  --dr-paper: #fcfcfa;
+  --dr-paper-2: #f4f4f0;
+  --dr-paper-3: #eaeae5;
 
   /* --- Ink: one warm graphite at five densities ------------------------
      Every line tone, hatch and type colour in the system is an alpha of this
