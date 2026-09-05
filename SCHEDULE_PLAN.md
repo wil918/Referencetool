@@ -2,9 +2,11 @@
 
 Nineteen sessions. Scope, data model and reasoning live in `SCHEDULE_SCOPE.md`; read that first if anything here seems arbitrary. Conventions come from `CLAUDE.md`, which Claude Code loads automatically.
 
-**Status: sessions 1–5 complete. Next up: session 6, then the new 6b.**
+**Status: sessions 1–9 complete, plus 6b. Next up: 9a (timetable detail) → 9b (schedule shell) → 9c (drafting language) → session 10.**
 
-**Known gap, deferred to session 9:** session 4 says to compute `available_minutes` "from working hours minus commitments" but never defines where working hours come from, and the scope document's data model omits them entirely. Session 4 correctly inferred a `working_hours` table and `GET/PUT /api/working-hours`, but nothing told it to build a UI, so there isn't one — and with no rows, every weekday has zero capacity and everything lands on the at-risk list. Not a deviation; my omission. Do not confuse this with `location_hours`, which is when a *place* is open; `working_hours` is when *you* are willing to work.
+The working-hours gap noted after session 4 is closed — `static/schedule/hours-editor.js` and the draggable bands in `calendar.js` both landed in session 9. Keep the distinction in mind regardless: `location_hours` is when a *place* is open, `working_hours` is when *you* are willing to work, and a later session will try to merge them.
+
+**Built beyond the plan, all sensible:** `schedule/settings.js` and `bedtime-watch.js`; the calendar extended through 12am–4am so late events render; a scoped schedule reset (`test_schedule_reset.py`) for clearing test data without touching the archive.
 
 ---
 
@@ -20,14 +22,14 @@ Two different levers. **Thinking level buys care** — working through edge case
 
 | Model | Sessions | Why |
 |---|---|---|
-| Opus | 5, 6 | The scheduler and its constraints. Several dimensions interacting at once, where a structural mistake is expensive downstream and a spec cannot fully pre-empt a bad interaction. |
+| Opus | 5, 6, 9c, 9d | The scheduler and its constraints, and the visual language. Several dimensions interacting at once, where a structural mistake is expensive downstream and a spec cannot fully pre-empt a bad interaction. |
 | Sonnet | everything else | Shape already fixed by the prompt; the level does the work. |
 
 | Level | Sessions |
 |---|---|
 | `medium` | 3, 10, 11, 12, 13, 14, 19 |
-| `high` | 1, 2, 4, 6b, 7, 8, 9, 15, 16, 17, 18 |
-| `max` | 5, 6 |
+| `high` | 1, 2, 4, 6b, 7, 8, 9, 9a, 9b, 15, 16, 16b, 17, 18 |
+| `max` | 5, 6, 9c, 9d |
 | `ultracode` | none — reserve for a debugging emergency |
 
 **Opus earns its cost more on debugging than on building.** Against a detailed prompt, Sonnet builds well. When a session's output misbehaves in a way you cannot immediately explain — the scheduler placing things oddly, a replan that is not idempotent, a constraint firing when it should not — that is when to switch models and re-open the problem. Reaching for it by default spends budget on work the prompt has already de-risked.
@@ -780,6 +782,389 @@ shadow variables. A calendar is exactly where a stray 1px border creeps in.
 
 ---
 
+### Session 9a — Timetable detail and location grouping
+
+**Delivers:** the structured fields the feed already carries, and a location hierarchy that separates *where you are going* from *how long it takes to get there*.
+
+**Why before 9b:** 9b restyles the schedule surface. Styling it against the current single-title block and then adding five fields afterwards means doing that work twice.
+
+**Model:** Sonnet 5, `high` · 3–4 h · 280–380k tokens · ~1 window
+
+````
+Read ics_import.py (particularly parse_events and sync_feed), db.py's
+COMMITMENTS and LOCATIONS schema, scheduling.py's travel_minutes, and
+static/schedule/calendar.js's block rendering first.
+
+Two problems, related.
+
+1. THE IMPORT THROWS AWAY MOST OF THE EVENT. parse_events returns only
+   {external_uid, title, start, end}. LOCATION and DESCRIPTION are parsed and
+   discarded, so every imported commitment shows a bare module code and has a
+   null location. The feed is not at fault -- the parser is.
+
+   START BY LOOKING AT THE REAL DATA. The user's feed URL is already stored;
+   fetch it and print a few complete VEVENTs before writing any parsing code.
+   Institutional timetables pack several fields into SUMMARY, LOCATION and
+   DESCRIPTION in a house format, and guessing that format will produce a
+   parser that works on nothing. Write the parser against what is actually
+   there, and keep the raw values so a later reparse is possible without
+   re-fetching.
+
+   Extract, where present:
+     delivery_type   Optional event, Studio, Lecture, Induction, Workshop
+     site            A Building, E Building, Forum, Online
+     room            e.g. E1.01
+     details         what the session actually is -- CLO3D, Briefing
+     module_name     THE IMPORTANT ONE
+     module_code     e.g. 5FADE002W
+     lecturer
+
+   Store them as JSON in a new commitments.meta column rather than seven
+   columns. This is parsed source data whose shape will change when the
+   university changes its export -- the same reasoning as deliverables.spec.
+   Anything the parser cannot confidently identify goes in raw form rather than
+   being guessed at or dropped.
+
+   Re-syncing must repopulate meta on existing rows, not only on new ones, or
+   the 96 commitments already imported stay bare.
+
+2. LOCATIONS CONFLATE DISPLAY WITH TRAVEL. The Studio and the Library are
+   different places you need to be told apart, but they are in the same
+   building and the travel time is identical. Right now one location must serve
+   both purposes and cannot.
+
+   Add locations.parent_location_id, nullable. A specific place (Studio,
+   Library, E1.01) points at an umbrella (Harrow Campus). Then:
+
+     - DISPLAY uses the specific location. "Studio 3", not "Harrow Campus".
+     - TRAVEL resolves each location to the root of its parent chain before
+       any lookup. Two places under the same umbrella are zero travel apart,
+       however different their names. travel_minutes_from_home and
+       location_travel rows are held at the UMBRELLA level; a child with no
+       parent behaves exactly as today.
+
+   This is the whole point: two blocks on the same day in different rooms of
+   the same building must not generate a travel block between them.
+
+   Guard the parent chain -- a location cannot be its own ancestor, and depth
+   is one level in practice. Reject a cycle rather than looping forever.
+
+   ONLINE is a special case. An online session has no travel from anywhere, and
+   -- this part is subtle -- it does not change where you are. A Studio block,
+   then an online lecture, then another Studio block must produce no travel at
+   all. Model it as a flag on the location, not as a magic name string.
+
+   Map the feed's `site` onto locations on import, creating them under a
+   configurable default umbrella when unseen, so the 96 existing commitments
+   acquire locations without hand-entry. Never invent a travel time for a newly
+   created location; leave it unset and let the user fill it in.
+
+3. DISPLAY. On the week and day views a block shows: module name (largest),
+   delivery type and room, its times, and -- where travel applies -- the travel
+   time and the time to leave, derived from the resolved umbrella.
+
+   Clicking a block opens the rest: module code, lecturer, details, site, and
+   the raw values the parser could not classify. Keep the block itself sparse;
+   a calendar cell that tries to show seven fields shows none of them.
+
+   Follow the established block styling -- background: var(--bg) with
+   --raise-sm, no fills, no borders, hierarchy from size and weight.
+
+Tests: a real VEVENT from the user's feed parses into the expected meta fields;
+re-sync backfills meta on an existing row; two locations sharing an umbrella
+resolve to zero travel; an umbrella-less location behaves as before; a parent
+cycle is rejected; an online session generates no travel and does not change
+the current location for the next block.
+````
+
+**Exit criteria:** imported events show module name, type and room; two rooms in one building generate no travel between them; an online session breaks no journeys; nothing in the feed is silently discarded.
+
+---
+
+### Session 9b — Schedule shell: its own page, its own front door
+
+**Delivers:** the schedule and tasks lifted out of the archive SPA into a standalone page, which becomes what the app opens on. Structure only — the visual language is session 9c.
+
+**Why before session 10:** the day and month views mount into this shell. Building them inside `index.html` first and moving them afterwards means doing the work twice.
+
+**Model:** Sonnet 5, `high` · 3–4 h · 280–380k tokens · ~1 window
+
+````
+Read static/index.html, static/app.js, static/tasks.js, every module in
+static/schedule/, static/project.html and static/project/main.js (the existing
+standalone-page pattern), app.py's index route, and CLAUDE.md first.
+
+Move the schedule and tasks onto their own page. This is a restructure, not a
+rewrite: the modules already exist and mostly work. Do not redesign the
+scheduler, the task model or the calendar component's behaviour.
+
+1. NEW PAGE. static/schedule.html with its own entry, static/schedule/main.js,
+   following the precedent of project.html and graph.html rather than inventing
+   a new pattern. It reuses style.css so the neumorphic system and dark mode
+   carry over untouched.
+
+   It holds what are currently the Tasks and Schedule tabs, plus the schedule's
+   own settings, as its own navigation. Tasks and the calendar belong together
+   -- they are one workflow -- so keep them on this page, not split.
+
+2. STRIP THE ARCHIVE SPA. index.html loses the Tasks and Schedule tabs; app.js
+   loses its imports of tasks.js, schedule/schedule.js, schedule/settings.js
+   and schedule/bedtime-watch.js, and the initLocationsManager call at the
+   bottom -- locations are schedule configuration and move with it.
+
+   Split the Settings tab: dark mode, similarity scores and colour analysis
+   stay in the archive; everything schedule-related moves. Do not leave a
+   settings surface that spans both.
+
+   Verify every remaining archive tab still works afterwards, including the
+   #archive and #ref= deep links.
+
+3. FRONT DOOR. GET / now serves schedule.html. The 3D graph stays reachable at
+   /graph.html, which already works through static serving -- only the index
+   route changes.
+
+   Update CLAUDE.md's Frontend table in the same commit: it currently states
+   graph.html "is the homepage -- GET / serves it, not index.html", which this
+   makes false. A standing-context file that lies is worse than one that is
+   silent. Add schedule.html to that table too.
+
+   bedtime-watch.js follows to this page. That is an improvement, not a
+   regression: the bedtime notification only fires while the app is open, and
+   the schedule is now what is open.
+
+4. CROSS-NAVIGATION. A clear way between the three surfaces -- schedule,
+   archive (index.html), and the 3D graph. Consistent placement on each. Do not
+   reinstate a header on project.html, which deliberately has none.
+
+5. NO VISUAL WORK IN THIS SESSION. The schedule's visual language is being
+   replaced wholesale in session 9c -- a drafting aesthetic that is deliberately
+   incompatible with the current neumorphic styling. Restyling here would be
+   thrown away.
+
+   Carry the existing styles across as they are. Keep the markup semantic and
+   the class names honest so 9c has something clean to restyle: a band is a
+   band, a block is a block, chrome is chrome.
+
+Verify by hand: every archive tab still works; the schedule page carries tasks,
+calendar and its settings; GET / opens the schedule; /graph.html and
+/project.html are unaffected; dark mode is correct on the new page; the week
+still renders and the band drag still works.
+
+Run the full pytest suite -- route changes are easy to break tests with.
+````
+
+**Exit criteria:** the archive and the schedule are separate surfaces, the app opens on the schedule, nothing that worked before is broken, and `CLAUDE.md` reflects the new front door.
+
+---
+
+### Session 9c — The drafting language
+
+**Delivers:** a technical-drawing visual system, defined once and applied to the schedule surface.
+
+**Reference:** architectural section drawings, medieval treatises, anatomical plates, astronomical charts, urban plans; Chloé Vanderstraeten's *Embryon* series. White paper ground, hierarchy from line weight, construction geometry left visible, tone from hatching, colour scarce and muted, small letterspaced annotation, orthographic discipline.
+
+**This suspends hard rule 6 on the schedule surface.** Neumorphism is soft, shadow-based and forbids borders; drafting is flat, linear and made of hairlines. They do not blend. Rule 6 continues to govern the archive, the project shell and everything else until a later session migrates them.
+
+**Model:** Opus 5, `max` · 4–5 h · 350–500k tokens · 1–1.5 windows
+**Why Opus:** this is a visual system to be invented and then applied consistently, not a spec to implement. The risk is incoherence across twenty surfaces, which is exactly what a stronger model holds in mind.
+
+````
+LOOK AT design-references/ FIRST -- all four images and the README. They are
+the brief. Prose cannot carry a visual language, and everything below assumes
+you have actually seen them.
+
+Then read static/style.css (the custom properties at the top especially),
+static/schedule/calendar.js, the schedule markup as session 9b left it, and
+CLAUDE.md's hard rule 6.
+
+Build a technical-drafting visual language for the schedule surface. Reference:
+architectural section drawings, medieval medical treatises, anatomical plates,
+astronomical maps, urban plans -- and Chloe Vanderstraeten's Embryon series.
+
+This DELIBERATELY REPLACES the neumorphic styling on this surface. Do not try
+to reconcile the two. Rule 6 still governs everywhere else; scope every new
+rule so nothing outside the schedule changes.
+
+1. THE SYSTEM FIRST, THE SCREENS SECOND. Define it as custom properties in one
+   place -- line weights, hatch patterns, the annotation type scale, the two
+   accents -- then build every surface from those. A language invented per
+   screen is not a language.
+
+   - GROUND is paper. Near-white, warm rather than blue. Not grey.
+   - LINE carries the hierarchy. Three or four weights, hairline to structural.
+     Nothing is bold; things are heavier.
+   - TONE is hatching and stipple, never a flat fill. Bands, unavailable hours
+     and disabled states are hatched at different pitches and angles.
+   - COLOUR is scarce. One red for annotation, warning and now, at the weight
+     of a fine pen line -- the existing --accent (#c23b2e) is already right. One
+     cool wash for secondary emphasis. Nothing else. Colour is never a fill
+     behind text.
+   - TYPE is small, uppercase, letterspaced for labels; sentence case for
+     content. Numbered keys with leader lines instead of tooltips.
+
+2. VENDOR A DRAFTING TYPEFACE into static/vendor/fonts/, the same way Ballet
+   already is -- an @font-face, no build step, no CDN.
+
+   Choose something condensed and technical: a drafting face in the ISO 3098
+   tradition, or a condensed grotesque. VERIFY THE LICENCE PERMITS
+   REDISTRIBUTION and record it beside the file. Do not vendor a font you
+   cannot confirm is open-licensed.
+
+   Bind it to a new custom property; do not repurpose --display, which is Ballet
+   and belongs to the archive.
+
+3. CONSTRUCTION GEOMETRY IS VISIBLE. This is the point of the references -- the
+   setting-out is part of the drawing rather than cleaned away.
+
+   - the hour axis is a measured rule with tick marks and extension lines, not
+     a list of times
+   - grid lines extend fractionally past their content, as drawn rules do
+   - deadlines are marked with compass arcs struck from the deadline point
+   - recurring tasks show ghosted repetitions at their other occurrences, faint,
+     the way a rotating mechanism is drawn through its arc
+   - travel is a dashed leader line between blocks, not a solid block
+   - block detail opens as a numbered key with leader lines, not a tooltip
+
+   CRITICAL CONSTRAINT: the construction layer is TEXTURE, never information.
+   It sits far back -- very low opacity, hairline only -- and must never
+   compete with what you actually need to read. In every reference image the
+   setting-out is faint and the subject is dark; hold that ratio. A calendar
+   checked every morning that takes effort to parse has failed regardless of
+   how it looks.
+
+   Put the construction layer behind one toggle so it can be turned off, and
+   make sure the surface still reads correctly without it.
+
+4. PERFORMANCE. Arcs, hatches and ghosts multiply fast across a week of forty
+   blocks. Draw the construction layer once per render rather than per block
+   where possible, prefer CSS patterns to per-element SVG, and check that
+   dragging a block or resizing a band still feels immediate. If it does not,
+   simplify the geometry rather than accepting the lag.
+
+5. DARK MODE. A paper aesthetic has no natural dark equivalent, and inverting
+   to white-on-black looks like a negative rather than a drawing. Treat dark
+   mode as a different material -- a dark ground with light lettering, the way
+   an astronomical chart is printed -- rather than an inversion. Both modes must
+   work; neither should look like the other's mistake.
+
+6. Update CLAUDE.md: record that rule 6 does not apply to the schedule surface,
+   what governs it instead, and where the language is defined. A standing rule
+   with an unrecorded exception is worse than no rule.
+
+BUILD A SPECIMEN PAGE BEFORE ANY SCREEN. static/schedule/specimen.html, a
+static page showing every primitive the system defines: each line weight
+against the ground, each hatch pattern, the full type scale, both accents, and
+a block in every state -- task, timetabled, travel, prep, break, at-risk,
+locked, ghosted. It is not linked from the app and ships as a design artefact.
+
+This exists because you cannot see what you build. The specimen renders in one
+screenshot the user can react to precisely -- "the hairline is too heavy, try
+0.35" -- instead of them describing a whole calendar in prose. Get it approved
+before restyling a single screen; the system is the deliverable, the screens
+are its application.
+
+Verify by hand: the WEEK view at a glance -- can you find today's next block in
+under a second? Turn the construction layer off and confirm nothing essential
+vanished. Check the archive and project shell are visually unchanged.
+
+The day and month views do not exist yet; sessions 10 and 11 build them in this
+language. Define the primitives they will need -- a single wide column, and a
+monthly grid with no hourly axis -- rather than only what a seven-column week
+happens to use.
+````
+
+**Exit criteria:** the schedule reads as a technical drawing, remains scannable in under a second, the construction layer is decorative rather than load-bearing, and nothing outside the schedule changed.
+
+---
+
+### Session 9d — Physical texture: ink, graphite, paper
+
+**Delivers:** the analogue delicacy the flat system misses — irregular strokes, pencil tooth in the hatching, ink wash, paper grain.
+
+**Runs before 9c's screens are restyled.** Texture belongs in the system, not applied to screens afterwards. Adoption is currently the specimen sheet only, which is exactly the right moment.
+
+**Model:** Opus 5, `max` · 3–4 h · 300–420k tokens · ~1 window
+
+````
+Look at design-references/ again -- all four images, closely. Then read
+static/drafting.css in full and static/schedule/specimen.html.
+
+The system is correct but reads as generated rather than drawn. The cause is
+regularity: a CSS hairline is identical along its whole length, where graphite
+varies in density, ink pools where the pen slows, and paper tooth catches
+pigment unevenly. Physicality comes from variation, not from style.
+
+Three things must work together. Any one alone reads as a filter.
+
+1. PAPER GROUND. A tooth over the whole surface, so ink sits ON something
+   rather than floating. Two routes -- pick one and say why in a comment:
+     - procedural: an SVG feTurbulence fractal noise layer, desaturated, very
+       low opacity, fixed to the viewport. No asset, no seams, free.
+     - scanned: a real paper tile vendored under static/vendor/textures/ with
+       its licence beside it, as the font is. More authentic because it IS
+       physical; costs an asset and needs care at the tile seams.
+   Whichever, it is ONE element that never re-renders, and it must not tint the
+   ground -- paper is texture, not colour.
+
+2. INK BEHAVIOUR. Two cheap changes that do most of the work:
+     - mix-blend-mode: multiply on ink against the paper. Crossing strokes
+       darken where they overlap, exactly as pen does. This single property
+       buys more authenticity than any filter.
+     - irregularity via feTurbulence + feDisplacementMap on strokes. Keep the
+       displacement SMALL -- around 1-2 units. Enough that no line is
+       mechanically straight, not so much that it looks shaky. A drawing is
+       precise AND handmade; wobble reads as neither.
+   Seed every feTurbulence explicitly. An unseeded filter can differ between
+   renders and the drawing will shimmer.
+
+3. GRAPHITE AND WASH.
+     - hatching gets tooth: displace the pattern slightly rather than ruling it
+       perfectly, so the pitch breathes
+     - tone becomes wash: turbulence plus a gaussian blur, uneven at its edges
+       and pooling unevenly within, replacing flat opacity
+   Both resolve their colour through the existing properties. Do not introduce
+   a new colour to carry texture.
+
+PERFORMANCE IS THE ARCHITECTURE HERE, not an afterthought. SVG filters are
+expensive and this calendar re-renders on every drag. Separate the layers by
+whether they move:
+
+  never moves    paper grain, the construction layer -- filter freely, once
+  moves rarely   bands, axis, chrome -- light filtering acceptable
+  moves on drag  task blocks -- NO FILTERS AT ALL
+
+  A dragged block must not carry a filter. Give moving elements their
+  irregularity through pre-rendered means -- a displaced border-image, a
+  background pattern that is already rough -- not a live filter recomputed each
+  frame. Check a drag still feels immediate; if it does not, remove effects
+  until it does. Legibility and responsiveness both outrank texture.
+
+DARK MODE IS A DIFFERENT MATERIAL. Paper grain inverted is not dark paper, it
+is a photographic negative. On dark, think of what these drawings become when
+printed as a plate or a blueprint -- the ground is a surface that emits rather
+than absorbs, and multiply becomes screen. Design it as its own material rather
+than flipping the light one, per the note already in drafting.css's dark
+handling.
+
+Every value stays at the top of drafting.css under the .drafting scope, as
+before -- turbulence frequencies, displacement scales, grain opacity. Nothing
+further down the file introduces its own.
+
+Update the specimen sheet to show each texture on and off, so the contribution
+of each is inspectable in isolation. Add a .dr-no-texture root class that
+blanks all of it, matching .dr-no-construction -- if texture ever costs too
+much on a slower machine, it should come off in one class.
+
+Verify: turn texture off and confirm the system still reads correctly
+underneath. Drag a block across a week and confirm no frame drops. Check both
+themes. Then look at the specimen beside design-references/01 and 02 -- closer
+or merely busier? If busier, reduce.
+````
+
+**Exit criteria:** the surface reads as drawn rather than rendered, drags stay immediate, both themes work as their own material, and every effect can be switched off in one class.
+
+---
+
 ### Session 10 — Day view
 
 **Model:** Sonnet 5, `medium` · 2–3 h · 150–250k tokens · ~0.75 window
@@ -790,6 +1175,16 @@ Read static/schedule/calendar.js from session 9 first.
 Mount the shared component as a single-day view. If it needs week-specific
 assumptions removed to do this, remove them -- that is the point of session 9
 having built it as a component.
+
+BUILD IT IN THE DRAFTING LANGUAGE session 9c defines. Read design-references/
+and static/schedule/specimen.html first, and use the system's tokens -- line
+weights, hatches, annotation type, the two accents. Do not invent treatment for
+this view, and do not fall back to the neumorphic styling that still governs
+the rest of the app. If a primitive you need is missing, add it to the system
+rather than styling locally.
+
+Set snapToWeek false here -- a single-day view showing Monday when you asked
+for Thursday would be nonsense. That option exists for exactly this.
 
 Beyond the layout:
 - Today's energy, shown and adjustable inline. This is the daily check-in and
@@ -827,6 +1222,18 @@ week, a finishing buffer that overlaps a trip. Clicking a day opens the day view
 
 Do not try to render every block. A month of packed rectangles tells you
 nothing.
+
+BUILD IT IN THE DRAFTING LANGUAGE session 9c defines -- read design-references/
+and static/schedule/specimen.html first.
+
+This is the surface where the construction geometry earns its keep. A month has
+no hourly axis and little text, so it is closest to the astronomical chart and
+urban plan among the references: compass arcs struck from each deadline,
+projection lines running across weeks, density read as tone rather than as
+counted blocks. Take it further here than on the week view.
+
+The constraint still holds -- the construction layer is texture, not
+information. A month you cannot read at a glance has failed however well drawn.
 ````
 
 **Exit criteria:** deadline collisions and overloaded weeks are visible at a glance.
@@ -998,6 +1405,51 @@ schedule module built so far.
 
 ---
 
+### Session 16b — Migrate the archive to the drafting language
+
+**Delivers:** one visual language across the app, replacing neumorphism outside the 3D pages.
+
+**Deliberately last.** The drafting system should live on the schedule surface for a while first — long enough to know which parts work daily and which were only good in a mockup. Migrating on the strength of a first impression means doing it twice.
+
+**Model:** Sonnet 5, `high` · 3–4 h · 280–380k tokens · ~1 window
+
+````
+Read the drafting system defined in session 9c, static/style.css, and
+CLAUDE.md's hard rule 6 first.
+
+Apply the schedule's drafting language to index.html (Add, Archive, Projects,
+Settings) and the project shell. Use the system as it stands; do not redesign it
+on the way — if something needs changing, change it at the definition so both
+surfaces move together.
+
+The 3D pages (graph.html, connections.html, colour-connections.html) are OUT OF
+SCOPE. They are WebGL scenes whose palette lives in graph-common.js, not CSS,
+and their existing treatment already suits them.
+
+Two things that need real thought rather than mechanical substitution:
+
+- THE IMAGE GRID. An archive of photographs on a paper ground is a different
+  problem from a calendar: the images bring their own colour and the drawing
+  language has to frame rather than compete. Look at how plates are set in the
+  reference works — ruled borders, captions below, generous margins — rather
+  than making cards into outlined boxes.
+
+- PROJECT WIDGETS keep their flat-at-rest rule, which was always closer to
+  drafting than to neumorphism. config.shadow becomes meaningless under the new
+  system; decide whether it dies or becomes a ruled border, and migrate the
+  stored value rather than orphaning it.
+
+Rewrite hard rule 6 in CLAUDE.md to describe what the app now actually does,
+and remove the schedule exception added in 9c — there is no longer an exception
+to make.
+
+Verify every page by hand, both modes.
+````
+
+**Exit criteria:** one language across the app, the 3D pages untouched, `CLAUDE.md` describing reality.
+
+---
+
 ## Phase 4 — Phone companion
 
 ### Session 17 — Remote access and the phone day view
@@ -1150,6 +1602,10 @@ solves the size problem at the same time.
 | 7 | Replan, outcomes, at-risk | Sonnet `high` | 3–4 | 250–350k | 1 |
 | 8 | Estimator | Sonnet `high` | 3–4 | 250–350k | 1 |
 | 9 | Week view | Sonnet `high` | 3–4 | 250–350k | 1 |
+| 9a | Timetable detail, location grouping | Sonnet `high` | 3–4 | 280–380k | 1 |
+| 9b | Schedule shell and front door | Sonnet `high` | 3–4 | 280–380k | 1 |
+| 9c | The drafting language | **Opus** `max` | 4–5 | 350–500k | 1–1.5 |
+| 9d | Physical texture | **Opus** `max` | 3–4 | 300–420k | 1 |
 | 10 | Day view | Sonnet `medium` | 2–3 | 150–250k | 0.75 |
 | 11 | Month view | Sonnet `medium` | 2–3 | 150–250k | 0.6 |
 | 12 | Deliverables UI | Sonnet `medium` | 2–3 | 150–250k | 0.6 |
@@ -1157,10 +1613,11 @@ solves the size problem at the same time.
 | 14 | Resource archive | Sonnet `medium` | 2–3 | 150–250k | 0.6 |
 | 15 | Brief import, concept analysis | Sonnet `high` | 3–4 | 250–350k | 1 |
 | 16 | Project integration, hardening | Sonnet `high` | 2.5–3.5 | 200–300k | 0.75 |
+| 16b | Migrate archive to drafting language | Sonnet `high` | 3–4 | 280–380k | 1 |
 | 17 | Remote access, phone day view | Sonnet `high` | 3–4 | 250–350k | 1 |
 | 18 | Offline cache and sync queue | Sonnet `high` | 3–4 | 250–350k | 1 |
 | 19 | Photo capture | Sonnet `medium` | 1.5–2.5 | 120–200k | 0.5 |
-| | **Total** | | **55–72 h** | **4.5–6.3M** | **17–18** |
+| | **Total** | | **71–93 h** | **6.1–8.4M** | **22–24** |
 
 Roughly four weeks at a window a day. Sessions 1–8 are the product; 9–16 make it usable; 17–19 make it portable. Stopping after 16 leaves a complete desktop application.
 

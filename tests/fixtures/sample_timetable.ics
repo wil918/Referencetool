@@ -1,0 +1,194 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//University of Westminster//Timetable//EN
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+X-WR-CALNAME:BA Fashion Design - Level 5
+X-WR-TIMEZONE:Europe/London
+BEGIN:VTIMEZONE
+TZID:Europe/London
+BEGIN:DAYLIGHT
+TZOFFSETFROM:+0000
+TZOFFSETTO:+0100
+TZNAME:BST
+DTSTART:19700329T010000
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU
+END:DAYLIGHT
+BEGIN:STANDARD
+TZOFFSETFROM:+0100
+TZOFFSETTO:+0000
+TZNAME:GMT
+DTSTART:19701025T020000
+RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:ctx-studies-l5@westminster.ac.uk
+DTSTAMP:20260921T090000Z
+DTSTART;TZID=Europe/London:20260928T100000
+DTEND;TZID=Europe/London:20260928T113000
+SUMMARY:Contextual Studies: Material Cultures
+LOCATION:Regent Street\, Lecture Theatre B
+DESCRIPTION:Level 5 lecture series. Reading posted on Blackboard the Frid
+ ay before each session\; seminar preparation is expected and contributes
+  to the module.
+CATEGORIES:LECTURE
+RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=5
+EXDATE;TZID=Europe/London:20261019T100000
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:patterncut-l5@westminster.ac.uk
+DTSTAMP:20260921T090000Z
+DTSTART;TZID=Europe/London:20260929T100000
+DTEND;TZID=Europe/London:20260929T130000
+SUMMARY:Pattern Cutting Workshop (Group B)
+LOCATION:Harrow Campus\, Studio 3
+DESCRIPTION:Tutor-led. Bring block\\\, calico and full kit\; you have pri
+ ority for tutor time in this session.
+CATEGORIES:WORKSHOP
+RRULE:FREQ=WEEKLY;BYDAY=TU;COUNT=5
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:patterncut-l5@westminster.ac.uk
+DTSTAMP:20260921T090000Z
+DTSTART;TZID=Europe/London:20261020T100000
+DTEND;TZID=Europe/London:20261020T160000
+RECURRENCE-ID;TZID=Europe/London:20261020T100000
+SUMMARY:Tailoring Masterclass: canvas\, tape and roll line
+LOCATION:Harrow Campus\, Studio 5
+DESCRIPTION:Replaces the usual workshop this week. Visiting tailor\; whol
+ e-day session.
+CATEGORIES:WORKSHOP
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:clo3d-l5@westminster.ac.uk
+DTSTAMP:20260921T090000Z
+DTSTART;TZID=Europe/London:20260930T100000
+DTEND;TZID=Europe/London:20260930T130000
+SUMMARY:CLO3D Digital Design
+LOCATION:Harrow Campus\, Mac Suite 2
+DESCRIPTION:Digital pattern development. Sessions build on each other\; b
+ ring your file.
+CATEGORIES:WORKSHOP
+RRULE:FREQ=WEEKLY;BYDAY=WE;COUNT=5
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:design-studio-l5@westminster.ac.uk
+DTSTAMP:20260921T090000Z
+DTSTART;TZID=Europe/London:20261001T100000
+DTEND;TZID=Europe/London:20261001T170000
+SUMMARY:Design Studio
+LOCATION:Harrow Campus\, Studio 3
+DESCRIPTION:Supervised studio. Sewing technician present all day\; patter
+ n cutting tutors available. From week 3 this becomes project time rather
+  than taught content.
+CATEGORIES:STUDIO
+RRULE:FREQ=WEEKLY;BYDAY=TH;COUNT=5
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:tutorial-l5@westminster.ac.uk
+DTSTAMP:20260921T090000Z
+DTSTART;TZID=Europe/London:20261002T140000
+DTEND;TZID=Europe/London:20261002T142000
+SUMMARY:One-to-one Tutorial (20 min slot)
+LOCATION:Harrow Campus\, Studio 3
+DESCRIPTION:Fortnightly. Bring current development work\; sign up on the 
+ sheet.
+CATEGORIES:TUTORIAL
+RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=FR;COUNT=3
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:interim-review-l5@westminster.ac.uk
+DTSTAMP:20260921T090000Z
+DTSTART;TZID=Europe/London:20261013T130000
+DTEND;TZID=Europe/London:20261013T170000
+SUMMARY:Interim Review: concept and research
+LOCATION:Harrow Campus\, Studio 3
+DESCRIPTION:Pin up research\\\, initial concept and early development. Fo
+ rmative feedback\; attendance counts toward professional practice.
+CATEGORIES:REVIEW
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:archive-visit-l5@westminster.ac.uk
+DTSTAMP:20260921T090000Z
+DTSTART;TZID=Europe/London:20261007T140000
+DTEND;TZID=Europe/London:20261007T170000
+SUMMARY:Westminster Menswear Archive: guided visit
+LOCATION:Harrow Campus\, Menswear Archive
+DESCRIPTION:Booked session. Bring a sketchbook\; photography permitted wi
+ thout flash.
+CATEGORIES:FIELD TRIP
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:fabric-sourcing-l5@westminster.ac.uk
+DTSTAMP:20260921T090000Z
+DTSTART;TZID=Europe/London:20261009T110000
+DTEND;TZID=Europe/London:20261009T160000
+SUMMARY:Fabric sourcing: Goldhawk Road
+LOCATION:Goldhawk Road\, W12
+DESCRIPTION:Self-directed. Collect swatches\; note fibre content\\\, weig
+ ht and price per metre for the costing sheet.
+CATEGORIES:FIELD TRIP
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:presentation-l5@westminster.ac.uk
+DTSTAMP:20260921T090000Z
+DTSTART;TZID=Europe/London:20261026T130000
+DTEND;TZID=Europe/London:20261026T160000
+SUMMARY:Group presentation: research direction
+LOCATION:Harrow Campus\, Studio 3
+DESCRIPTION:Ten minutes each plus questions.
+CATEGORIES:CRIT
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:handin-l5@westminster.ac.uk
+DTSTAMP:20260921T090000Z
+DTSTART;VALUE=DATE:20261030
+DTEND;VALUE=DATE:20261031
+SUMMARY:Project hand-in (13:00)
+LOCATION:Harrow Campus
+DESCRIPTION:PDF portfolio and physical prototype.
+CATEGORIES:DEADLINE
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:birthday-peckham@personal
+DTSTAMP:20260921T090000Z
+DTSTART;TZID=Europe/London:20261017T200000
+DTEND;TZID=Europe/London:20261018T013000
+SUMMARY:Ollie's birthday - Peckham
+LOCATION:Peckham
+CATEGORIES:SOCIAL
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:open-evening@personal
+DTSTAMP:20260921T090000Z
+DTSTART;TZID=Europe/London:20261023T190000
+DTEND;TZID=Europe/London:20261024T003000
+SUMMARY:Studio open evening + drinks after
+LOCATION:Harrow Campus\, Studio 3
+CATEGORIES:SOCIAL
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:gp-appt@personal
+DTSTAMP:20260921T090000Z
+DTSTART;TZID=Europe/London:20261006T091500
+DTEND;TZID=Europe/London:20261006T093000
+SUMMARY:GP appointment
+LOCATION:Brondesbury Medical Centre
+CATEGORIES:PERSONAL
+STATUS:CONFIRMED
+END:VEVENT
+END:VCALENDAR
