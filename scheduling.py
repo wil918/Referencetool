@@ -988,13 +988,19 @@ def replan(now=None, finishing_buffer_minutes=None):
     """Resolve whatever the calendar has already decided on its own, then run
     the scheduler and replace the future with its output.
 
-    Two steps, in order:
+    Three steps, in order:
 
     1. resolve_lapsed_blocks(now) -- every past task block nobody ever
        explicitly resolved is treated as NOT COMPLETED (see
        SCHEDULE_SCOPE.md's "three outcomes"). This is the only place that
        happens automatically; plan() itself stays pure and never mutates a
        task row.
+    1b. generate_recurring_tasks(now) -- the backstop that gives a resumed or
+       orphaned recurrence rule its next instance once the interval has come
+       round (see that function; the completion path handles the common
+       case). After step 1 so a lapsed recurring instance is already back in
+       the pool and counts as outstanding, keeping the rule from stacking a
+       second.
     2. plan(now, ...), committed via db.replace_scheduled_blocks with a
        cutoff at the same anchor. That commit only replaces `scheduled_blocks`
        from the anchor forward -- anything already in the past is left alone,
@@ -1012,6 +1018,7 @@ def replan(now=None, finishing_buffer_minutes=None):
     """
     anchor = _anchor(now)
     resolve_lapsed_blocks(anchor)
+    generate_recurring_tasks(anchor)
     result = plan(anchor, finishing_buffer_minutes)
     db.replace_scheduled_blocks(result["blocks"], cutoff=result["anchor"])
     return result
@@ -1036,12 +1043,30 @@ def resolve_completed(task_id, actual_minutes, actual_difficulty=None,
     did the work, then tapped Done) is left exactly where it is, becoming the
     durable record of when it actually happened.
     """
+    was_done = (db.get_task(task_id) or {}).get("status") == "done"
+    finished_at = _anchor(now)
     db.save_task_actual(task_id, actual_minutes=actual_minutes,
                         actual_difficulty=actual_difficulty,
-                        actual_importance=actual_importance, notes=notes)
+                        actual_importance=actual_importance, notes=notes,
+                        completed_at=finished_at.isoformat() if now is not None else None)
     db.update_task(task_id, status="done")
     _drop_future_blocks(task_id, now)
-    return {"task": db.get_task(task_id), "actual": db.get_task_actual(task_id)}
+
+    # A recurring task spawns its next instance the moment it's completed,
+    # due interval_days from NOW rather than from when it was scheduled -- a
+    # late completion carries the whole cadence forward with it. Guarded so
+    # that correcting an actual on an already-done task (a second /complete
+    # call) doesn't spawn a second successor; spawn_recurrence_successor
+    # refuses anyway once one outstanding instance exists, but not paying the
+    # query is cleaner.
+    successor = None
+    if not was_done:
+        successor = spawn_recurrence_successor(db.get_task(task_id), finished_at.date())
+    return {
+        "task": db.get_task(task_id),
+        "actual": db.get_task_actual(task_id),
+        "recurrence_successor": successor,
+    }
 
 
 # Everything a remainder task inherits from the original unless the caller
@@ -1103,7 +1128,11 @@ def resolve_partial(task_id, actual_minutes, est_minutes, actual_difficulty=None
     remainder_id = str(uuid.uuid4())
     db.create_task(
         remainder_id, title, est_minutes=est_minutes, status="pending",
-        continues_task_id=task_id, **fields
+        continues_task_id=task_id,
+        # The recurrence follows the chain: finishing the remainder later is
+        # what completes this instance, so that's what should spawn the next.
+        recurrence_id=task["recurrence_id"],
+        **fields
     )
     _repoint_dependents(task_id, remainder_id)
     return {"original": db.get_task(task_id), "remainder": db.get_task(remainder_id)}
@@ -1158,6 +1187,110 @@ def resolve_lapsed_blocks(now=None):
         resolve_not_completed(task["id"])
         resolved.append(task["id"])
     return resolved
+
+
+# --- Recurrence: floating interval tasks ----------------------------------------
+#
+# A recurrence rule (db.recurrence_rules) is INTERVAL-BASED AND FLOATING, not
+# calendar-based: "about every three days", not "every Monday". The point is
+# fitting around everything else on the calendar, so nothing here pins to a
+# date.
+#
+#  - The next instance is due interval_days after the previous one COMPLETED,
+#    never after it was scheduled -- a weekly task done three days late pushes
+#    the next one three days later too.
+#  - window_days is the tolerance. The instance is created with its deadline
+#    at the FAR edge of the window (ideal date + window_days), which is what
+#    gives the scheduler slack to drop it in the best available slot rather
+#    than fighting the rest of the calendar for one exact day. Its urgency
+#    still climbs as that deadline nears, so it doesn't drift forever.
+#  - A missed instance does not stack. There is at most one outstanding
+#    instance per rule at any time; completing a long-overdue one spawns
+#    exactly one successor, not one per interval that elapsed. Backlogs of
+#    recurring tasks are how these systems become useless.
+#  - Editing a rule affects future instances only -- each successor reads the
+#    rule's values at spawn time, and completed history is never touched.
+#  - Pausing a rule (active = 0) stops generation; the done tasks it already
+#    made stay exactly as they are.
+
+# What a fresh instance copies from the one that spawned it. Unlike a partial
+# remainder (REMAINDER_INHERITED_COLUMNS), est_minutes and its *_source carry
+# over: a recurring chore's duration is stable, and re-estimating it every
+# few days from nothing would be worse than keeping the last figure. deadline
+# is deliberately absent -- it's recomputed from the interval every time.
+RECURRENCE_INHERITED_COLUMNS = (
+    "title", "description", "measurable_goal", "project_id", "deliverable_id",
+    "required_location_id", "support_level", "est_minutes", "importance",
+    "difficulty", "is_finishing", "is_domestic",
+    "est_minutes_source", "importance_source", "difficulty_source",
+)
+
+
+def spawn_recurrence_successor(predecessor, completed_on):
+    """Create the next instance of a recurring task and return it, or return
+    None when there should be no successor: the rule is gone or paused, the
+    predecessor isn't recurring, or an outstanding instance already exists
+    (a missed instance never stacks a second).
+
+    `completed_on` is the date the predecessor's work actually finished; the
+    successor is due interval_days after it.
+    """
+    rule_id = predecessor.get("recurrence_id")
+    if not rule_id:
+        return None
+    rule = db.get_recurrence_rule(rule_id)
+    if not rule or not rule["active"]:
+        return None
+    for other in db.list_tasks_for_recurrence(rule_id):
+        if other["id"] != predecessor["id"] and other["status"] in SCHEDULABLE_STATUSES:
+            return None
+
+    if isinstance(completed_on, datetime):
+        completed_on = completed_on.date()
+    ideal_due = completed_on + timedelta(days=rule["interval_days"])
+    deadline = (ideal_due + timedelta(days=rule["window_days"])).isoformat()
+
+    fields = {column: predecessor[column] for column in RECURRENCE_INHERITED_COLUMNS}
+    new_id = str(uuid.uuid4())
+    db.create_task(new_id, fields.pop("title"), status="pending",
+                   deadline=deadline, recurrence_id=rule_id, **fields)
+    return db.get_task(new_id)
+
+
+def generate_recurring_tasks(now=None):
+    """Backstop generation, run from replan(): make sure every active rule
+    that has run at least once has an outstanding instance once its interval
+    has come round again. Returns the ids it spawned.
+
+    The completion path in resolve_completed is what normally keeps a rule
+    ticking. This covers the cases it can't see: a rule paused across a
+    completion and later resumed, or one whose only live instance was
+    deleted. A brand-new rule with no history is left alone -- its first
+    instance is a task the user creates and attaches, not something conjured
+    from a rule with no title.
+    """
+    today = _anchor(now).date()
+    spawned = []
+    for rule in db.list_recurrence_rules(active_only=True):
+        instances = db.list_tasks_for_recurrence(rule["id"])
+        if any(t["status"] in SCHEDULABLE_STATUSES for t in instances):
+            continue
+        completed = [
+            (db.get_task_actual(t["id"]), t)
+            for t in instances if t["status"] == "done"
+        ]
+        completed = [(a, t) for a, t in completed if a and a.get("completed_at")]
+        if not completed:
+            continue
+        actual, predecessor = max(completed, key=lambda pair: pair[0]["completed_at"])
+        completed_date = _parse_moment(actual["completed_at"]).date()
+        ideal_due = completed_date + timedelta(days=rule["interval_days"])
+        if ideal_due - timedelta(days=rule["window_days"]) > today:
+            continue  # still ahead of the tolerance window -- nothing due yet
+        successor = spawn_recurrence_successor(predecessor, completed_date)
+        if successor:
+            spawned.append(successor["id"])
+    return spawned
 
 
 def _drop_future_blocks(task_id, now=None):

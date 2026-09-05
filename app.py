@@ -2133,6 +2133,95 @@ def api_delete_hours_override(override_id):
     return jsonify({"ok": True, "id": override_id})
 
 
+# --- Schedule: recurrence rules ---------------------------------------------------
+#
+# A rule spawns floating, interval-based recurring tasks (see
+# scheduling.spawn_recurrence_successor). The rule holds only the cadence
+# (interval_days, window_days, preferred_time) and whether it's active; what
+# the task actually is lives on the tasks that carry its recurrence_id. To
+# start a recurrence: create the rule, then create the first task with its
+# recurrence_id set. Completing that task spawns the next.
+
+
+def _recurrence_rule_fields(body):
+    """Validate and coerce the writable fields of a recurrence rule. Returns
+    (fields, error) -- exactly one is non-None."""
+    fields = {}
+    if "interval_days" in body:
+        try:
+            interval = int(body["interval_days"])
+        except (TypeError, ValueError):
+            return None, "interval_days must be a whole number of days"
+        if interval < 1:
+            return None, "interval_days must be at least 1"
+        fields["interval_days"] = interval
+    if "window_days" in body:
+        try:
+            window = int(body["window_days"])
+        except (TypeError, ValueError):
+            return None, "window_days must be a whole number of days"
+        if window < 0:
+            return None, "window_days cannot be negative"
+        fields["window_days"] = window
+    if "preferred_time" in body:
+        fields["preferred_time"] = body["preferred_time"] or None
+    if "active" in body:
+        fields["active"] = bool(body["active"])
+    return fields, None
+
+
+@app.get("/api/recurrence-rules")
+def api_list_recurrence_rules():
+    return jsonify(db.list_recurrence_rules(active_only=request.args.get("active_only") == "1"))
+
+
+@app.post("/api/recurrence-rules")
+def api_create_recurrence_rule():
+    body = request.get_json(force=True, silent=True) or {}
+    fields, error = _recurrence_rule_fields(body)
+    if error:
+        return jsonify({"error": error}), 400
+    if "interval_days" not in fields:
+        return jsonify({"error": "interval_days is required"}), 400
+    rule_id = str(uuid.uuid4())
+    db.create_recurrence_rule(
+        rule_id,
+        fields["interval_days"],
+        window_days=fields.get("window_days", 1),
+        preferred_time=fields.get("preferred_time"),
+        active=fields.get("active", True),
+    )
+    return jsonify(db.get_recurrence_rule(rule_id))
+
+
+@app.get("/api/recurrence-rules/<rule_id>")
+def api_get_recurrence_rule(rule_id):
+    rule = db.get_recurrence_rule(rule_id)
+    if not rule:
+        abort(404)
+    return jsonify(rule)
+
+
+@app.put("/api/recurrence-rules/<rule_id>")
+def api_update_recurrence_rule(rule_id):
+    if not db.get_recurrence_rule(rule_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    fields, error = _recurrence_rule_fields(body)
+    if error:
+        return jsonify({"error": error}), 400
+    db.update_recurrence_rule(rule_id, **fields)
+    return jsonify(db.get_recurrence_rule(rule_id))
+
+
+@app.delete("/api/recurrence-rules/<rule_id>")
+def api_delete_recurrence_rule(rule_id):
+    if not db.get_recurrence_rule(rule_id):
+        abort(404)
+    db.delete_recurrence_rule(rule_id)
+    return jsonify({"ok": True, "id": rule_id})
+
+
 def _is_valid_date(date_str):
     try:
         date.fromisoformat(date_str)
