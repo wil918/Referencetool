@@ -2547,6 +2547,19 @@ def list_tasks(project_id=None, deliverable_id=None, status=None):
         return [_task_to_dict(r) for r in rows]
 
 
+def list_tasks_for_recurrence(recurrence_id):
+    """Every task ever spawned by one recurrence rule, oldest first -- the
+    scheduler reads this to check whether a rule already has an outstanding
+    instance (so a missed one never stacks a second) and to find the most
+    recent completed instance to template the next one from."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tasks WHERE recurrence_id = ? ORDER BY created_at",
+            (recurrence_id,),
+        ).fetchall()
+        return [_task_to_dict(r) for r in rows]
+
+
 # The columns a PUT may touch. id and created_at are absent on purpose -- a
 # task can't change identity or backdate when it was made, only what it is and
 # where it stands. app.py filters incoming bodies against this same list, so
@@ -2702,10 +2715,16 @@ def remove_task_dependency(task_id, depends_on_task_id):
 
 
 def save_task_actual(task_id, actual_minutes=None, actual_difficulty=None,
-                     actual_importance=None, notes=None):
+                     actual_importance=None, notes=None, completed_at=None):
     """Record (or replace) how a task actually went. One row per task,
     upserted so correcting a mis-recorded actual updates in place rather than
-    erroring on the primary key."""
+    erroring on the primary key.
+
+    `completed_at` defaults to now, but a caller that already knows when the
+    work finished (the scheduler, resolving an outcome against an explicit
+    anchor) passes it in -- recurrence cadence is measured from this moment,
+    so a test that can't control it can't test a late completion shifting the
+    next instance."""
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO task_actuals
@@ -2723,7 +2742,7 @@ def save_task_actual(task_id, actual_minutes=None, actual_difficulty=None,
                 actual_minutes,
                 actual_difficulty,
                 actual_importance,
-                datetime.now(timezone.utc).isoformat(),
+                completed_at or datetime.now(timezone.utc).isoformat(),
                 notes,
             ),
         )
