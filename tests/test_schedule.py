@@ -253,6 +253,56 @@ def test_deliverable_crud(client):
     assert client.get(f"/api/projects/{project_id}/deliverables").get_json() == []
 
 
+def test_a_task_can_be_moved_between_deliverables_by_hand(client):
+    """What the Deliverables tab and the task detail panel both do: PUT the
+    task with a new deliverable_id, or null to unfile it."""
+    project_id = make_project(client)
+    part1 = client.post(
+        f"/api/projects/{project_id}/deliverables", json={"title": "Part 1"}
+    ).get_json()["id"]
+    part2 = client.post(
+        f"/api/projects/{project_id}/deliverables", json={"title": "Part 2"}
+    ).get_json()["id"]
+    task = make_task(client, "Toile", project_id=project_id, deliverable_id=part1)
+
+    moved = client.put(
+        f"/api/tasks/{task['id']}", json={"deliverable_id": part2}
+    ).get_json()
+    assert moved["deliverable_id"] == part2
+    assert [t["id"] for t in client.get(f"/api/tasks?deliverable_id={part2}").get_json()] == [
+        task["id"]
+    ]
+
+    unfiled = client.put(
+        f"/api/tasks/{task['id']}", json={"deliverable_id": None}
+    ).get_json()
+    assert unfiled["deliverable_id"] is None
+
+
+def test_deliverable_spec_round_trips_an_arbitrary_shape(client):
+    """spec is rendered by shape, not by fixed keys -- so whatever a brief
+    puts there must survive a write and come back intact, including the
+    checklist tick state the readable view adds under its own key."""
+    project_id = make_project(client)
+    spec = {
+        "pages": {"portfolio": 20, "report": 8},
+        "required_items": ["Fabric test 1", "Fabric test 2", "Museum visit"],
+        "__checked": ["required_items.0"],
+    }
+    created = client.post(
+        f"/api/projects/{project_id}/deliverables",
+        json={"title": "Realisation", "spec": spec},
+    ).get_json()
+    assert created["spec"] == spec
+
+    updated = client.put(
+        f"/api/deliverables/{created['id']}",
+        json={"spec": {**spec, "__checked": ["required_items.0", "required_items.2"]}},
+    ).get_json()
+    assert updated["spec"]["__checked"] == ["required_items.0", "required_items.2"]
+    assert updated["spec"]["pages"] == {"portfolio": 20, "report": 8}
+
+
 # --- Locations, hours, overrides, travel ---------------------------------------
 
 
