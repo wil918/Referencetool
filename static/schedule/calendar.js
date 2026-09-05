@@ -322,6 +322,12 @@ export function createCalendar(container, options = {}) {
   // day it is today -- the day view (numDays: 1) mounts this same component
   // and must show exactly the date it's asked for, so it defaults off there.
   const snapToWeek = "snapToWeek" in options ? options.snapToWeek : numDays === 7;
+  // The single-day view (schedule/day.js) is the one read while actually
+  // moving between places, so it is the one that shows a travel leg's
+  // destination as well as its length, and the one that opens scrolled to
+  // now rather than to the top of a 24-hour track. Neither is week-specific
+  // behaviour being removed -- the week view simply has no room for either.
+  const dayView = numDays === 1;
 
   // weekdayOf is Monday=0..Sunday=6, so subtracting it walks back to that
   // week's Monday. addDays(mon, ±numDays) is still a Monday once numDays is
@@ -682,7 +688,12 @@ export function createCalendar(container, options = {}) {
     const minutes = Math.round(ev.endMin - ev.startMin);
     const label = document.createElement("span");
     label.className = "dr-leader-label";
-    label.textContent = `${minutes} min`;
+    // In the day view the leader says where the trip is going, not only how
+    // long it takes -- "Studio · 25 min", the two facts you want mid-walk.
+    const dest = dayView && ev.block?.to_location_id
+      ? data.locationsById[ev.block.to_location_id]
+      : null;
+    label.textContent = dest ? `${dest.name} · ${minutes} min` : `${minutes} min`;
     el.appendChild(label);
     return el;
   }
@@ -1074,7 +1085,20 @@ export function createCalendar(container, options = {}) {
     const dates = visibleDates();
     data = await loadCalendarData(dates[0], dates[dates.length - 1]);
     render();
+    scrollToNow();
     onDataLoaded(data);
+  }
+
+  /* The day view opens a 24-hour track, and the top of it (5am) is almost
+   * never where you want to be looking. Drop the scroll so the current hour
+   * sits a third of the way down -- or 8am, if the day on screen isn't
+   * today. Week view keeps its own top-of-track default. */
+  function scrollToNow() {
+    if (!dayView) return;
+    const onToday = visibleDates().includes(todayStr());
+    const rawMinutes = onToday ? new Date().getHours() * 60 + new Date().getMinutes() : 8 * 60;
+    const elapsed = Math.max(0, rawMinutes - START_HOUR * 60);
+    bodyEl.scrollTop = Math.max(0, elapsed * PX_PER_MIN - bodyEl.clientHeight / 3);
   }
 
   prevBtn.addEventListener("click", () => {

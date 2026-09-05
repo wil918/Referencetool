@@ -24,7 +24,8 @@
       <h1 class="dr-title">Schedule</h1>
     </div>
     <nav>
-      <button class="tab-btn active" data-tab="tasks">Tasks</button>
+      <button class="tab-btn active" data-tab="today">Today</button>
+      <button class="tab-btn" data-tab="tasks">Tasks</button>
       <button class="tab-btn" data-tab="schedule">Schedule</button>
       <button class="tab-btn" data-tab="settings">Settings</button>
       <a class="nav-link" href="/index.html">Archive</a>
@@ -33,7 +34,18 @@
   </header>
 
   <main>
-    <section id="tab-tasks" class="tab active">
+    <section id="tab-today" class="tab active">
+      <!-- The day view. schedule/day.js mounts the shared calendar component
+           into #day-calendar and draws the check-in and the ledger around
+           it -- the same arrangement schedule.js makes for the week. -->
+      <div class="day-view">
+        <div id="day-checkin"></div>
+        <div id="day-ledger" class="day-ledger"></div>
+        <div id="day-calendar"></div>
+      </div>
+    </section>
+
+    <section id="tab-tasks" class="tab">
       <div class="task-entry">
         <div class="task-entry-row">
           <input type="text" id="task-description-input" placeholder="What do you need to do?">

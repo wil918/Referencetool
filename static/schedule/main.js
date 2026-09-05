@@ -10,6 +10,7 @@ import { initLocationsManager } from "../locations.js";
 import { initCalendarImport } from "../calendar-import.js";
 import { initCommitments } from "../commitments.js";
 import { refreshSchedule } from "./schedule.js";
+import { refreshDay } from "./day.js";
 import { initScheduleSettings } from "./settings.js";
 import { startBedtimeWatch } from "./bedtime-watch.js";
 
@@ -24,6 +25,7 @@ function activateTab(name) {
   btn.classList.add("active");
   document.getElementById(`tab-${name}`).classList.add("active");
 
+  if (name === "today") refreshDay();
   if (name === "tasks") tasks.refreshTaskList();
   if (name === "schedule") refreshSchedule();
   return true;
@@ -51,6 +53,6 @@ initCommitments();
 initScheduleSettings();
 startBedtimeWatch();
 
-// A hash deep link picks its own tab; failing that, the Tasks tab is already
-// marked active in the markup, so just prime its list.
-if (!activateTabFromHash()) tasks.refreshTaskList();
+// A hash deep link picks its own tab; failing that, the Today tab is the one
+// marked active in the markup -- it is the most-opened screen -- so prime it.
+if (!activateTabFromHash()) activateTab("today");

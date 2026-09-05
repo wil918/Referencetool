@@ -2269,3 +2269,160 @@
   gap: 0.6rem;
   margin: 0;
 }
+
+/* ==========================================================================
+   14. THE DAY VIEW
+   The single-day drawing (schedule/day.js): the shared track at full width,
+   with the check-in and the ledger arranged around it the way section 13's
+   week arranges its at-risk panel. Every rule here composes primitives from
+   the sections above -- it introduces no colour, weight or type size of its
+   own, exactly as the block comment on section 1 requires.
+   ========================================================================== */
+
+.drafting .day-view { display: flex; flex-direction: column; gap: 1.5rem; }
+
+/* --- The energy check-in ------------------------------------------------
+   A graduated scale, read low (spent) on the left to full on the right. One
+   tap sets a station; the station already set is the control's own undo. */
+.drafting .dr-checkin {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.6rem;
+  border-bottom: var(--dr-rule-hair);
+}
+
+.dr-gauge { display: inline-flex; border: var(--dr-rule-line); }
+
+.dr-gauge-station {
+  width: 2.15rem;
+  padding: 0.3rem 0;
+  border: 0;
+  border-left: var(--dr-rule-hair);
+  border-bottom: var(--dr-w-line) solid transparent;
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-figure);
+  font-variant-numeric: tabular-nums;
+  color: var(--dr-ink-4);
+  cursor: pointer;
+}
+
+.dr-gauge-station:first-child { border-left: 0; }
+.dr-gauge-station:hover { color: var(--dr-ink-2); }
+
+/* The inferred guess, while no manual value is set: darker than an empty
+   station but not yet inked in. */
+.dr-gauge-station.is-inferred { color: var(--dr-ink-2); }
+
+/* The set value: inked in, and underlined with a fine red pen line -- the
+   accent at line weight, never as a fill (section 8's rule for the blocks). */
+.dr-gauge-station.is-set {
+  color: var(--dr-ink);
+  font-weight: 500;
+  border-bottom-color: var(--dr-red-line);
+}
+
+/* --- The ledger -------------------------------------------------------- */
+.drafting .day-ledger { display: flex; flex-direction: column; gap: 0.55rem; }
+.drafting .day-ledger .dr-key { max-width: 22rem; }
+.drafting .day-ledger > .dr-label { margin-top: 0.3rem; }
+.drafting .day-ledger > .dr-label:first-child { margin-top: 0; }
+
+/* The one figure in the ledger that is allowed to go red: work still to do
+   that will not fit the time left to do it in. Red as ink on a figure, the
+   same licence the at-risk flag has. */
+.dr-tally-over { color: var(--dr-red); }
+
+/* --- The completion list ---------------------------------------------------
+   One ruled line per task still scheduled today, its three outcomes inline.
+   The row idiom is the drawing's -- a rule top and bottom, no box, no fill --
+   the same as section 10's month entry and section 13's day list. */
+.dr-checklist { display: flex; flex-direction: column; }
+
+.dr-checklist-row {
+  display: grid;
+  grid-template-columns: 3.4rem 1fr auto;
+  align-items: baseline;
+  gap: 0.7rem;
+  padding: 0.34rem 0;
+  border-top: var(--dr-rule-hair);
+}
+
+.dr-checklist-row:last-child { border-bottom: var(--dr-rule-hair); }
+
+.dr-checklist-time {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: 0.04em;
+  color: var(--dr-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.dr-checklist-title {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+  color: var(--dr-ink);
+  cursor: pointer;
+}
+
+.dr-checklist-title:hover { color: var(--dr-red); }
+
+/* A resolved task: struck through, the way a drawing crosses out a
+   superseded note rather than erasing it. */
+.dr-checklist-row.is-done .dr-checklist-title {
+  color: var(--dr-ink-4);
+  text-decoration: line-through;
+}
+
+.dr-checklist-mark {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+}
+
+/* The three outcomes, drawn as the sheet's own small controls (section 11's
+   .btn idiom) rather than hidden behind a menu -- completion is the primary
+   action here. Completed carries the heavier edge; Missed picks up the red
+   edge only on hover, so the list does not read as a row of warnings. */
+.dr-outcomes { display: inline-flex; gap: 0.32rem; align-items: baseline; }
+.dr-outcomes.is-editing { flex-wrap: wrap; justify-content: flex-end; }
+
+.dr-outcome {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  border: var(--dr-rule-hair);
+  border-radius: 0;
+  background: transparent;
+  color: var(--dr-ink-3);
+  padding: 0.22rem 0.5rem;
+  cursor: pointer;
+}
+
+.dr-outcome:hover { border-color: var(--dr-c-line); color: var(--dr-ink); }
+.dr-outcome.is-done { border: var(--dr-rule-line); border-bottom: var(--dr-rule-cut); color: var(--dr-ink); }
+.dr-outcome.is-miss:hover { border-color: var(--dr-red-faint); color: var(--dr-red); }
+
+.dr-outcomes input {
+  width: 3.4rem;
+  border: 0;
+  border-bottom: var(--dr-rule-line);
+  background: transparent;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+  color: var(--dr-ink);
+  padding: 0.1rem 0.15rem;
+}
+
+.dr-outcomes input.is-invalid { border-bottom-color: var(--dr-red-line); }
