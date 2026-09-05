@@ -174,19 +174,19 @@
      octaves, desaturated so it is texture and not a tint. */
   --dr-grain:
     url("data:image/svg+xml,\
-      <svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'>\
-      <filter id='g' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'>\
-      <feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch' seed='11'/>\
-      <feColorMatrix type='saturate' values='0'/>\
-      <feComponentTransfer>\
-      <feFuncR type='linear' slope='0.4' intercept='0.6'/>\
-      <feFuncG type='linear' slope='0.4' intercept='0.6'/>\
-      <feFuncB type='linear' slope='0.4' intercept='0.6'/>\
-      <feFuncA type='linear' slope='0' intercept='1'/>\
-      </feComponentTransfer>\
-      </filter>\
-      <rect width='160' height='160' filter='url(%23g)'/>\
-      </svg>");
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E\
+      %3Cfilter id='g' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch' seed='11'/%3E\
+      %3CfeColorMatrix type='saturate' values='0'/%3E\
+      %3CfeComponentTransfer%3E\
+      %3CfeFuncR type='linear' slope='0.4' intercept='0.6'/%3E\
+      %3CfeFuncG type='linear' slope='0.4' intercept='0.6'/%3E\
+      %3CfeFuncB type='linear' slope='0.4' intercept='0.6'/%3E\
+      %3CfeFuncA type='linear' slope='0' intercept='1'/%3E\
+      %3C/feComponentTransfer%3E\
+      %3C/filter%3E\
+      %3Crect width='160' height='160' filter='url(%23g)'/%3E\
+      %3C/svg%3E");
   --dr-grain-size: 160px 160px;
   --dr-grain-opacity: 0.16;
 
@@ -217,104 +217,104 @@
      stitches, rather than in geometry, which does not. */
   --dr-hatch-a-rough:
     url("data:image/svg+xml,\
-      <svg xmlns='http://www.w3.org/2000/svg' width='60' height='60'>\
-      <filter id='t' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'>\
-      <feTurbulence type='fractalNoise' baseFrequency='0.4' numOctaves='2' stitchTiles='stitch' seed='4' result='n'/>\
-      <feColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.1 1.1 0 0 -0.2' result='m'/>\
-      <feComposite in='SourceGraphic' in2='m' operator='in'/>\
-      </filter>\
-      <g filter='url(%23t)' stroke='rgb(33,32,30)' fill='none'>\
-      <path d='M-60,60 L0,0' opacity='0.2' stroke-width='1'/>\
-      <path d='M-50,60 L10,0' opacity='0.15' stroke-width='0.85'/>\
-      <path d='M-40,60 L20,0' opacity='0.19' stroke-width='1.1'/>\
-      <path d='M-30,60 L30,0' opacity='0.13' stroke-width='0.8'/>\
-      <path d='M-20,60 L40,0' opacity='0.21' stroke-width='1'/>\
-      <path d='M-10,60 L50,0' opacity='0.16' stroke-width='0.9'/>\
-      <path d='M0,60 L60,0' opacity='0.2' stroke-width='1'/>\
-      <path d='M10,60 L70,0' opacity='0.15' stroke-width='0.85'/>\
-      <path d='M20,60 L80,0' opacity='0.19' stroke-width='1.1'/>\
-      <path d='M30,60 L90,0' opacity='0.13' stroke-width='0.8'/>\
-      <path d='M40,60 L100,0' opacity='0.21' stroke-width='1'/>\
-      <path d='M50,60 L110,0' opacity='0.16' stroke-width='0.9'/>\
-      </g>\
-      </svg>");
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E\
+      %3Cfilter id='t' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.4' numOctaves='2' stitchTiles='stitch' seed='4' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.1 1.1 0 0 -0.2' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cg filter='url(%23t)' stroke='rgb(33,32,30)' fill='none'%3E\
+      %3Cpath d='M-60,60 L0,0' opacity='0.2' stroke-width='1'/%3E\
+      %3Cpath d='M-50,60 L10,0' opacity='0.15' stroke-width='0.85'/%3E\
+      %3Cpath d='M-40,60 L20,0' opacity='0.19' stroke-width='1.1'/%3E\
+      %3Cpath d='M-30,60 L30,0' opacity='0.13' stroke-width='0.8'/%3E\
+      %3Cpath d='M-20,60 L40,0' opacity='0.21' stroke-width='1'/%3E\
+      %3Cpath d='M-10,60 L50,0' opacity='0.16' stroke-width='0.9'/%3E\
+      %3Cpath d='M0,60 L60,0' opacity='0.2' stroke-width='1'/%3E\
+      %3Cpath d='M10,60 L70,0' opacity='0.15' stroke-width='0.85'/%3E\
+      %3Cpath d='M20,60 L80,0' opacity='0.19' stroke-width='1.1'/%3E\
+      %3Cpath d='M30,60 L90,0' opacity='0.13' stroke-width='0.8'/%3E\
+      %3Cpath d='M40,60 L100,0' opacity='0.21' stroke-width='1'/%3E\
+      %3Cpath d='M50,60 L110,0' opacity='0.16' stroke-width='0.9'/%3E\
+      %3C/g%3E\
+      %3C/svg%3E");
   --dr-hatch-b-rough:
     url("data:image/svg+xml,\
-      <svg xmlns='http://www.w3.org/2000/svg' width='48' height='48'>\
-      <filter id='t' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'>\
-      <feTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='2' stitchTiles='stitch' seed='6' result='n'/>\
-      <feColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.1 1.1 0 0 -0.2' result='m'/>\
-      <feComposite in='SourceGraphic' in2='m' operator='in'/>\
-      </filter>\
-      <g filter='url(%23t)' stroke='rgb(33,32,30)' fill='none'>\
-      <path d='M0,-48 L48,0' opacity='0.17' stroke-width='0.9'/>\
-      <path d='M0,-42 L48,6' opacity='0.12' stroke-width='0.8'/>\
-      <path d='M0,-36 L48,12' opacity='0.16' stroke-width='1'/>\
-      <path d='M0,-30 L48,18' opacity='0.11' stroke-width='0.75'/>\
-      <path d='M0,-24 L48,24' opacity='0.18' stroke-width='0.95'/>\
-      <path d='M0,-18 L48,30' opacity='0.13' stroke-width='0.85'/>\
-      <path d='M0,-12 L48,36' opacity='0.15' stroke-width='0.9'/>\
-      <path d='M0,-6 L48,42' opacity='0.12' stroke-width='0.8'/>\
-      <path d='M0,0 L48,48' opacity='0.17' stroke-width='0.9'/>\
-      <path d='M0,6 L48,54' opacity='0.12' stroke-width='0.8'/>\
-      <path d='M0,12 L48,60' opacity='0.16' stroke-width='1'/>\
-      <path d='M0,18 L48,66' opacity='0.11' stroke-width='0.75'/>\
-      <path d='M0,24 L48,72' opacity='0.18' stroke-width='0.95'/>\
-      <path d='M0,30 L48,78' opacity='0.13' stroke-width='0.85'/>\
-      <path d='M0,36 L48,84' opacity='0.15' stroke-width='0.9'/>\
-      <path d='M0,42 L48,90' opacity='0.12' stroke-width='0.8'/>\
-      </g>\
-      </svg>");
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E\
+      %3Cfilter id='t' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='2' stitchTiles='stitch' seed='6' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.1 1.1 0 0 -0.2' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cg filter='url(%23t)' stroke='rgb(33,32,30)' fill='none'%3E\
+      %3Cpath d='M0,-48 L48,0' opacity='0.17' stroke-width='0.9'/%3E\
+      %3Cpath d='M0,-42 L48,6' opacity='0.12' stroke-width='0.8'/%3E\
+      %3Cpath d='M0,-36 L48,12' opacity='0.16' stroke-width='1'/%3E\
+      %3Cpath d='M0,-30 L48,18' opacity='0.11' stroke-width='0.75'/%3E\
+      %3Cpath d='M0,-24 L48,24' opacity='0.18' stroke-width='0.95'/%3E\
+      %3Cpath d='M0,-18 L48,30' opacity='0.13' stroke-width='0.85'/%3E\
+      %3Cpath d='M0,-12 L48,36' opacity='0.15' stroke-width='0.9'/%3E\
+      %3Cpath d='M0,-6 L48,42' opacity='0.12' stroke-width='0.8'/%3E\
+      %3Cpath d='M0,0 L48,48' opacity='0.17' stroke-width='0.9'/%3E\
+      %3Cpath d='M0,6 L48,54' opacity='0.12' stroke-width='0.8'/%3E\
+      %3Cpath d='M0,12 L48,60' opacity='0.16' stroke-width='1'/%3E\
+      %3Cpath d='M0,18 L48,66' opacity='0.11' stroke-width='0.75'/%3E\
+      %3Cpath d='M0,24 L48,72' opacity='0.18' stroke-width='0.95'/%3E\
+      %3Cpath d='M0,30 L48,78' opacity='0.13' stroke-width='0.85'/%3E\
+      %3Cpath d='M0,36 L48,84' opacity='0.15' stroke-width='0.9'/%3E\
+      %3Cpath d='M0,42 L48,90' opacity='0.12' stroke-width='0.8'/%3E\
+      %3C/g%3E\
+      %3C/svg%3E");
   /* Both directions in ONE raster, so the crossings darken inside the image
      and the page needs no blend for it. */
   --dr-hatch-cross-rough:
     url("data:image/svg+xml,\
-      <svg xmlns='http://www.w3.org/2000/svg' width='48' height='48'>\
-      <filter id='t' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'>\
-      <feTurbulence type='fractalNoise' baseFrequency='0.45' numOctaves='2' stitchTiles='stitch' seed='8' result='n'/>\
-      <feColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.1 1.1 0 0 -0.2' result='m'/>\
-      <feComposite in='SourceGraphic' in2='m' operator='in'/>\
-      </filter>\
-      <g filter='url(%23t)' stroke='rgb(33,32,30)' fill='none'>\
-      <path d='M-48,48 L0,0' opacity='0.15' stroke-width='0.9'/>\
-      <path d='M0,-48 L48,0' opacity='0.15' stroke-width='0.9'/>\
-      <path d='M-40,48 L8,0' opacity='0.11' stroke-width='0.8'/>\
-      <path d='M0,-40 L48,8' opacity='0.11' stroke-width='0.8'/>\
-      <path d='M-32,48 L16,0' opacity='0.14' stroke-width='1'/>\
-      <path d='M0,-32 L48,16' opacity='0.14' stroke-width='1'/>\
-      <path d='M-24,48 L24,0' opacity='0.12' stroke-width='0.8'/>\
-      <path d='M0,-24 L48,24' opacity='0.12' stroke-width='0.8'/>\
-      <path d='M-16,48 L32,0' opacity='0.16' stroke-width='0.95'/>\
-      <path d='M0,-16 L48,32' opacity='0.16' stroke-width='0.95'/>\
-      <path d='M-8,48 L40,0' opacity='0.12' stroke-width='0.85'/>\
-      <path d='M0,-8 L48,40' opacity='0.12' stroke-width='0.85'/>\
-      <path d='M0,48 L48,0' opacity='0.15' stroke-width='0.9'/>\
-      <path d='M0,0 L48,48' opacity='0.15' stroke-width='0.9'/>\
-      <path d='M8,48 L56,0' opacity='0.11' stroke-width='0.8'/>\
-      <path d='M0,8 L48,56' opacity='0.11' stroke-width='0.8'/>\
-      <path d='M16,48 L64,0' opacity='0.14' stroke-width='1'/>\
-      <path d='M0,16 L48,64' opacity='0.14' stroke-width='1'/>\
-      <path d='M24,48 L72,0' opacity='0.12' stroke-width='0.8'/>\
-      <path d='M0,24 L48,72' opacity='0.12' stroke-width='0.8'/>\
-      <path d='M32,48 L80,0' opacity='0.16' stroke-width='0.95'/>\
-      <path d='M0,32 L48,80' opacity='0.16' stroke-width='0.95'/>\
-      <path d='M40,48 L88,0' opacity='0.12' stroke-width='0.85'/>\
-      <path d='M0,40 L48,88' opacity='0.12' stroke-width='0.85'/>\
-      </g>\
-      </svg>");
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E\
+      %3Cfilter id='t' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.45' numOctaves='2' stitchTiles='stitch' seed='8' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.1 1.1 0 0 -0.2' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cg filter='url(%23t)' stroke='rgb(33,32,30)' fill='none'%3E\
+      %3Cpath d='M-48,48 L0,0' opacity='0.15' stroke-width='0.9'/%3E\
+      %3Cpath d='M0,-48 L48,0' opacity='0.15' stroke-width='0.9'/%3E\
+      %3Cpath d='M-40,48 L8,0' opacity='0.11' stroke-width='0.8'/%3E\
+      %3Cpath d='M0,-40 L48,8' opacity='0.11' stroke-width='0.8'/%3E\
+      %3Cpath d='M-32,48 L16,0' opacity='0.14' stroke-width='1'/%3E\
+      %3Cpath d='M0,-32 L48,16' opacity='0.14' stroke-width='1'/%3E\
+      %3Cpath d='M-24,48 L24,0' opacity='0.12' stroke-width='0.8'/%3E\
+      %3Cpath d='M0,-24 L48,24' opacity='0.12' stroke-width='0.8'/%3E\
+      %3Cpath d='M-16,48 L32,0' opacity='0.16' stroke-width='0.95'/%3E\
+      %3Cpath d='M0,-16 L48,32' opacity='0.16' stroke-width='0.95'/%3E\
+      %3Cpath d='M-8,48 L40,0' opacity='0.12' stroke-width='0.85'/%3E\
+      %3Cpath d='M0,-8 L48,40' opacity='0.12' stroke-width='0.85'/%3E\
+      %3Cpath d='M0,48 L48,0' opacity='0.15' stroke-width='0.9'/%3E\
+      %3Cpath d='M0,0 L48,48' opacity='0.15' stroke-width='0.9'/%3E\
+      %3Cpath d='M8,48 L56,0' opacity='0.11' stroke-width='0.8'/%3E\
+      %3Cpath d='M0,8 L48,56' opacity='0.11' stroke-width='0.8'/%3E\
+      %3Cpath d='M16,48 L64,0' opacity='0.14' stroke-width='1'/%3E\
+      %3Cpath d='M0,16 L48,64' opacity='0.14' stroke-width='1'/%3E\
+      %3Cpath d='M24,48 L72,0' opacity='0.12' stroke-width='0.8'/%3E\
+      %3Cpath d='M0,24 L48,72' opacity='0.12' stroke-width='0.8'/%3E\
+      %3Cpath d='M32,48 L80,0' opacity='0.16' stroke-width='0.95'/%3E\
+      %3Cpath d='M0,32 L48,80' opacity='0.16' stroke-width='0.95'/%3E\
+      %3Cpath d='M40,48 L88,0' opacity='0.12' stroke-width='0.85'/%3E\
+      %3Cpath d='M0,40 L48,88' opacity='0.12' stroke-width='0.85'/%3E\
+      %3C/g%3E\
+      %3C/svg%3E");
   /* Stipple as thresholded noise rather than a grid of identical dots --
      a gamma of 5 on the noise alpha crushes it into sparse specks. */
   --dr-stipple-rough:
     url("data:image/svg+xml,\
-      <svg xmlns='http://www.w3.org/2000/svg' width='90' height='90'>\
-      <filter id='s' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'>\
-      <feTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='2' stitchTiles='stitch' seed='9' result='n'/>\
-      <feComponentTransfer in='n' result='m'><feFuncA type='gamma' amplitude='1' exponent='4.6' offset='0'/></feComponentTransfer>\
-      <feFlood flood-color='rgb(33,32,30)' flood-opacity='0.42' result='f'/>\
-      <feComposite in='f' in2='m' operator='in'/>\
-      </filter>\
-      <rect width='90' height='90' filter='url(%23s)'/>\
-      </svg>");
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='90' height='90'%3E\
+      %3Cfilter id='s' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='2' stitchTiles='stitch' seed='9' result='n'/%3E\
+      %3CfeComponentTransfer in='n' result='m'%3E%3CfeFuncA type='gamma' amplitude='1' exponent='4.6' offset='0'/%3E%3C/feComponentTransfer%3E\
+      %3CfeFlood flood-color='rgb(33,32,30)' flood-opacity='0.42' result='f'/%3E\
+      %3CfeComposite in='f' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Crect width='90' height='90' filter='url(%23s)'/%3E\
+      %3C/svg%3E");
 
   /* Wash. Turbulence displaces the edge of a rectangle and a gaussian blur
      softens it, so the tone pools unevenly and its boundary is ragged --
@@ -323,14 +323,14 @@
      whatever it is staining. */
   --dr-wash-rough:
     url("data:image/svg+xml,\
-      <svg xmlns='http://www.w3.org/2000/svg' width='120' height='80'>\
-      <filter id='w' x='-15%25' y='-15%25' width='130%25' height='130%25' color-interpolation-filters='sRGB'>\
-      <feTurbulence type='fractalNoise' baseFrequency='0.012 0.02' numOctaves='3' seed='5' result='n'/>\
-      <feDisplacementMap in='SourceGraphic' in2='n' scale='26' xChannelSelector='R' yChannelSelector='G'/>\
-      <feGaussianBlur stdDeviation='3'/>\
-      </filter>\
-      <rect x='6' y='6' width='108' height='68' fill='rgb(63,127,153)' opacity='0.42' filter='url(%23w)'/>\
-      </svg>");
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='80'%3E\
+      %3Cfilter id='w' x='-15%25' y='-15%25' width='130%25' height='130%25' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.012 0.02' numOctaves='3' seed='5' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='26' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3CfeGaussianBlur stdDeviation='3'/%3E\
+      %3C/filter%3E\
+      %3Crect x='6' y='6' width='108' height='68' fill='rgb(63,127,153)' opacity='0.42' filter='url(%23w)'/%3E\
+      %3C/svg%3E");
 
   /* The quarter-hour construction grid, as a drawn hairline rather than a
      ruled gradient: displaced by 1.6 units over a 600px tile, so the line
@@ -338,19 +338,142 @@
      enough that a sub-pixel step in an 0.05-alpha line is invisible. */
   --dr-grid-rough:
     url("data:image/svg+xml,\
-      <svg xmlns='http://www.w3.org/2000/svg' width='600' height='15'>\
-      <filter id='r' x='-2%25' y='-200%25' width='104%25' height='500%25' color-interpolation-filters='sRGB'>\
-      <feTurbulence type='fractalNoise' baseFrequency='0.02 0.9' numOctaves='2' seed='13' result='n'/>\
-      <feDisplacementMap in='SourceGraphic' in2='n' scale='1.6' xChannelSelector='R' yChannelSelector='G'/>\
-      </filter>\
-      <path d='M0,0.5 L600,0.5' stroke='rgb(33,32,30)' stroke-width='1' opacity='0.5' fill='none' filter='url(%23r)'/>\
-      </svg>");
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='15'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='27' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.02 0.9' numOctaves='3' seed='13' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='1.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,0.5 L600,0.5' stroke='rgb(33,32,30)' stroke-width='0.8' opacity='0.09' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
   --dr-grid-rough-size: 600px calc(var(--dr-hour) / 4);
   --dr-grid-smooth: repeating-linear-gradient(to bottom,
     var(--dr-construction-ink) 0 var(--dr-w-construction),
     transparent var(--dr-w-construction) calc(var(--dr-hour) / 4));
   --dr-grid: var(--dr-grid-rough);
   --dr-grid-size: var(--dr-grid-rough-size);
+
+
+  /* --- Construction understudies ---------------------------------------
+     Every ruled line in the drawing was set out in pencil before it was
+     inked, and in all four references that pencil is still on the sheet:
+     the ray that found the point, the sweep the arc was struck along, the
+     line the rule was laid against. So every principal line here carries an
+     understudy -- a thin, heavily displaced hairline running a few pixels
+     off it.
+
+     TWO RULES GOVERN THEM, AND NEITHER MAY BE BROKEN:
+       1. An understudy is ALWAYS lighter than the line it constructs. It
+          follows the same four-weight hierarchy, one step down:
+             structural (.88) -> .30      object (.58) -> .20
+             hairline   (.32) -> .13      construction (.20) -> .12
+             the arc's own construction ink (.11) -> .07
+          A setting-out line that competes with its own object line inverts
+          the whole point of the drawing.
+       2. It is thin and rough rather than thick and smooth -- 0.65px stroke
+          displaced by 2.6 units. A lot of texture, very little weight.
+
+     They are construction, so `.dr-no-construction` blanks all of them, and
+     they are textured, so `.dr-no-texture` swaps them for ruled twins. Like
+     every other texture in this file they are rasters, never live filters:
+     an understudy sits beside a line that is about to be dragged past.
+
+       --dr-under-grid    under the hour rules        (construction)
+       --dr-under-h-line  under now / deadline        (object)
+       --dr-under-h-hair  under a band's own edges    (hairline)
+       --dr-under-v-cut   beside today's column rules (structural)
+       --dr-under-v-line  beside the axis rule        (object)
+       --dr-under-v-hair  beside a column separator   (hairline)
+       --dr-under-arc     inside a compass arc        (below construction)
+
+     Getting this backwards is easy and looks immediately wrong: the hour
+     rules are drawn in --dr-c-construction, not --dr-c-line, so their
+     understudy belongs at .12 and not at .20; and an arc is already the
+     faintest line on the sheet, so its sweep has to go below even that. */
+  --dr-under-grid:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='60'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='72' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.06 0.5' numOctaves='3' seed='21' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,2.8 L600,2.8' stroke='rgb(33,32,30)' stroke-width='0.65' opacity='0.12' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
+  --dr-under-h-line:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='6'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='18' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.06 0.5' numOctaves='3' seed='22' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,3 L600,3' stroke='rgb(33,32,30)' stroke-width='0.65' opacity='0.2' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
+  --dr-under-h-hair:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='6'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='18' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.06 0.5' numOctaves='3' seed='23' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,3 L600,3' stroke='rgb(33,32,30)' stroke-width='0.65' opacity='0.13' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
+  --dr-under-v-cut:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='18' height='612' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5 0.06' numOctaves='3' seed='24' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M3,0 L3,600' stroke='rgb(33,32,30)' stroke-width='0.65' opacity='0.3' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
+  --dr-under-v-line:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='18' height='612' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5 0.06' numOctaves='3' seed='25' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M3,0 L3,600' stroke='rgb(33,32,30)' stroke-width='0.65' opacity='0.2' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
+  --dr-under-v-hair:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='18' height='612' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5 0.06' numOctaves='3' seed='26' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M3,0 L3,600' stroke='rgb(33,32,30)' stroke-width='0.65' opacity='0.13' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
+  --dr-under-arc:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-8' y='-8' width='216' height='216' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.012' numOctaves='3' seed='27' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='5' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Ccircle cx='100.0' cy='100.0' r='96.0' stroke='rgb(33,32,30)' stroke-width='0.9' opacity='0.07' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
+
+  /* Which vertical understudy a column uses. Set on the column, read by the
+     track, so `.is-today` can promote its own setting-out to the structural
+     step without the track needing a second background declaration. */
+  --dr-under-v: var(--dr-under-v-hair);
+
+  /* Ruled twins, for `.dr-no-texture`. The geometry survives; only the
+     wander goes. */
+  --dr-under-grid-smooth: repeating-linear-gradient(to bottom,
+    transparent 0 3px, rgba(var(--dr-ink-rgb), 0.09) 3px 3.7px, transparent 3.7px var(--dr-hour));
+  --dr-under-h-line-smooth: linear-gradient(to bottom,
+    transparent 0 3px, rgba(var(--dr-ink-rgb), 0.14) 3px 3.7px, transparent 3.7px);
+  --dr-under-h-hair-smooth: linear-gradient(to bottom,
+    transparent 0 3px, rgba(var(--dr-ink-rgb), 0.09) 3px 3.7px, transparent 3.7px);
+  --dr-under-v-cut-smooth: linear-gradient(to right,
+    transparent 0 3px, rgba(var(--dr-ink-rgb), 0.22) 3px 3.7px, transparent 3.7px);
+  --dr-under-v-line-smooth: linear-gradient(to right,
+    transparent 0 3px, rgba(var(--dr-ink-rgb), 0.14) 3px 3.7px, transparent 3.7px);
+  --dr-under-v-hair-smooth: linear-gradient(to right,
+    transparent 0 3px, rgba(var(--dr-ink-rgb), 0.09) 3px 3.7px, transparent 3.7px);
+  --dr-under-arc-smooth: radial-gradient(circle,
+    transparent 0 calc(50% - 1px), rgba(var(--dr-ink-rgb), 0.07) calc(50% - 1px) 50%, transparent 50%);
 
   /* === 1c. WHICH LAYERS MAY CARRY TEXTURE ===============================
      Texture is spent where the drawing does not move, and the drawing's own
@@ -509,119 +632,187 @@
 
   --dr-hatch-a-rough:
     url("data:image/svg+xml,\
-      <svg xmlns='http://www.w3.org/2000/svg' width='60' height='60'>\
-      <filter id='t' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'>\
-      <feTurbulence type='fractalNoise' baseFrequency='0.4' numOctaves='2' stitchTiles='stitch' seed='4' result='n'/>\
-      <feColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.1 1.1 0 0 -0.2' result='m'/>\
-      <feComposite in='SourceGraphic' in2='m' operator='in'/>\
-      </filter>\
-      <g filter='url(%23t)' stroke='rgb(226,233,238)' fill='none'>\
-      <path d='M-60,60 L0,0' opacity='0.16' stroke-width='1'/>\
-      <path d='M-50,60 L10,0' opacity='0.11' stroke-width='0.85'/>\
-      <path d='M-40,60 L20,0' opacity='0.15' stroke-width='1.1'/>\
-      <path d='M-30,60 L30,0' opacity='0.1' stroke-width='0.8'/>\
-      <path d='M-20,60 L40,0' opacity='0.17' stroke-width='1'/>\
-      <path d='M-10,60 L50,0' opacity='0.12' stroke-width='0.9'/>\
-      <path d='M0,60 L60,0' opacity='0.16' stroke-width='1'/>\
-      <path d='M10,60 L70,0' opacity='0.11' stroke-width='0.85'/>\
-      <path d='M20,60 L80,0' opacity='0.15' stroke-width='1.1'/>\
-      <path d='M30,60 L90,0' opacity='0.1' stroke-width='0.8'/>\
-      <path d='M40,60 L100,0' opacity='0.17' stroke-width='1'/>\
-      <path d='M50,60 L110,0' opacity='0.12' stroke-width='0.9'/>\
-      </g>\
-      </svg>");
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E\
+      %3Cfilter id='t' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.4' numOctaves='2' stitchTiles='stitch' seed='4' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.1 1.1 0 0 -0.2' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cg filter='url(%23t)' stroke='rgb(226,233,238)' fill='none'%3E\
+      %3Cpath d='M-60,60 L0,0' opacity='0.16' stroke-width='1'/%3E\
+      %3Cpath d='M-50,60 L10,0' opacity='0.11' stroke-width='0.85'/%3E\
+      %3Cpath d='M-40,60 L20,0' opacity='0.15' stroke-width='1.1'/%3E\
+      %3Cpath d='M-30,60 L30,0' opacity='0.1' stroke-width='0.8'/%3E\
+      %3Cpath d='M-20,60 L40,0' opacity='0.17' stroke-width='1'/%3E\
+      %3Cpath d='M-10,60 L50,0' opacity='0.12' stroke-width='0.9'/%3E\
+      %3Cpath d='M0,60 L60,0' opacity='0.16' stroke-width='1'/%3E\
+      %3Cpath d='M10,60 L70,0' opacity='0.11' stroke-width='0.85'/%3E\
+      %3Cpath d='M20,60 L80,0' opacity='0.15' stroke-width='1.1'/%3E\
+      %3Cpath d='M30,60 L90,0' opacity='0.1' stroke-width='0.8'/%3E\
+      %3Cpath d='M40,60 L100,0' opacity='0.17' stroke-width='1'/%3E\
+      %3Cpath d='M50,60 L110,0' opacity='0.12' stroke-width='0.9'/%3E\
+      %3C/g%3E\
+      %3C/svg%3E");
   --dr-hatch-b-rough:
     url("data:image/svg+xml,\
-      <svg xmlns='http://www.w3.org/2000/svg' width='48' height='48'>\
-      <filter id='t' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'>\
-      <feTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='2' stitchTiles='stitch' seed='6' result='n'/>\
-      <feColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.1 1.1 0 0 -0.2' result='m'/>\
-      <feComposite in='SourceGraphic' in2='m' operator='in'/>\
-      </filter>\
-      <g filter='url(%23t)' stroke='rgb(226,233,238)' fill='none'>\
-      <path d='M0,-48 L48,0' opacity='0.13' stroke-width='0.9'/>\
-      <path d='M0,-42 L48,6' opacity='0.09' stroke-width='0.8'/>\
-      <path d='M0,-36 L48,12' opacity='0.12' stroke-width='1'/>\
-      <path d='M0,-30 L48,18' opacity='0.08' stroke-width='0.75'/>\
-      <path d='M0,-24 L48,24' opacity='0.14' stroke-width='0.95'/>\
-      <path d='M0,-18 L48,30' opacity='0.1' stroke-width='0.85'/>\
-      <path d='M0,-12 L48,36' opacity='0.11' stroke-width='0.9'/>\
-      <path d='M0,-6 L48,42' opacity='0.09' stroke-width='0.8'/>\
-      <path d='M0,0 L48,48' opacity='0.13' stroke-width='0.9'/>\
-      <path d='M0,6 L48,54' opacity='0.09' stroke-width='0.8'/>\
-      <path d='M0,12 L48,60' opacity='0.12' stroke-width='1'/>\
-      <path d='M0,18 L48,66' opacity='0.08' stroke-width='0.75'/>\
-      <path d='M0,24 L48,72' opacity='0.14' stroke-width='0.95'/>\
-      <path d='M0,30 L48,78' opacity='0.1' stroke-width='0.85'/>\
-      <path d='M0,36 L48,84' opacity='0.11' stroke-width='0.9'/>\
-      <path d='M0,42 L48,90' opacity='0.09' stroke-width='0.8'/>\
-      </g>\
-      </svg>");
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E\
+      %3Cfilter id='t' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='2' stitchTiles='stitch' seed='6' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.1 1.1 0 0 -0.2' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cg filter='url(%23t)' stroke='rgb(226,233,238)' fill='none'%3E\
+      %3Cpath d='M0,-48 L48,0' opacity='0.13' stroke-width='0.9'/%3E\
+      %3Cpath d='M0,-42 L48,6' opacity='0.09' stroke-width='0.8'/%3E\
+      %3Cpath d='M0,-36 L48,12' opacity='0.12' stroke-width='1'/%3E\
+      %3Cpath d='M0,-30 L48,18' opacity='0.08' stroke-width='0.75'/%3E\
+      %3Cpath d='M0,-24 L48,24' opacity='0.14' stroke-width='0.95'/%3E\
+      %3Cpath d='M0,-18 L48,30' opacity='0.1' stroke-width='0.85'/%3E\
+      %3Cpath d='M0,-12 L48,36' opacity='0.11' stroke-width='0.9'/%3E\
+      %3Cpath d='M0,-6 L48,42' opacity='0.09' stroke-width='0.8'/%3E\
+      %3Cpath d='M0,0 L48,48' opacity='0.13' stroke-width='0.9'/%3E\
+      %3Cpath d='M0,6 L48,54' opacity='0.09' stroke-width='0.8'/%3E\
+      %3Cpath d='M0,12 L48,60' opacity='0.12' stroke-width='1'/%3E\
+      %3Cpath d='M0,18 L48,66' opacity='0.08' stroke-width='0.75'/%3E\
+      %3Cpath d='M0,24 L48,72' opacity='0.14' stroke-width='0.95'/%3E\
+      %3Cpath d='M0,30 L48,78' opacity='0.1' stroke-width='0.85'/%3E\
+      %3Cpath d='M0,36 L48,84' opacity='0.11' stroke-width='0.9'/%3E\
+      %3Cpath d='M0,42 L48,90' opacity='0.09' stroke-width='0.8'/%3E\
+      %3C/g%3E\
+      %3C/svg%3E");
   --dr-hatch-cross-rough:
     url("data:image/svg+xml,\
-      <svg xmlns='http://www.w3.org/2000/svg' width='48' height='48'>\
-      <filter id='t' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'>\
-      <feTurbulence type='fractalNoise' baseFrequency='0.45' numOctaves='2' stitchTiles='stitch' seed='8' result='n'/>\
-      <feColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.1 1.1 0 0 -0.2' result='m'/>\
-      <feComposite in='SourceGraphic' in2='m' operator='in'/>\
-      </filter>\
-      <g filter='url(%23t)' stroke='rgb(226,233,238)' fill='none'>\
-      <path d='M-48,48 L0,0' opacity='0.11' stroke-width='0.9'/>\
-      <path d='M0,-48 L48,0' opacity='0.11' stroke-width='0.9'/>\
-      <path d='M-40,48 L8,0' opacity='0.08' stroke-width='0.8'/>\
-      <path d='M0,-40 L48,8' opacity='0.08' stroke-width='0.8'/>\
-      <path d='M-32,48 L16,0' opacity='0.1' stroke-width='1'/>\
-      <path d='M0,-32 L48,16' opacity='0.1' stroke-width='1'/>\
-      <path d='M-24,48 L24,0' opacity='0.09' stroke-width='0.8'/>\
-      <path d='M0,-24 L48,24' opacity='0.09' stroke-width='0.8'/>\
-      <path d='M-16,48 L32,0' opacity='0.12' stroke-width='0.95'/>\
-      <path d='M0,-16 L48,32' opacity='0.12' stroke-width='0.95'/>\
-      <path d='M-8,48 L40,0' opacity='0.09' stroke-width='0.85'/>\
-      <path d='M0,-8 L48,40' opacity='0.09' stroke-width='0.85'/>\
-      <path d='M0,48 L48,0' opacity='0.11' stroke-width='0.9'/>\
-      <path d='M0,0 L48,48' opacity='0.11' stroke-width='0.9'/>\
-      <path d='M8,48 L56,0' opacity='0.08' stroke-width='0.8'/>\
-      <path d='M0,8 L48,56' opacity='0.08' stroke-width='0.8'/>\
-      <path d='M16,48 L64,0' opacity='0.1' stroke-width='1'/>\
-      <path d='M0,16 L48,64' opacity='0.1' stroke-width='1'/>\
-      <path d='M24,48 L72,0' opacity='0.09' stroke-width='0.8'/>\
-      <path d='M0,24 L48,72' opacity='0.09' stroke-width='0.8'/>\
-      <path d='M32,48 L80,0' opacity='0.12' stroke-width='0.95'/>\
-      <path d='M0,32 L48,80' opacity='0.12' stroke-width='0.95'/>\
-      <path d='M40,48 L88,0' opacity='0.09' stroke-width='0.85'/>\
-      <path d='M0,40 L48,88' opacity='0.09' stroke-width='0.85'/>\
-      </g>\
-      </svg>");
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E\
+      %3Cfilter id='t' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.45' numOctaves='2' stitchTiles='stitch' seed='8' result='n'/%3E\
+      %3CfeColorMatrix in='n' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.1 1.1 0 0 -0.2' result='m'/%3E\
+      %3CfeComposite in='SourceGraphic' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Cg filter='url(%23t)' stroke='rgb(226,233,238)' fill='none'%3E\
+      %3Cpath d='M-48,48 L0,0' opacity='0.11' stroke-width='0.9'/%3E\
+      %3Cpath d='M0,-48 L48,0' opacity='0.11' stroke-width='0.9'/%3E\
+      %3Cpath d='M-40,48 L8,0' opacity='0.08' stroke-width='0.8'/%3E\
+      %3Cpath d='M0,-40 L48,8' opacity='0.08' stroke-width='0.8'/%3E\
+      %3Cpath d='M-32,48 L16,0' opacity='0.1' stroke-width='1'/%3E\
+      %3Cpath d='M0,-32 L48,16' opacity='0.1' stroke-width='1'/%3E\
+      %3Cpath d='M-24,48 L24,0' opacity='0.09' stroke-width='0.8'/%3E\
+      %3Cpath d='M0,-24 L48,24' opacity='0.09' stroke-width='0.8'/%3E\
+      %3Cpath d='M-16,48 L32,0' opacity='0.12' stroke-width='0.95'/%3E\
+      %3Cpath d='M0,-16 L48,32' opacity='0.12' stroke-width='0.95'/%3E\
+      %3Cpath d='M-8,48 L40,0' opacity='0.09' stroke-width='0.85'/%3E\
+      %3Cpath d='M0,-8 L48,40' opacity='0.09' stroke-width='0.85'/%3E\
+      %3Cpath d='M0,48 L48,0' opacity='0.11' stroke-width='0.9'/%3E\
+      %3Cpath d='M0,0 L48,48' opacity='0.11' stroke-width='0.9'/%3E\
+      %3Cpath d='M8,48 L56,0' opacity='0.08' stroke-width='0.8'/%3E\
+      %3Cpath d='M0,8 L48,56' opacity='0.08' stroke-width='0.8'/%3E\
+      %3Cpath d='M16,48 L64,0' opacity='0.1' stroke-width='1'/%3E\
+      %3Cpath d='M0,16 L48,64' opacity='0.1' stroke-width='1'/%3E\
+      %3Cpath d='M24,48 L72,0' opacity='0.09' stroke-width='0.8'/%3E\
+      %3Cpath d='M0,24 L48,72' opacity='0.09' stroke-width='0.8'/%3E\
+      %3Cpath d='M32,48 L80,0' opacity='0.12' stroke-width='0.95'/%3E\
+      %3Cpath d='M0,32 L48,80' opacity='0.12' stroke-width='0.95'/%3E\
+      %3Cpath d='M40,48 L88,0' opacity='0.09' stroke-width='0.85'/%3E\
+      %3Cpath d='M0,40 L48,88' opacity='0.09' stroke-width='0.85'/%3E\
+      %3C/g%3E\
+      %3C/svg%3E");
   --dr-stipple-rough:
     url("data:image/svg+xml,\
-      <svg xmlns='http://www.w3.org/2000/svg' width='90' height='90'>\
-      <filter id='s' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'>\
-      <feTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='2' stitchTiles='stitch' seed='9' result='n'/>\
-      <feComponentTransfer in='n' result='m'><feFuncA type='gamma' amplitude='1' exponent='4.6' offset='0'/></feComponentTransfer>\
-      <feFlood flood-color='rgb(226,233,238)' flood-opacity='0.34' result='f'/>\
-      <feComposite in='f' in2='m' operator='in'/>\
-      </filter>\
-      <rect width='90' height='90' filter='url(%23s)'/>\
-      </svg>");
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='90' height='90'%3E\
+      %3Cfilter id='s' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='2' stitchTiles='stitch' seed='9' result='n'/%3E\
+      %3CfeComponentTransfer in='n' result='m'%3E%3CfeFuncA type='gamma' amplitude='1' exponent='4.6' offset='0'/%3E%3C/feComponentTransfer%3E\
+      %3CfeFlood flood-color='rgb(226,233,238)' flood-opacity='0.34' result='f'/%3E\
+      %3CfeComposite in='f' in2='m' operator='in'/%3E\
+      %3C/filter%3E\
+      %3Crect width='90' height='90' filter='url(%23s)'/%3E\
+      %3C/svg%3E");
   --dr-wash-rough:
     url("data:image/svg+xml,\
-      <svg xmlns='http://www.w3.org/2000/svg' width='120' height='80'>\
-      <filter id='w' x='-15%25' y='-15%25' width='130%25' height='130%25' color-interpolation-filters='sRGB'>\
-      <feTurbulence type='fractalNoise' baseFrequency='0.012 0.02' numOctaves='3' seed='5' result='n'/>\
-      <feDisplacementMap in='SourceGraphic' in2='n' scale='26' xChannelSelector='R' yChannelSelector='G'/>\
-      <feGaussianBlur stdDeviation='3'/>\
-      </filter>\
-      <rect x='6' y='6' width='108' height='68' fill='rgb(119,174,203)' opacity='0.4' filter='url(%23w)'/>\
-      </svg>");
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='80'%3E\
+      %3Cfilter id='w' x='-15%25' y='-15%25' width='130%25' height='130%25' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.012 0.02' numOctaves='3' seed='5' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='26' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3CfeGaussianBlur stdDeviation='3'/%3E\
+      %3C/filter%3E\
+      %3Crect x='6' y='6' width='108' height='68' fill='rgb(119,174,203)' opacity='0.4' filter='url(%23w)'/%3E\
+      %3C/svg%3E");
   --dr-grid-rough:
     url("data:image/svg+xml,\
-      <svg xmlns='http://www.w3.org/2000/svg' width='600' height='15'>\
-      <filter id='r' x='-2%25' y='-200%25' width='104%25' height='500%25' color-interpolation-filters='sRGB'>\
-      <feTurbulence type='fractalNoise' baseFrequency='0.02 0.9' numOctaves='2' seed='13' result='n'/>\
-      <feDisplacementMap in='SourceGraphic' in2='n' scale='1.6' xChannelSelector='R' yChannelSelector='G'/>\
-      </filter>\
-      <path d='M0,0.5 L600,0.5' stroke='rgb(226,233,238)' stroke-width='1' opacity='0.42' fill='none' filter='url(%23r)'/>\
-      </svg>");
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='15'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='27' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.02 0.9' numOctaves='3' seed='13' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='1.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,0.5 L600,0.5' stroke='rgb(226,233,238)' stroke-width='0.8' opacity='0.075' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
+
+  /* Understudies re-inked for the plate, one step lighter again -- a pale
+     setting-out line on a dark ground reads heavier than a graphite one on
+     paper, and this layer must stay under everything it constructs. */
+  --dr-under-grid:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='60'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='72' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.06 0.5' numOctaves='3' seed='21' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,2.8 L600,2.8' stroke='rgb(226,233,238)' stroke-width='0.65' opacity='0.1' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
+  --dr-under-h-line:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='6'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='18' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.06 0.5' numOctaves='3' seed='22' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,3 L600,3' stroke='rgb(226,233,238)' stroke-width='0.65' opacity='0.16' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
+  --dr-under-h-hair:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='6'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='612' height='18' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.06 0.5' numOctaves='3' seed='23' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M0,3 L600,3' stroke='rgb(226,233,238)' stroke-width='0.65' opacity='0.1' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
+  --dr-under-v-cut:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='18' height='612' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5 0.06' numOctaves='3' seed='24' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M3,0 L3,600' stroke='rgb(226,233,238)' stroke-width='0.65' opacity='0.24' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
+  --dr-under-v-line:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='18' height='612' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5 0.06' numOctaves='3' seed='25' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M3,0 L3,600' stroke='rgb(226,233,238)' stroke-width='0.65' opacity='0.16' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
+  --dr-under-v-hair:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='600'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-6' y='-6' width='18' height='612' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.5 0.06' numOctaves='3' seed='26' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='2.6' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Cpath d='M3,0 L3,600' stroke='rgb(226,233,238)' stroke-width='0.65' opacity='0.1' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
+  --dr-under-arc:
+    url("data:image/svg+xml,\
+      %3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E\
+      %3Cfilter id='u' filterUnits='userSpaceOnUse' x='-8' y='-8' width='216' height='216' color-interpolation-filters='sRGB'%3E\
+      %3CfeTurbulence type='fractalNoise' baseFrequency='0.012' numOctaves='3' seed='27' result='n'/%3E\
+      %3CfeDisplacementMap in='SourceGraphic' in2='n' scale='5' xChannelSelector='R' yChannelSelector='G'/%3E\
+      %3C/filter%3E\
+      %3Ccircle cx='100.0' cy='100.0' r='96.0' stroke='rgb(226,233,238)' stroke-width='0.9' opacity='0.06' fill='none' filter='url(%23u)'/%3E\
+      %3C/svg%3E");
+
 
   /* The one place the two modes genuinely disagree. #c23b2e is a printer's
      red on paper and a muddy brown on a dark plate, so the dark chart uses a
@@ -658,6 +849,14 @@
   --dr-wash: var(--dr-cool-wash-flat);
   --dr-ink-blend: normal;
   --dr-grain-opacity: 0;
+  /* The setting-out keeps its geometry and loses only its wander. */
+  --dr-under-grid: var(--dr-under-grid-smooth);
+  --dr-under-h-line: var(--dr-under-h-line-smooth);
+  --dr-under-h-hair: var(--dr-under-h-hair-smooth);
+  --dr-under-v-cut: var(--dr-under-v-cut-smooth);
+  --dr-under-v-line: var(--dr-under-v-line-smooth);
+  --dr-under-v-hair: var(--dr-under-v-hair-smooth);
+  --dr-under-arc: var(--dr-under-arc-smooth);
 }
 
 .drafting.dr-no-texture .dr-grain { display: none; }
@@ -668,7 +867,16 @@
    still wins and the grid is gone rather than merely ruled. The rough grid's
    opacity is baked into its raster, so blanking --dr-construction-ink alone
    would not reach it. */
-.drafting.dr-no-construction { --dr-grid: none; }
+.drafting.dr-no-construction {
+  --dr-grid: none;
+  --dr-under-grid: none;
+  --dr-under-h-line: none;
+  --dr-under-h-hair: none;
+  --dr-under-v-cut: none;
+  --dr-under-v-line: none;
+  --dr-under-v-hair: none;
+  --dr-under-arc: none;
+}
 
 /* --- Paper tooth ------------------------------------------------------------
    ONE element, fixed to the viewport, over everything, never re-rendered and
@@ -846,10 +1054,11 @@
     repeating-linear-gradient(to bottom,
       var(--dr-c-line) 0 var(--dr-w-line), transparent var(--dr-w-line) var(--dr-hour)),
     repeating-linear-gradient(to bottom,
-      var(--dr-construction-ink) 0 var(--dr-w-line), transparent var(--dr-w-line) var(--dr-hour));
-  background-size: var(--dr-tick-major) 100%, var(--dr-tick-minor) 100%;
-  background-position: right top, right calc(var(--dr-hour) / 2);
-  background-repeat: no-repeat;
+      var(--dr-construction-ink) 0 var(--dr-w-line), transparent var(--dr-w-line) var(--dr-hour)),
+    var(--dr-under-v-line);
+  background-size: var(--dr-tick-major) 100%, var(--dr-tick-minor) 100%, 6px auto;
+  background-position: right top, right calc(var(--dr-hour) / 2), right 3px top;
+  background-repeat: no-repeat, no-repeat, repeat-y;
 }
 
 /* The hour figure hangs off its own tick and hard against the rule, the way
@@ -879,7 +1088,7 @@
 .dr-axis--mirrored {
   border-right: 0;
   border-left: var(--dr-rule-line);
-  background-position: left top, left calc(var(--dr-hour) / 2);
+  background-position: left top, left calc(var(--dr-hour) / 2), left 3px top;
 }
 
 .dr-axis--mirrored .dr-axis-figure {
@@ -909,10 +1118,23 @@
   background-image:
     repeating-linear-gradient(to bottom,
       var(--dr-c-construction) 0 var(--dr-w-line), transparent var(--dr-w-line) var(--dr-hour)),
-    var(--dr-grid);
-  background-size: auto, var(--dr-grid-size);
-  background-repeat: repeat, repeat;
+    var(--dr-under-grid),
+    var(--dr-grid),
+    var(--dr-under-v);
+  background-size:
+    auto,
+    600px var(--dr-hour),
+    var(--dr-grid-size),
+    6px auto;
+  background-position: 0 0, 0 0, 0 0, right 3px top;
+  background-repeat: repeat, repeat, repeat, repeat-y;
 }
+
+/* Today's column is ruled at structural weight, so its setting-out steps up
+   with it -- one property on the column, read by the track's background list
+   above, rather than a second background declaration that would have to
+   restate all four layers. */
+.dr-col.is-today { --dr-under-v: var(--dr-under-v-cut); }
 
 /* A drawn rule runs fractionally past what it divides. The separator is a
    pseudo-element rather than a border precisely so it can overrun the
@@ -966,8 +1188,33 @@
   /* No mix-blend-mode, deliberately. A band is a dark tone on a light ground,
      and ordinary alpha compositing already darkens where two of them meet --
      multiply would look the same and cost a compositing layer per band. See
-     --dr-ink-blend. */
+     --dr-ink-blend.
+
+     THAT OVERLAP IS THE POINT, not an accident: a band draws only a tone over
+     a transparent ground, never a fill, so where working and domestic hours
+     cover the same time the stipple and the 45-degree hatch both survive and
+     the eye reads both materials at once. Give either one an opaque
+     background and that stops being true. */
 }
+
+/* The pencil line under each of a band's two edges. Pseudo-elements rather
+   than more background layers on the modifiers, so --working/--domestic/--closed
+   only ever have to declare their own tone. */
+.dr-band::before,
+.dr-band::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 6px;
+  background-image: var(--dr-under-h-hair);
+  background-size: 600px 6px;
+  background-repeat: repeat-x;
+  pointer-events: none;
+}
+
+.dr-band::before { top: 1px; }
+.dr-band::after { bottom: 1px; transform: scaleY(-1); }
 
 /* Stipple is the lightest tone in the system, which is why the band that
    most blocks sit on top of gets it. */
@@ -1248,6 +1495,27 @@
   border-left: 5px solid var(--dr-red);
 }
 
+/* now, deadline and the bedtime marker are drawn rules too, so each carries
+   its own setting-out -- at the step below its own weight: object for the two
+   red ones, hairline for the dashed advisory. */
+.dr-now::after,
+.dr-deadline::after,
+.dr-marker::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 1px;
+  height: 6px;
+  background-size: 600px 6px;
+  background-repeat: repeat-x;
+  pointer-events: none;
+}
+
+.dr-now::after,
+.dr-deadline::after { background-image: var(--dr-under-h-line); }
+.dr-marker::after { background-image: var(--dr-under-h-hair); }
+
 .dr-now-label {
   position: absolute;
   right: 2px;
@@ -1326,6 +1594,20 @@
   clip-path: inset(0 0 50% 0);
   pointer-events: none;
   z-index: 0;
+}
+
+/* The sweep the arc was struck along, just inside it. Same relationship as
+   every other understudy: thinner, rougher, lighter, and it inherits the
+   parent's clip so it stops at the same half-circle the arc does. */
+.dr-arc::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  background-image: var(--dr-under-arc);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  pointer-events: none;
 }
 
 /* The centre of the sweep: a small cross, the drafting mark for a point. */

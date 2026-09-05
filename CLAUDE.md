@@ -82,14 +82,26 @@ These are not preferences. Violating one means the change gets reverted.
    by `.dr-no-texture`, which repoints the four tones at their `--smooth` twins. Those
    twins are not dead code: the ruled system underneath has to stand up on its own, and if
    the drawing only reads with texture on, the texture is doing work the system should be.
-   **Texture is never live.** Every grain, hatch, stipple and wash is an SVG data URI used
-   as a `background-image`, so its `feTurbulence` runs once in the image decoder. There is
-   not one `filter:` in the file, and exactly one `mix-blend-mode` layer (the grain, plus a
-   wash wherever one is drawn) — because a live filter or a blend is recomputed whenever
-   the element moves, and this calendar re-renders on every drag. **A task block carries no
-   filter, no blend and no mask, ever.** Its edges are ruled lines, which is what the
-   subject of a drawing is anyway. Every `feTurbulence` is seeded explicitly; an unseeded
-   one may differ between renders and the drawing would shimmer.
+   **Texture is never live.** Every grain, hatch, stipple, wash and setting-out line is an
+   SVG data URI used as a `background-image`, so its `feTurbulence` runs once in the image
+   decoder. There is not one `filter:` in the file, and exactly one `mix-blend-mode` layer
+   (the grain, plus a wash wherever one is drawn) — because a live filter or a blend is
+   recomputed whenever the element moves, and this calendar re-renders on every drag. **A
+   task block carries no filter, no blend and no mask, ever.** Its edges are ruled lines,
+   which is what the subject of a drawing is anyway. Every `feTurbulence` is seeded
+   explicitly; an unseeded one may differ between renders and the drawing would shimmer.
+   **Every principal line carries an understudy.** The pencil a ruled line was inked over
+   is still on the sheet: `--dr-under-*`, thin and heavily displaced, offset a few pixels.
+   It is **always one weight step lighter than the line it constructs** — structural .88 →
+   .30, object .58 → .20, hairline .32 → .13, the hour rules' own construction ink .20 →
+   .12, an arc's .11 → .07. Get that backwards and the setting-out competes with the
+   object, which inverts the whole drawing. Specimen plate 12 shows each pair.
+   **Two traps in the SVG data URIs, both of which fail silently.** A filter region given
+   in the default `objectBoundingBox` units is *zero* for a straight line (its bbox has no
+   width or height), so the element does not render at all — every line filter here
+   declares `filterUnits='userSpaceOnUse'` with explicit bounds. And `<`/`>` must be
+   percent-encoded: Chrome's CSS parser accepts them raw, stricter engines do not, and the
+   desktop spike targets WKWebView.
 7. **Raw `sqlite3`, no ORM.** Schema as string constants at the top of `db.py`, registered in `init_db()`, accessed through the `get_conn()` context manager. No SQLAlchemy, no models, no service layer.
 8. **Derived data gets its own table**, versioned and recomputable — never extra columns on `reference_items`. `colour_analysis` and `captures` both follow this.
 

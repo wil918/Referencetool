@@ -120,6 +120,54 @@
   .tex-cross::before { background-image: var(--dr-hatch-a-rough); }
   .tex-cross::after { background-image: var(--dr-hatch-b-rough); }
   .tex-cross--blend::after { mix-blend-mode: var(--dr-ink-blend); }
+
+  /* Plate 03's overlap: both tones on one element, exactly as two bands
+     covering the same hour composite on the track. */
+  .tone-overlap {
+    background-image: var(--dr-stipple), var(--dr-hatch-a);
+    background-size: var(--dr-stipple-pitch), auto;
+  }
+
+  /* Plate 12 only: each principal line beside the understudy that serves it,
+     drawn with the same custom properties the surface itself uses. */
+  .setout { display: grid; gap: 0.2rem; }
+  .setout-row {
+    display: grid;
+    grid-template-columns: 7.5rem 12rem 1fr;
+    align-items: center;
+    gap: 0.9rem;
+    padding: 0.2rem 0;
+  }
+  .setout-fig { position: relative; height: 2.6rem; }
+  .setout-fig--v { background-repeat: repeat-y; background-size: 6px auto; background-position: right 3px top; }
+
+  .setout-v-cut { border-right: var(--dr-rule-cut); background-image: var(--dr-under-v-cut); }
+  .setout-v-line { border-right: var(--dr-rule-line); background-image: var(--dr-under-v-line); }
+  .setout-v-hair { border-right: var(--dr-rule-hair); background-image: var(--dr-under-v-hair); }
+
+  .setout-hour {
+    background-image:
+      repeating-linear-gradient(to bottom,
+        var(--dr-c-construction) 0 var(--dr-w-line), transparent var(--dr-w-line) var(--dr-hour)),
+      var(--dr-under-grid);
+    background-size: auto, 600px var(--dr-hour);
+  }
+
+  .setout-h-line {
+    border-top: var(--dr-w-line) solid var(--dr-red-line);
+    background-image: var(--dr-under-h-line);
+    background-size: 600px 6px;
+    background-repeat: repeat-x;
+  }
+
+  .setout-h-hair {
+    border-top: var(--dr-rule-hair);
+    background-image: var(--dr-under-h-hair);
+    background-size: 600px 6px;
+    background-repeat: repeat-x;
+  }
+
+  .setout-arc { overflow: hidden; }
 </style>
 </head>
 <body class="drafting">
@@ -272,10 +320,21 @@
         <div class="specimen-swatch dr-tone--cross"></div>
         <span class="dr-micro">45/135° · 8px</span>
       </div>
+      <div class="specimen-row">
+        <span class="dr-label">Overlap</span>
+        <div class="specimen-swatch tone-overlap"></div>
+        <span class="dr-micro">Both at once</span>
+      </div>
       <p class="note dr-body">
         Four materials, told apart by pitch <em>and</em> angle so they stay distinct in a
         screenshot and to a colourblind reader. Never a flat fill. Stipple is the lightest,
         which is why the band most blocks sit on gets it.
+        <br><br>
+        The fifth swatch is the reason none of them is a fill: where working and domestic
+        hours cover the same time, both tones survive and the eye reads both materials at
+        once. Give either band an opaque background and that stops being true — which is
+        exactly why it does not happen on the neumorphic schedule, where the working band
+        is a solid <span class="dr-micro">--sunken</span>.
       </p>
     </section>
 
@@ -609,6 +668,65 @@
         ruled line per thing. Crosshatch for cells outside the month — the drafting meaning of
         crosshatch is "not our material". Defined now so session 11 inherits the language
         rather than inventing a second one.
+      </p>
+    </section>
+
+    <!-- 12 SETTING OUT -->
+    <section class="plate plate--wide">
+      <div class="plate-head">
+        <span class="dr-key-num">12</span>
+        <span class="dr-key-term">Setting out</span>
+        <span class="dr-key-leader"></span>
+        <span class="dr-micro">Every line, and the pencil under it</span>
+      </div>
+      <div class="setout">
+        <div class="setout-row">
+          <span class="dr-label">Structural</span>
+          <div class="setout-fig setout-fig--v setout-v-cut"></div>
+          <span class="dr-micro">Today's column · .88 → .30</span>
+        </div>
+        <div class="setout-row">
+          <span class="dr-label">Object</span>
+          <div class="setout-fig setout-fig--v setout-v-line"></div>
+          <span class="dr-micro">The axis rule · .58 → .20</span>
+        </div>
+        <div class="setout-row">
+          <span class="dr-label">Hairline</span>
+          <div class="setout-fig setout-fig--v setout-v-hair"></div>
+          <span class="dr-micro">Column separator · .32 → .13</span>
+        </div>
+        <div class="setout-row">
+          <span class="dr-label">Construction</span>
+          <div class="setout-fig setout-hour"></div>
+          <span class="dr-micro">Hour rules · .20 → .12</span>
+        </div>
+        <div class="setout-row">
+          <span class="dr-label">Annotation</span>
+          <div class="setout-fig setout-h-line"></div>
+          <span class="dr-micro">Now · deadline · .92 → .20</span>
+        </div>
+        <div class="setout-row">
+          <span class="dr-label">Band edge</span>
+          <div class="setout-fig setout-h-hair"></div>
+          <span class="dr-micro">.32 → .13</span>
+        </div>
+        <div class="setout-row">
+          <span class="dr-label">Arc</span>
+          <div class="setout-fig setout-arc">
+            <div class="dr-arc dr-construction" style="top:100%; --dr-arc-r: 150px;"></div>
+          </div>
+          <span class="dr-micro">Compass sweep · .11 → .07</span>
+        </div>
+      </div>
+      <p class="note dr-body">
+        A ruled line was set out in pencil before it was inked, and in all four references
+        that pencil is still on the sheet. So every principal line here carries an understudy
+        a few pixels off it — thin, heavily displaced, and <em>always</em> a step lighter than
+        the line it constructs. Getting that backwards looks immediately wrong: the hour rules
+        are drawn in construction ink rather than object ink, so their understudy belongs at
+        .12 and not .20, and an arc is already the faintest line on the sheet, so its sweep has
+        to go below even that. All of it is construction, so it goes with that switch; all of
+        it is a raster, so a block can be dragged straight past it.
       </p>
     </section>
 
