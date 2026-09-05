@@ -11,6 +11,7 @@ import { initCalendarImport } from "../calendar-import.js";
 import { initCommitments } from "../commitments.js";
 import { refreshSchedule } from "./schedule.js";
 import { refreshDay } from "./day.js";
+import { createMonth } from "./month.js";
 import { initScheduleSettings } from "./settings.js";
 import { startBedtimeWatch } from "./bedtime-watch.js";
 
@@ -28,7 +29,24 @@ function activateTab(name) {
   if (name === "today") refreshDay();
   if (name === "tasks") tasks.refreshTaskList();
   if (name === "schedule") refreshSchedule();
+  if (name === "month") refreshMonth();
   return true;
+}
+
+// The month view, created lazily on first activation like every other tab.
+// Clicking a day there drops to the Today tab, navigated to that date -- the
+// month is for spotting a collision, the day view is for acting on it.
+let month = null;
+function refreshMonth() {
+  if (!month) {
+    month = createMonth(document.getElementById("month-calendar"), {
+      onOpenDay: (dateStr) => {
+        if (activateTab("today")) refreshDay(dateStr);
+      },
+    });
+  } else {
+    month.reload();
+  }
 }
 
 document.querySelectorAll(".tab-btn").forEach((btn) => {

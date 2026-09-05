@@ -1013,6 +1013,9 @@ def test_the_schedule_route_returns_blocks_in_range_plus_the_at_risk_list(client
     assert body["start"] == today.isoformat()
     # No range given, so it runs to the end of the horizon.
     assert body["end"] == body["horizon_end"]
+    # The month view draws the reserved finishing window straight onto the
+    # grid, so the route hands back how wide it is.
+    assert body["finishing_buffer_minutes"] == scheduling.FINISHING_BUFFER_MINUTES
 
 
 def test_the_schedule_routes_end_date_is_inclusive(client):
