@@ -2264,8 +2264,12 @@ def api_classify_commitments():
         fields["support_level"] = body["support_level"]
     if "location_id" in body:
         fields["location_id"] = body["location_id"]
+    if "capacity_override" in body:
+        # tri-state: null trusts the feed classification, 1/0 forces it in/out
+        value = body["capacity_override"]
+        fields["capacity_override"] = None if value is None else (1 if value else 0)
     if not fields:
-        return jsonify({"error": "support_level and/or location_id is required"}), 400
+        return jsonify({"error": "support_level, location_id and/or capacity_override is required"}), 400
 
     updated = []
     for commitment_id in ids:
@@ -2514,13 +2518,20 @@ def api_save_schedule_settings():
     morning_routine = body.get("morning_routine_minutes", current["morning_routine_minutes"])
     notify = body.get("bedtime_notifications_enabled", current["bedtime_notifications_enabled"])
     umbrella_id = body.get("default_location_umbrella_id", current["default_location_umbrella_id"])
+    cohort_group = body.get("cohort_group", current["cohort_group"])
     if not isinstance(sleep_target, (int, float)) or sleep_target <= 0:
         return jsonify({"error": "sleep_target_minutes must be a positive number"}), 400
     if not isinstance(morning_routine, (int, float)) or morning_routine < 0:
         return jsonify({"error": "morning_routine_minutes must be zero or more"}), 400
     if umbrella_id and not db.get_location(umbrella_id):
         return jsonify({"error": "default_location_umbrella_id must be an existing location"}), 400
-    db.save_schedule_settings(int(sleep_target), int(morning_routine), bool(notify), umbrella_id)
+    # Free text, not an enum -- next year's export may label the teaching groups
+    # differently, and ics_import matches it case-insensitively anyway.
+    if cohort_group is not None:
+        cohort_group = str(cohort_group).strip() or None
+    db.save_schedule_settings(
+        int(sleep_target), int(morning_routine), bool(notify), umbrella_id, cohort_group
+    )
     return jsonify(db.get_schedule_settings())
 
 

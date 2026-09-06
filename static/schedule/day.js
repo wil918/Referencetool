@@ -333,7 +333,9 @@ export function refreshDay(dateStr) {
     // Defaults to today; set only when the month view opened us on a date.
     startDate: dateStr || undefined,
     onOpenTask: openTask,
-    onOpenCommitment: (commitment) => openCommitmentPanel(commitment, locationsById),
+    onOpenCommitment: (commitment) => openCommitmentPanel(commitment, locationsById, {
+      onChange: () => calendar?.reload(),
+    }),
     onDataLoaded: (data) => {
       locationsById = data.locationsById;
       if (viewingToday) renderLedger(data);

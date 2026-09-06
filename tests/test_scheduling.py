@@ -196,6 +196,40 @@ def test_available_minutes_is_zero_with_no_working_hours_for_that_weekday(archiv
     assert scheduling.available_minutes("2026-01-04") == 0  # a Sunday
 
 
+def test_available_minutes_ignores_a_session_that_belongs_to_another_group(archive):
+    set_working_hours(0, "09:00", "18:00")
+    # An imported session for a parallel teaching group the user isn't in --
+    # marked not-mine by the ICS parser (see ics_import._session_is_mine). It's
+    # on the timetable but not the user's, so it frees no working time.
+    db.create_commitment(
+        "c1", "gp4 studio", "2026-01-05T10:00:00", "2026-01-05T13:00:00",
+        meta={"mine": False},
+    )
+
+    assert scheduling.available_minutes("2026-01-05") == 9 * 60
+
+
+def test_a_manual_override_brings_a_not_mine_session_back_into_capacity(archive):
+    set_working_hours(0, "09:00", "18:00")
+    db.create_commitment(
+        "c1", "gp4 studio", "2026-01-05T10:00:00", "2026-01-05T13:00:00",
+        meta={"mine": False},
+    )
+    db.update_commitment("c1", capacity_override=1)
+
+    assert scheduling.available_minutes("2026-01-05") == 9 * 60 - 3 * 60
+
+
+def test_available_minutes_ignores_an_optional_event(archive):
+    set_working_hours(0, "09:00", "18:00")
+    db.create_commitment(
+        "c1", "CLO3D drop-in", "2026-01-05T10:00:00", "2026-01-05T12:00:00",
+        meta={"mine": True, "delivery_type": "Optional Event"},
+    )
+
+    assert scheduling.available_minutes("2026-01-05") == 9 * 60
+
+
 def test_infer_energy_is_baseline_with_no_commitments_the_day_before(archive):
     assert scheduling.infer_energy("2026-01-06") == scheduling.BASELINE_ENERGY
 

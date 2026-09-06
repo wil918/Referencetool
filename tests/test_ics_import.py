@@ -38,6 +38,21 @@ def sync_real_feed(source="westminster.ics"):
     return ics_import.sync_feed(source, real_feed_text(), **REAL_FEED_WINDOW)
 
 
+# Four VEVENTs built to exercise the parallel-teaching-group logic (see
+# ics_import._group_tokens / _session_is_mine) without disturbing the pinned
+# assertions on the big fixture above: a "gp4; gp3" two-room studio, a
+# "gp4"-only workshop, a no-group induction, and an optional event.
+GROUPS_FIXTURE = Path(__file__).parent / "fixtures" / "westminster_groups_sample.ics"
+
+
+def sync_groups_feed(source="groups.ics"):
+    return ics_import.sync_feed(source, GROUPS_FIXTURE.read_text(), **FIXED_WINDOW)
+
+
+def groups_commitment(slug):
+    return db.get_commitment_by_external_uid(f"groups-{slug}@timetabling.westminster.ac.uk")
+
+
 def ics_calendar(*events):
     body = "\n".join(events)
     return f"BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Test//EN\n{body}\nEND:VCALENDAR\n"
@@ -512,3 +527,123 @@ def test_classify_route_rejects_an_unknown_support_level(client):
     resp = client.put("/api/commitments/classify", json={"ids": [a["id"]], "support_level": "nonsense"})
 
     assert resp.status_code == 400
+
+
+# --- Parallel teaching groups: room resolution, and sessions that aren't mine --
+
+
+def test_a_group_users_room_is_picked_from_a_multi_room_session(archive):
+    db.save_schedule_settings(480, 30, False, cohort_group="gp3")
+
+    sync_groups_feed()
+
+    both = groups_commitment("both")  # LOCATION lists A4-07 (gp4); A4-05 (gp3)
+    assert both["meta"]["room"] == "A4-05 - FD L5 Studio"
+    assert both["meta"]["site"] == "A Building"
+    # ...and it's attributable: this room came from the group order, not the
+    # deterministic parser (which found the two rooms too different to call).
+    assert both["meta"]["field_sources"]["room"] == "group"
+
+
+def test_the_other_group_gets_the_other_room_from_the_same_feed(archive):
+    db.save_schedule_settings(480, 30, False, cohort_group="gp4")
+
+    sync_groups_feed()
+
+    assert groups_commitment("both")["meta"]["room"] == "A4-07 - FD L5 Studio"
+
+
+def test_with_no_group_set_a_multi_room_session_keeps_its_ambiguity(archive):
+    sync_groups_feed()
+
+    both = groups_commitment("both")
+    assert both["meta"]["room"] is None
+    assert both["meta"]["mine"] is True  # can't tell the user apart from the cohort
+    assert both["meta"]["group"] == ["gp4", "gp3"]
+
+
+def test_a_session_for_another_group_is_not_mine_and_leaves_capacity_free(archive):
+    db.save_schedule_settings(480, 30, False, cohort_group="gp3")
+
+    sync_groups_feed()
+
+    gp4_only = groups_commitment("gp4-only")
+    assert gp4_only["meta"]["mine"] is False
+    assert gp4_only["counts_for_capacity"] is False
+    assert gp4_only["capacity_exclusion_reason"] == "not-your-group"
+
+
+def test_a_not_mine_session_is_restorable_by_hand_and_the_override_survives_resync(archive):
+    db.save_schedule_settings(480, 30, False, cohort_group="gp3")
+    sync_groups_feed()
+    gp4_only = groups_commitment("gp4-only")
+
+    db.update_commitment(gp4_only["id"], capacity_override=1)
+    assert db.get_commitment(gp4_only["id"])["counts_for_capacity"] is True
+
+    sync_groups_feed()
+
+    restored = db.get_commitment(gp4_only["id"])
+    assert restored["capacity_override"] == 1
+    assert restored["counts_for_capacity"] is True
+    # The classification underneath is still visible for the UI to explain.
+    assert restored["capacity_exclusion_reason"] == "not-your-group"
+
+
+def test_an_absent_group_line_applies_to_everyone(archive):
+    db.save_schedule_settings(480, 30, False, cohort_group="gp3")
+
+    sync_groups_feed()
+
+    induction = groups_commitment("induction")  # DESCRIPTION names no group
+    assert induction["meta"]["group"] is None
+    assert induction["meta"]["mine"] is True
+    assert induction["counts_for_capacity"] is True
+
+
+# --- delivery_type consumed on import ---------------------------------------
+
+
+def test_an_induction_defaults_to_priority_support_on_import(archive):
+    sync_groups_feed()
+
+    induction = groups_commitment("induction")
+    assert induction["meta"]["delivery_type"] == "Induction"
+    assert induction["support_level"] == "priority"
+
+
+def test_a_user_changed_support_level_is_not_reset_by_a_resync(archive):
+    sync_groups_feed()
+    induction = groups_commitment("induction")
+    db.update_commitment(induction["id"], support_level="none")
+
+    sync_groups_feed()
+
+    assert db.get_commitment(induction["id"])["support_level"] == "none"
+
+
+def test_a_workshop_for_another_group_does_not_get_priority(archive):
+    db.save_schedule_settings(480, 30, False, cohort_group="gp3")
+
+    sync_groups_feed()
+
+    # "Workshop" would normally default to priority, but this one is gp4's.
+    gp4_only = groups_commitment("gp4-only")
+    assert gp4_only["meta"]["delivery_type"] == "Workshop"
+    assert gp4_only["support_level"] == "none"
+
+
+def test_an_optional_event_does_not_consume_capacity(archive):
+    sync_groups_feed()
+
+    optional = groups_commitment("optional")
+    assert optional["meta"]["delivery_type"] == "Optional Event"
+    assert optional["counts_for_capacity"] is False
+    assert optional["capacity_exclusion_reason"] == "optional-event"
+
+
+def test_the_group_setting_round_trips_through_the_route(client):
+    resp = client.put("/api/schedule-settings", json={"cohort_group": " gp3 "})
+    assert resp.status_code == 200
+    assert resp.get_json()["cohort_group"] == "gp3"
+    assert client.put("/api/schedule-settings", json={"cohort_group": ""}).get_json()["cohort_group"] is None

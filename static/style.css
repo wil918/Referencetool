@@ -4245,6 +4245,15 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
 .commitment-panel-label { flex: 0 0 7rem; }
 .commitment-panel-value { font-family: var(--serif); }
 
+/* The "this isn't your session" note and its override control. No border or
+   fill (hard rule 6) -- spacing sets it apart, and the button is the only
+   interactive thing in an otherwise read-only panel. */
+.commitment-panel-capacity {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+}
+.commitment-panel-capacity p { margin: 0 0 0.5rem; }
+
 .commitment-panel-raw {
   margin-top: 1rem;
   padding-top: 0.75rem;

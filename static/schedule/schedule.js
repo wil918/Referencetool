@@ -102,7 +102,9 @@ function handleOpenTask(taskId) {
 let locationsById = {};
 
 function handleOpenCommitment(commitment) {
-  openCommitmentPanel(commitment, locationsById);
+  openCommitmentPanel(commitment, locationsById, {
+    onChange: () => calendar?.reload(),
+  });
 }
 
 hoursBtn.addEventListener("click", openHoursEditor);

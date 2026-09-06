@@ -606,6 +606,7 @@ def test_schedule_settings_default_before_anything_is_saved(client):
         "morning_routine_minutes": 30,
         "bedtime_notifications_enabled": False,
         "default_location_umbrella_id": None,
+        "cohort_group": None,
     }
 
 
@@ -621,6 +622,7 @@ def test_schedule_settings_round_trip(client):
         "morning_routine_minutes": 45,
         "bedtime_notifications_enabled": True,
         "default_location_umbrella_id": None,
+        "cohort_group": None,
     }
     assert client.get("/api/schedule-settings").get_json()["sleep_target_minutes"] == 420
 
@@ -635,6 +637,7 @@ def test_schedule_settings_partial_update_keeps_the_rest(client):
         "morning_routine_minutes": 20,
         "bedtime_notifications_enabled": True,
         "default_location_umbrella_id": None,
+        "cohort_group": None,
     }
 
 

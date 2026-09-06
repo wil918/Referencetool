@@ -14,6 +14,9 @@ const routineInput = document.getElementById("bedtime-morning-routine-input");
 const notifyCheckbox = document.getElementById("bedtime-notify-checkbox");
 const status = document.getElementById("bedtime-settings-status");
 
+const groupInput = document.getElementById("cohort-group-input");
+const groupStatus = document.getElementById("cohort-group-status");
+
 async function save() {
   status.textContent = "Saving...";
   const res = await fetch("/api/schedule-settings", {
@@ -33,15 +36,38 @@ async function save() {
   status.textContent = "Saved.";
 }
 
+// The group is its own PUT -- the route fills every field it isn't sent from
+// the stored row, so a partial body is fine (same as calendar-import.js's
+// umbrella picker), and it keeps this save off the bedtime section's status.
+async function saveGroup() {
+  groupStatus.textContent = "Saving...";
+  const res = await fetch("/api/schedule-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cohort_group: groupInput.value.trim() }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    groupStatus.textContent = `Error: ${data.error}`;
+    return;
+  }
+  groupInput.value = data.cohort_group || "";
+  groupStatus.textContent = data.cohort_group
+    ? `Saved. Re-sync the calendar feed to re-resolve rooms for ${data.cohort_group}.`
+    : "Saved.";
+}
+
 async function refresh() {
   const settings = await fetch("/api/schedule-settings").then((r) => r.json());
   sleepInput.value = (settings.sleep_target_minutes / 60).toFixed(1);
   routineInput.value = settings.morning_routine_minutes;
   notifyCheckbox.checked = settings.bedtime_notifications_enabled;
+  groupInput.value = settings.cohort_group || "";
 }
 
 sleepInput.addEventListener("change", save);
 routineInput.addEventListener("change", save);
+groupInput.addEventListener("change", saveGroup);
 
 // Permission is requested only here, on the user's own action of turning
 // this on -- never on page load, and never silently. Turning it off never

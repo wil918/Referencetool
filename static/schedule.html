@@ -259,6 +259,22 @@
       </div>
 
       <div class="settings-section">
+        <h3>Timetable group</h3>
+        <p class="muted">
+          If your course splits the year into parallel teaching groups (Westminster runs
+          "gp3" and "gp4"), enter yours. Imported sessions then show the room for your
+          group rather than every group's, and a session that belongs only to another
+          group stops taking up space in your schedule. Re-sync the calendar feed after
+          changing this so rooms are re-resolved.
+        </p>
+        <label>
+          My group
+          <input type="text" id="cohort-group-input" placeholder="e.g. gp3">
+        </label>
+        <p id="cohort-group-status" class="muted"></p>
+      </div>
+
+      <div class="settings-section">
         <h3>Recurring tasks</h3>
         <p class="muted">
           Each rule spawns the next instance of a task once its interval has come round again,
