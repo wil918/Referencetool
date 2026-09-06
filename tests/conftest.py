@@ -22,6 +22,39 @@ import db  # noqa: E402
 import ingest  # noqa: E402
 
 
+# A representative brief extraction -- the shape briefs.analyse returns, stubbed
+# so tests never call Claude. briefs.extract_text still runs for real (fitz is
+# offline), so a test builds a tiny PDF and gets this back.
+BRIEF_EXTRACTION = {
+    "summary": "Design and realise one outfit exploring construction.",
+    "key_dates": [
+        {"label": "Briefing", "date": "2026-01-12", "kind": "briefing", "note": ""},
+        {"label": "Hand-in", "date": "2026-03-20", "kind": "hand-in", "note": ""},
+    ],
+    "deliverables": [
+        {
+            "title": "Part 1 - Research",
+            "due_date": "2026-02-20",
+            "weighting": 40,
+            "description": "A research portfolio.",
+            "spec": {"pages": 20, "required_items": ["3 documented fabric tests"]},
+            "tasks": [
+                {"title": "Gather fabric research", "note": "", "est_minutes": 120},
+                {"title": "Document fabric tests", "note": "", "est_minutes": None},
+            ],
+        }
+    ],
+    "mandatory_activities": [
+        {
+            "title": "Fabric shop visit",
+            "kind": "shop visit",
+            "note": "at least one documented visit",
+            "location_bound": True,
+        }
+    ],
+}
+
+
 @pytest.fixture
 def archive(tmp_path, monkeypatch):
     """An empty archive: temp database, temp reference dirs, stubbed pipeline."""
@@ -34,6 +67,9 @@ def archive(tmp_path, monkeypatch):
     monkeypatch.setattr(ingest, "IMAGES_DIR", images)
     monkeypatch.setattr(ingest, "TEXTS_DIR", texts)
     monkeypatch.setattr(capture, "PENDING_DIR", tmp_path / "pending")
+    briefs_dir = tmp_path / "briefs"
+    briefs_dir.mkdir()
+    monkeypatch.setattr(config, "BRIEFS_DIR", briefs_dir)
     # Anything that resolves a stored reference back to a file on disk reads
     # this at call time (colour.py, app.py's media routes), so it has to point
     # at the temp archive too -- otherwise those look in the real library
@@ -45,6 +81,7 @@ def archive(tmp_path, monkeypatch):
         patch("tagging.tag_image", return_value=("Tagged Image", ["tag-a"], "an image")),
         patch("tagging.tag_text", return_value=("Tagged Text", ["tag-b"], "some text")),
         patch("tagging.tag_pdf", return_value=("Tagged PDF", ["tag-c"], "a pdf")),
+        patch("briefs.analyse", return_value=BRIEF_EXTRACTION),
         patch("embeddings.embed_image", return_value=[0.1] * 512),
         patch("embeddings.embed_text", return_value=[0.2] * 512),
         patch("embeddings.embed_combined", return_value=[0.3] * 512),

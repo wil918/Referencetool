@@ -691,10 +691,15 @@ CREATE TABLE IF NOT EXISTS task_resources (
 );
 """
 
-# An imported assignment brief. `extracted` is JSON -- whatever structure the
-# extraction step produced -- kept as the durable record of what a deliverable
-# was built from, independent of deliverables.spec which is the (possibly
-# hand-edited) result.
+# An imported assignment brief. `extracted` is a JSON envelope:
+#   {"extraction": <what briefs.analyse produced>, "applied": <null | summary>}
+# The extraction is the durable record of what Claude read out of the PDF, kept
+# independent of deliverables.spec (which is the possibly hand-edited result) so
+# a re-import can be diffed against it. `applied` is written once the review
+# sheet is approved -- {at, deliverables:[{id,title}], tasks:[...],
+# commitments:[...], discarded:[...]} -- so the next import can show what was
+# accepted last time. Its shape is expected to move, same reasoning as
+# deliverables.spec, which is why it is one JSON column and not several.
 BRIEFS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS briefs (
     id TEXT PRIMARY KEY,
@@ -3600,6 +3605,29 @@ def get_brief(brief_id):
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM briefs WHERE id = ?", (brief_id,)).fetchone()
         return _brief_to_dict(row) if row else None
+
+
+BRIEF_PATCH_COLUMNS = ("filepath", "extracted")
+
+
+def update_brief(brief_id, **fields):
+    """Patch whichever of a brief's columns were sent -- used to write the
+    `applied` summary back into `extracted` once its review sheet is approved."""
+    sets, params = [], []
+    for column in BRIEF_PATCH_COLUMNS:
+        if column not in fields:
+            continue
+        value = fields[column]
+        if column == "extracted":
+            value = json.dumps(value) if value is not None else None
+        sets.append(f"{column} = ?")
+        params.append(value)
+    if not sets:
+        return
+    with get_conn() as conn:
+        conn.execute(
+            f"UPDATE briefs SET {', '.join(sets)} WHERE id = ?", [*params, brief_id]
+        )
 
 
 def delete_brief(brief_id):
