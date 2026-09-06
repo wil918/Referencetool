@@ -1240,6 +1240,24 @@ export function createNodes({
     addNode,
     removeNode,
 
+    /** The current marquee/click selection, for concept analysis: the canvas
+     *  is the picker, so this exposes exactly what is selected. Widget nodes
+     *  are included -- the caller (concept-panel.js) drops them, since a
+     *  colourspace or palette widget is a view of data, not an idea -- so this
+     *  stays a plain mirror of the selection, not a policy about it. Selection
+     *  mechanics are untouched; this only reads `selectedNodeIds`. */
+    selection() {
+      return [...selectedNodeIds]
+        .map((id) => entries.get(id)?.node)
+        .filter(Boolean)
+        .map((node) => ({
+          id: node.id,
+          kind: node.kind,
+          reference_id: node.reference_id ?? null,
+          content: node.content ?? null,
+        }));
+    },
+
     /** The world-space box every node fits inside, or null on an empty
      *  canvas -- what the page uses to point the view at the content. */
     bounds() {

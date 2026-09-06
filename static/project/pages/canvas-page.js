@@ -22,9 +22,14 @@ import { createViewport } from "../canvas/viewport.js";
 import { createStore } from "../canvas/store.js";
 import { createNodes } from "../canvas/nodes.js";
 import { createPalette } from "../canvas/palette.js";
+import { createConceptPanel } from "./concept-panel.js";
 import { ensureOverlays, setActiveReferences } from "./overlays.js";
 
 const ZOOM_STEP = 1.25;
+// Roughly half a default text node, so a placed critique lands centred on the
+// view rather than with its corner at the middle of the screen (same nudge
+// palette.js uses for a click-to-add).
+const NOTE_NUDGE = { x: 120, y: 60 };
 
 export function createCanvasPage(el, { project }) {
   // The reference carousel a double-clicked reference node opens lives in
@@ -105,6 +110,38 @@ export function createCanvasPage(el, { project }) {
   const store = createStore(project.id);
   store.setErrorHandler(setStatus);
 
+  // --- concept analysis ---------------------------------------------------
+  //
+  // The marquee is the picker: nodes.selection() is split into the visual
+  // research (reference nodes) and the thinking about it (text nodes), widget
+  // nodes dropped. An empty selection runs against the whole project. The
+  // critique comes back onto the canvas as a text node, centred on the view.
+
+  function worldCentre() {
+    const rect = viewport.container.getBoundingClientRect();
+    const point = viewport.screenToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return { x: point.x - NOTE_NUDGE.x, y: point.y - NOTE_NUDGE.y };
+  }
+
+  const concept = createConceptPanel({
+    project,
+    placeNote: (text) => nodes?.addNode({ kind: "text", content: text, ...worldCentre() }),
+  });
+
+  const conceptBtn = document.createElement("button");
+  conceptBtn.type = "button";
+  conceptBtn.className = "canvas-concept-btn";
+  conceptBtn.textContent = "Concept analysis";
+  conceptBtn.title = "Critique the selected research against the brief (whole project if nothing is selected)";
+  conceptBtn.addEventListener("click", () => {
+    const selected = nodes ? nodes.selection() : [];
+    concept.run({
+      referenceIds: selected.filter((n) => n.kind === "reference" && n.reference_id).map((n) => n.reference_id),
+      notes: selected.filter((n) => n.kind === "text").map((n) => n.content || ""),
+    });
+  });
+  root.appendChild(conceptBtn);
+
   // --- boot ----------------------------------------------------------------
 
   async function boot() {
@@ -154,6 +191,7 @@ export function createCanvasPage(el, { project }) {
   return {
     destroy() {
       destroyed = true;
+      concept.destroy();
       palette?.destroy();
       nodes?.destroy();
       viewport.destroy();
