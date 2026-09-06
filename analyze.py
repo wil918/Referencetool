@@ -115,7 +115,12 @@ def _send(messages):
         max_tokens=4096,
         messages=messages,
     )
-    return "".join(block.text for block in response.content if block.type == "text").strip()
+    text = "".join(block.text for block in response.content if block.type == "text").strip()
+    # A write-up cut off at max_tokens otherwise reads as a finished one. Mark it
+    # so the reader knows to ask a follow-up rather than trust it as complete.
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        text += "\n\n---\n_(This response was cut off before it finished. Ask a follow-up to continue it.)_"
+    return text
 
 
 def _reference_map(references, related):

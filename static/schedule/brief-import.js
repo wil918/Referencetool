@@ -604,7 +604,11 @@ export function initBriefImport({ getProjectId, onApplied }) {
       const res = await fetch(`/api/projects/${projectId}/briefs`, { method: "POST", body });
       const brief = await res.json();
       if (!res.ok) {
-        alert(`Couldn't read that brief: ${brief.error || res.status}`);
+        // The server distinguishes a genuine extraction failure (truncated or
+        // malformed reply -- retryable) from a bad upload. Show its sentence as
+        // written rather than wrapping it; re-clicking the button retries, and
+        // a cached pass from the failed attempt is not re-charged.
+        alert(brief.error || `Couldn't read that brief (${res.status})`);
         return;
       }
       const [prior, diff] = await Promise.all([priorAppliedFor(brief), diffFor(brief.id)]);

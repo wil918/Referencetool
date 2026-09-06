@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import fitz
 
+import briefs
 import db
 from conftest import BRIEF_EXTRACTION
 
@@ -92,6 +93,38 @@ def test_importing_a_pdf_stores_the_extraction_and_stamps_source_keys(client):
 
     listed = client.get(f"/api/projects/{pid}/briefs").get_json()
     assert [b["id"] for b in listed] == [brief["id"]]
+
+
+def test_a_broken_extraction_is_reported_not_stored_as_empty(client):
+    # A truncated/malformed Claude reply used to fall back to a summary-only
+    # extraction that the review sheet then reported as "None found in the
+    # brief". It must surface as a retryable failure instead, and leave no row.
+    pid = make_project(client)
+    err = briefs.BriefExtractionError("truncated", "cut off before it finished", raw="{partial")
+    with patch("briefs.analyse", side_effect=err):
+        resp = import_brief(client, pid)
+    assert resp.status_code == 502
+    body = resp.get_json()
+    assert body["reason"] == "truncated"
+    assert body["retryable"] is True
+    assert "cut off" in body["error"]
+    assert db.list_briefs(pid) == []
+
+
+def test_a_broken_re_extraction_keeps_the_prior_brief_and_pdf(client):
+    pid = make_project(client)
+    brief_id = import_brief(client, pid).get_json()["id"]
+
+    err = briefs.BriefExtractionError("malformed", "not valid JSON")
+    with patch("briefs.analyse", side_effect=err):
+        resp = import_brief(client, pid)
+    assert resp.status_code == 502
+
+    # the earlier successful import is untouched
+    briefs_now = db.list_briefs(pid)
+    assert [b["id"] for b in briefs_now] == [brief_id]
+    assert briefs_now[0]["extracted"]["extraction"]["summary"] == BRIEF_EXTRACTION["summary"]
+    assert client.get(f"/api/briefs/{brief_id}/file").status_code == 200
 
 
 def test_a_non_pdf_is_rejected(client):
