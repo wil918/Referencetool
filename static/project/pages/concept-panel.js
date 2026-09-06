@@ -1,10 +1,12 @@
 /* Concept analysis on the infinite canvas.
  *
  * The canvas marquee is the picker (nodes.js's selection()): lasso a mix of
- * reference nodes -- the visual research -- and text nodes -- your own thinking
- * about it -- and Claude critiques whether the second is actually carried by
- * the first, against the project's imported brief. An empty selection analyses
- * the whole project's references, so this works before anything is on a canvas.
+ * reference nodes -- the visual research -- and your own thinking about it --
+ * plain text nodes, Notepad widgets, and any earlier Analysis widget -- and
+ * Claude critiques whether the second is actually carried by the first,
+ * against the project's imported brief. An empty selection analyses the whole
+ * project's references and canvas text, so this works before anything is
+ * lassoed. canvas-page.js does the splitting; this panel just forwards it.
  *
  * Deliberately close to analysis-panel.js's Analyze overlay -- same transcript
  * rendering, same follow-up chat via the same /api/analyze/<id>/reply route
@@ -66,7 +68,7 @@ export function createConceptPanel({ project, placeNote }) {
     return div;
   }
 
-  async function run({ referenceIds = [], notes = [] } = {}) {
+  async function run({ referenceIds = [], notes = [], noteHtml = [], priorAnalysisIds = [] } = {}) {
     sessionId = null;
     refMap = {};
     latestWriteup = "";
@@ -75,10 +77,14 @@ export function createConceptPanel({ project, placeNote }) {
     placeBtn.disabled = true;
     overlay.hidden = false;
 
-    const usingSelection = referenceIds.length || notes.length;
+    const noteCount = notes.length + noteHtml.length;
+    const usingSelection = referenceIds.length || noteCount || priorAnalysisIds.length;
     scopeEl.textContent = usingSelection
       ? `${referenceIds.length} reference${referenceIds.length === 1 ? "" : "s"} and ` +
-        `${notes.length} note${notes.length === 1 ? "" : "s"} from the canvas`
+        `${noteCount} note${noteCount === 1 ? "" : "s"} from the canvas` +
+        (priorAnalysisIds.length
+          ? `, plus ${priorAnalysisIds.length} earlier critique${priorAnalysisIds.length === 1 ? "" : "s"}`
+          : "")
       : "Whole project — nothing selected on the canvas";
     appendTurn("Reading the research…", "status");
 
@@ -86,7 +92,12 @@ export function createConceptPanel({ project, placeNote }) {
       const res = await fetch(`/api/projects/${project.id}/concept-analysis`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reference_ids: referenceIds, notes }),
+        body: JSON.stringify({
+          reference_ids: referenceIds,
+          notes,
+          note_html: noteHtml,
+          prior_analysis_ids: priorAnalysisIds,
+        }),
       });
       const data = await res.json();
       transcriptEl.innerHTML = "";

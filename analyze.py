@@ -7,6 +7,9 @@ The resulting conversation can be continued turn-by-turn so the user can
 ask follow-up questions and steer the exploration, with full context of
 the references and prior replies preserved.
 """
+import re
+from html.parser import HTMLParser
+
 import db
 import embeddings
 import tagging
@@ -196,7 +199,124 @@ def _format_brief(extraction):
     return "\n".join(lines)
 
 
-def _build_concept_prompt(extraction, references, related, notes):
+# A Notepad's rich text (rich-text.js) encodes hierarchy in size and weight:
+# a large or large-and-bold run is a heading. These thresholds decide which
+# runs survive plain-text conversion as headings rather than as prose. They
+# are in rem, matching the units rich-text.js writes.
+_HEADING_MIN_REM = 1.25
+_BOLD_HEADING_MIN_REM = 1.15
+
+
+class _NoteHTMLParser(HTMLParser):
+    """Flatten Notepad HTML to text, keeping heading-sized runs as headings.
+
+    rich-text.js only ever emits <span style="..."> and text, so the whole
+    job is: track the effective font-size / font-weight down the span stack,
+    and tag each text run as heading or body. Style attributes -- the bulk of
+    the markup -- are dropped; the size/weight they carried is turned back
+    into structure instead of thrown away.
+    """
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._stack = [{}]
+        self.segments = []  # (text, is_heading)
+
+    def handle_starttag(self, tag, attrs):
+        style = dict(self._stack[-1])
+        if tag == "span":
+            raw = dict(attrs).get("style") or ""
+            m = re.search(r"font-size:\s*([\d.]+)rem", raw)
+            if m:
+                style["size"] = float(m.group(1))
+            m = re.search(r"font-weight:\s*(bold|\d+)", raw)
+            if m:
+                style["bold"] = m.group(1) == "bold" or int(m.group(1)) >= 600
+        self._stack.append(style)
+
+    def handle_startendtag(self, tag, attrs):
+        pass  # e.g. <br/> -- handled as data would be; no style to push
+
+    def handle_endtag(self, tag):
+        if len(self._stack) > 1:
+            self._stack.pop()
+
+    def handle_data(self, data):
+        if not data:
+            return
+        style = self._stack[-1]
+        size = style.get("size", 1.0)
+        bold = style.get("bold", False)
+        is_heading = size >= _HEADING_MIN_REM or (bold and size >= _BOLD_HEADING_MIN_REM)
+        self.segments.append((data, is_heading))
+
+
+def _structured_text_from_html(html):
+    """A Notepad's stored HTML as plain text, with heading runs kept as
+    Markdown headings. Plain strings (Notepads saved before per-selection
+    formatting, or the migration no-op) pass straight through."""
+    if not html:
+        return ""
+    if "<" not in html:
+        return html.strip()
+
+    parser = _NoteHTMLParser()
+    parser.feed(html)
+    parser.close()
+
+    # Merge neighbouring runs of the same kind first: rich-text.js often
+    # splits one visual run across several spans, and each shouldn't become
+    # its own heading line.
+    merged = []
+    for text, is_heading in parser.segments:
+        if merged and merged[-1][1] == is_heading:
+            merged[-1][0] += text
+        else:
+            merged.append([text, is_heading])
+
+    out = []
+    for text, is_heading in merged:
+        if is_heading:
+            heading = " ".join(text.split())
+            if heading:
+                out.append(f"\n## {heading}\n")
+        else:
+            out.append(text)
+    return re.sub(r"\n{3,}", "\n\n", "".join(out)).strip()
+
+
+def _prior_critique_text(analysis_id):
+    """The assistant's turns from a saved analysis -- an earlier concept
+    critique placed back on the canvas as an Analysis widget. Only the
+    write-up and replies, never the student's follow-up questions."""
+    analysis = db.get_analysis(analysis_id)
+    if not analysis:
+        return ""
+    turns = analysis.get("transcript") or []
+    parts = [t.get("text", "") for t in turns if t.get("kind") in ("writeup", "reply")]
+    return "\n\n".join(p.strip() for p in parts if p and p.strip())
+
+
+def _project_canvas_text(project_id):
+    """The student's own writing across the project's canvas: plain text
+    nodes and Notepad widgets. Widgets that are views of data (colourspace,
+    similarity, ...) are not ideas and are left out; Analysis widgets are the
+    model's own earlier output and are left out of the fallback too."""
+    plain, html = [], []
+    for node in db.list_canvas_nodes(project_id):
+        if node["kind"] == "text":
+            if node.get("content"):
+                plain.append(node["content"])
+        elif node["kind"] == "widget":
+            config = node.get("config") or {}
+            if config.get("type") == "notepad":
+                content = (config.get("widget") or {}).get("content")
+                if content:
+                    html.append(content)
+    return plain, html
+
+
+def _build_concept_prompt(extraction, references, related, notes, prior_critiques=None):
     parts = [
         "You are a critic helping a fashion design student pressure-test the "
         "concept behind a project. Below is the brief (if one has been "
@@ -242,6 +362,19 @@ def _build_concept_prompt(extraction, references, related, notes):
         parts.append("  (no written notes selected)")
     parts.append("")
 
+    if prior_critiques:
+        parts.append(
+            "EARLIER AI CRITIQUE (you wrote this on a previous pass and the "
+            "student kept it on the canvas -- it is your own prior output, NOT "
+            "their position. Do not simply restate or agree with it; treat its "
+            "conclusions as provisional and revisit them as hard as the notes "
+            "above):"
+        )
+        for i, critique in enumerate(prior_critiques, 1):
+            parts.append(f"  [earlier critique {i}]")
+            parts.append(critique.strip())
+        parts.append("")
+
     parts.append(
         "Write a critique with these four headed sections:\n"
         "1. Strong connections -- where the research genuinely demonstrates the "
@@ -260,30 +393,50 @@ def _build_concept_prompt(extraction, references, related, notes):
     return "\n".join(parts)
 
 
-def start_concept_analysis(project_id, reference_ids=None, notes=None):
+def start_concept_analysis(
+    project_id, reference_ids=None, notes=None, note_html=None, prior_analysis_ids=None
+):
     """Critique a project's concept against its imported brief.
 
-    `reference_ids` are the reference nodes lassoed on the canvas -- the visual
-    research. An empty list falls back to every reference in the project, so
-    the feature works before anything is on a canvas. `notes` are the plain-text
-    contents of the selected text nodes -- the student's own thinking, passed
-    as a distinct input because the critique is largely about whether the notes
-    are actually supported by the references.
+    The canvas selection is the picker. `reference_ids` are the lassoed
+    reference nodes -- the visual research. The student's own thinking arrives
+    two ways, because it lives two ways: `notes` are plain text nodes'
+    contents, `note_html` are Notepad widgets' stored HTML (flattened here,
+    keeping heading-sized runs as headings). `prior_analysis_ids` are Analysis
+    widgets in the selection -- earlier critiques, fed back in but labelled as
+    the model's own prior output so it doesn't just agree with itself.
+
+    An empty selection falls back to the whole project: every reference in it
+    AND every bit of writing on its canvas, by the same rules.
 
     Returns (writeup, messages, reference_map) -- the same shape as
     start_conversation, so the in-memory session store, the follow-up /reply
     route and the save path all work against it unchanged.
     """
-    notes = [n for n in (notes or []) if n and n.strip()]
     ref_ids = list(reference_ids or [])
-    if ref_ids:
-        references = [_resolve_reference(rid) for rid in ref_ids]
+    plain_notes = [n for n in (notes or []) if n and n.strip()]
+    note_html = list(note_html or [])
+    prior_ids = list(prior_analysis_ids or [])
+
+    if ref_ids or plain_notes or note_html or prior_ids:
+        references = [_resolve_reference(rid) for rid in ref_ids] if ref_ids else []
+        notepad_notes = [_structured_text_from_html(h) for h in note_html]
+        prior_critiques = [_prior_critique_text(a) for a in prior_ids]
     else:
         references = db.list_project_references(project_id)
+        canvas_plain, canvas_html = _project_canvas_text(project_id)
+        plain_notes = [n for n in canvas_plain if n and n.strip()]
+        notepad_notes = [_structured_text_from_html(h) for h in canvas_html]
+        prior_critiques = []
+
+    all_notes = plain_notes + [n for n in notepad_notes if n and n.strip()]
+    prior_critiques = [c for c in prior_critiques if c and c.strip()]
 
     related = gather_context(references) if references else {}
     extraction = _latest_brief_extraction(project_id)
-    prompt = _build_concept_prompt(extraction, references, related, notes)
+    prompt = _build_concept_prompt(
+        extraction, references, related, all_notes, prior_critiques
+    )
 
     messages = [{"role": "user", "content": prompt}]
     writeup = _send(messages)

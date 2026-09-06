@@ -113,9 +113,13 @@ export function createCanvasPage(el, { project }) {
   // --- concept analysis ---------------------------------------------------
   //
   // The marquee is the picker: nodes.selection() is split into the visual
-  // research (reference nodes) and the thinking about it (text nodes), widget
-  // nodes dropped. An empty selection runs against the whole project. The
-  // critique comes back onto the canvas as a text node, centred on the view.
+  // research (reference nodes) and the thinking about it. The thinking lives
+  // two ways -- plain text nodes, and Notepad widgets whose HTML is sent raw
+  // for the backend to flatten -- and a selected Analysis widget is an
+  // earlier critique, sent by id and labelled as prior AI output. Widgets
+  // that are only views of data (colourspace, similarity, ...) are dropped.
+  // An empty selection runs against the whole project -- its references and
+  // its canvas text. The critique comes back onto the canvas as a text node.
 
   function worldCentre() {
     const rect = viewport.container.getBoundingClientRect();
@@ -135,9 +139,19 @@ export function createCanvasPage(el, { project }) {
   conceptBtn.title = "Critique the selected research against the brief (whole project if nothing is selected)";
   conceptBtn.addEventListener("click", () => {
     const selected = nodes ? nodes.selection() : [];
+    const widgetType = (n) => (n.kind === "widget" ? n.config?.type : null);
     concept.run({
-      referenceIds: selected.filter((n) => n.kind === "reference" && n.reference_id).map((n) => n.reference_id),
+      referenceIds: selected
+        .filter((n) => n.kind === "reference" && n.reference_id)
+        .map((n) => n.reference_id),
       notes: selected.filter((n) => n.kind === "text").map((n) => n.content || ""),
+      noteHtml: selected
+        .filter((n) => widgetType(n) === "notepad")
+        .map((n) => n.config?.widget?.content || ""),
+      priorAnalysisIds: selected
+        .filter((n) => widgetType(n) === "analysis")
+        .map((n) => n.config?.widget?.analysis_id)
+        .filter(Boolean),
     });
   });
   root.appendChild(conceptBtn);
