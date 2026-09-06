@@ -3086,3 +3086,95 @@
   letter-spacing: 0;
   text-transform: none;
 }
+
+/* ==========================================================================
+   18. BRIEF IMPORT
+   schedule/brief-import.js: the review sheet a brief PDF is read into before
+   any of it becomes a deliverable, task or commitment. Every proposed item is
+   a row with an accept toggle and editable fields; discard is untoggle. Layout
+   only -- every size, weight, rule and the one red are section 1's tokens, and
+   the monospace spec box follows the deliverables editor's own precedent.
+   ========================================================================== */
+
+.drafting .brief-review-box {
+  max-width: 52rem;
+  width: 94vw;
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+.drafting .brief-summary { margin: 0.4rem 0 1rem; color: var(--dr-ink-2); }
+
+.drafting .brief-sections { display: flex; flex-direction: column; gap: 1.6rem; }
+.drafting .brief-section > .dr-label { margin: 0 0 0.5rem; }
+.drafting .brief-list { display: flex; flex-direction: column; }
+
+.drafting .brief-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.7rem;
+  padding: 0.6rem 0;
+  border-top: var(--dr-rule-hair);
+}
+.drafting .brief-row:last-child { border-bottom: var(--dr-rule-hair); }
+.drafting .brief-row.is-off .brief-row-body { opacity: 0.4; }
+.drafting .brief-subrow { padding-left: 1rem; }
+.drafting .brief-row .dr-toggle { align-self: start; margin-top: 0.15rem; }
+
+.drafting .brief-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.drafting .brief-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.5rem 0.9rem;
+}
+.drafting .brief-field-grid--task { grid-template-columns: 3fr 1fr; }
+
+.drafting .brief-field { display: flex; flex-direction: column; gap: 0.2rem; }
+.drafting .brief-field > span {
+  font-size: var(--dr-t-label);
+  letter-spacing: var(--dr-track-label);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+}
+.drafting .brief-field textarea { width: 100%; }
+
+.drafting .brief-note { margin: 0; color: var(--dr-ink-2); }
+.drafting .brief-subhead { margin: 0.5rem 0 0; }
+
+.drafting .brief-inline-check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--dr-t-body);
+  color: var(--dr-ink-2);
+}
+
+.drafting .brief-flag {
+  align-self: start;
+  white-space: nowrap;
+  color: var(--dr-red);
+}
+
+.drafting .brief-spec-json {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: var(--dr-t-body);
+  letter-spacing: 0;
+  text-transform: none;
+  border: var(--dr-rule-hair);
+  padding: 0.5rem;
+}
+
+.drafting .brief-status { margin: 0.6rem 0 0; }
+
+.drafting .deliverable-brief-banner {
+  margin: 0 0 0.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: var(--dr-rule-hair);
+  color: var(--dr-ink-3);
+}

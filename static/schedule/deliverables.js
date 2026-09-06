@@ -19,12 +19,21 @@
 // is enough; committing new blocks is the Tasks/Schedule tab's Replan.
 
 import { makeKey } from "./key.js";
+import { initBriefImport } from "./brief-import.js";
 
 const projectSelect = document.getElementById("deliverable-project-select");
 const newBtn = document.getElementById("deliverable-new-btn");
 const listEl = document.getElementById("deliverable-list");
 const emptyEl = document.getElementById("deliverable-list-empty");
 const hintEl = document.getElementById("deliverable-project-hint");
+
+// The brief importer owns its own button (#brief-import-btn) and review sheet;
+// this tab just tells it which project is selected and reloads once a brief is
+// approved into deliverables, tasks and commitments.
+const briefImport = initBriefImport({
+  getProjectId: () => selectedProjectId,
+  onApplied: () => refreshDeliverables(),
+});
 
 // The selected project persists across tab switches within a session; there is
 // no server-side "current project" and inventing one for this tab alone would
@@ -551,6 +560,43 @@ function stripChecklist(spec) {
   return copy;
 }
 
+// --- the imported-brief banner --------------------------------------
+//
+// A one-line note that a brief backs these deliverables, with a link to the
+// original and the "Import brief" button as the re-import path. The heavy
+// rendering stays where it belongs: deliverables here, tasks on the Tasks
+// tab, key dates on the calendar.
+
+function renderBriefBanner(briefs) {
+  if (!briefs || !briefs.length) return null;
+  const brief = briefs[0];
+  const applied = brief.extracted && brief.extracted.applied;
+
+  const row = document.createElement("p");
+  row.className = "dr-micro deliverable-brief-banner";
+
+  const when = new Date(brief.imported_at).toLocaleDateString();
+  row.append(document.createTextNode(`Brief imported ${when}. `));
+
+  if (!applied) {
+    const review = document.createElement("button");
+    review.className = "btn";
+    review.textContent = "Review & approve";
+    review.addEventListener("click", () =>
+      briefImport.review(brief.id, { onApplied: () => refreshDeliverables() }),
+    );
+    row.append(review, document.createTextNode(" "));
+  }
+
+  const link = document.createElement("a");
+  link.href = `/api/briefs/${brief.id}/file`;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = "Original PDF";
+  row.append(link);
+  return row;
+}
+
 // --- load and draw ----------------------------------------------------
 
 async function populateProjects() {
@@ -587,15 +633,18 @@ export async function refreshDeliverables() {
     emptyEl.hidden = false;
     emptyEl.textContent = "Create a project first — deliverables belong to one.";
     newBtn.disabled = true;
+    briefImport.setEnabled(false);
     return;
   }
   newBtn.disabled = false;
+  briefImport.setEnabled(true);
 
   const pid = selectedProjectId;
-  const [deliverables, tasks, schedule] = await Promise.all([
+  const [deliverables, tasks, schedule, briefs] = await Promise.all([
     fetch(`/api/projects/${pid}/deliverables`).then((r) => r.json()),
     fetch(`/api/tasks?project_id=${pid}`).then((r) => r.json()),
     fetch("/api/schedule").then((r) => r.json()),
+    fetch(`/api/projects/${pid}/briefs`).then((r) => r.json()),
   ]);
 
   const atRiskEntries = schedule.at_risk || [];
@@ -626,8 +675,11 @@ export async function refreshDeliverables() {
   };
 
   listEl.innerHTML = "";
-  emptyEl.hidden = deliverables.length > 0;
-  emptyEl.textContent = "No deliverables yet — add one from the brief by hand.";
+  emptyEl.hidden = deliverables.length > 0 || briefs.length > 0;
+  emptyEl.textContent = "No deliverables yet — import a brief above, or add one by hand.";
+
+  const banner = renderBriefBanner(briefs);
+  if (banner) listEl.appendChild(banner);
 
   deliverables.forEach((d) => listEl.appendChild(renderDeliverable(d, ctx)));
   const un = renderUnassigned(unassigned, deliverables, atRiskIds, reload);
