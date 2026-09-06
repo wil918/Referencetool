@@ -14,6 +14,7 @@
 // pin/unlock), so the caller (calendar.js) knows to reload.
 
 import { makeKey } from "./key.js";
+import { describeRule } from "./recurrence.js";
 
 let overlay = null;
 let box = null;
@@ -249,6 +250,13 @@ async function render(taskId, onChange) {
     fetch(`/api/tasks/${taskId}/actual`).then((r) => (r.ok ? r.json() : null)),
     fetch(`/api/tasks/${taskId}/blocks`).then((r) => (r.ok ? r.json() : [])).catch(() => []),
   ]);
+  // The rule this task carries, if any -- read-only here: the calendar block is
+  // for acting on the plan, and a rule's cadence is edited on the Tasks tab.
+  const rule = task?.recurrence_id
+    ? await fetch(`/api/recurrence-rules/${task.recurrence_id}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+    : null;
   if (!task) {
     box.textContent = "This task no longer exists.";
     return;
@@ -295,6 +303,7 @@ async function render(taskId, onChange) {
     ["Importance", task.importance != null ? String(task.importance) : null],
     ["Difficulty", task.difficulty != null ? String(task.difficulty) : null],
     ["Deadline", task.deadline],
+    ["Repeats", rule ? describeRule(rule).replace(/^Repeats /, "") : null],
     ["Deliverable", task.project_id
       ? makeDeliverableValue(task, deliverables, refresh, onChange)
       : null],

@@ -9,6 +9,16 @@
 // the existing tab-switch dispatcher, the same way it already imports
 // carousel.js and folders.js.
 
+import {
+  makeRecurrenceField,
+  createRule,
+  attachRuleToTask,
+  updateRule,
+  detachRuleFromTask,
+  describeRule,
+  rulesById as loadRulesById,
+} from "./schedule/recurrence.js";
+
 // --- Elements ---
 
 const descriptionInput = document.getElementById("task-description-input");
@@ -25,6 +35,16 @@ const importanceInput = document.getElementById("task-importance-input");
 const difficultyInput = document.getElementById("task-difficulty-input");
 const estimateInput = document.getElementById("task-estimate-input");
 const goalInput = document.getElementById("task-goal-input");
+
+// The one-line "Repeats about every N days" control in the entry form. Rebuilt
+// on reset so a saved recurring task doesn't leave the next task pre-armed.
+const recurrenceSlot = document.getElementById("task-recurrence-slot");
+let recurrenceField = null;
+function mountRecurrenceField() {
+  recurrenceField = makeRecurrenceField();
+  recurrenceSlot.replaceChildren(recurrenceField.el);
+}
+mountRecurrenceField();
 
 const filterProjectSelect = document.getElementById("task-filter-project");
 const filterStatusSelect = document.getElementById("task-filter-status");
@@ -100,6 +120,7 @@ function resetEntryForm() {
   estimateInput.value = "";
   goalInput.value = "";
   advanced.open = false;
+  mountRecurrenceField();
 }
 
 saveBtn.addEventListener("click", async () => {
@@ -154,6 +175,17 @@ saveBtn.addEventListener("click", async () => {
     difficulty: userDifficulty ? Number(userDifficulty) : generated.difficulty ?? undefined,
     difficulty_source: userDifficulty ? "user" : generated.difficulty != null ? "generated" : undefined,
   };
+
+  // Recurrence is rule-first: create the rule, then create the task already
+  // carrying its recurrence_id, so the user's one "Save" is the API's two
+  // steps (see recurrence.js and app.py's route comment). A rule that fails
+  // to create doesn't block the task -- it just saves as a one-off.
+  const recur = recurrenceField.getState();
+  if (recur.repeats) {
+    const rule = await createRule(recur);
+    if (rule) body.recurrence_id = rule.id;
+    else saveStatus.textContent = "Couldn't set up the repeat -- saving as a one-off.";
+  }
 
   try {
     const res = await fetch("/api/tasks", {
@@ -590,6 +622,41 @@ function makeScheduleRow(block) {
   return row;
 }
 
+// --- Recurrence, per card -------------------------------------------------
+//
+// A finished instance shows its cadence as plain text -- it is history, and
+// editing the rule from a closed task reads as if it would rewrite that task.
+// A live task gets the editable one-liner: ticking it creates and attaches a
+// rule, unticking it detaches this task and deletes the (1:1) rule, leaving
+// the task itself untouched.
+
+function makeRecurrenceRow(task, rule) {
+  if (task.status === "done" || task.status === "partial" || task.status === "abandoned") {
+    const row = document.createElement("p");
+    row.className = "task-recurrence-static muted";
+    row.textContent = rule ? describeRule(rule) : "";
+    row.hidden = !rule;
+    return row;
+  }
+
+  const field = makeRecurrenceField({
+    rule,
+    onChange: async (state) => {
+      if (state.repeats && !rule) {
+        await attachRuleToTask(task.id, state);
+        refreshTaskList();
+      } else if (state.repeats && rule) {
+        await updateRule(rule.id, state);
+        refreshTaskList();
+      } else if (!state.repeats && rule) {
+        await detachRuleFromTask(task.id, rule.id);
+        refreshTaskList();
+      }
+    },
+  });
+  return field.el;
+}
+
 // --- Task card ---
 
 function makeTaskCard(task, lookups) {
@@ -657,6 +724,8 @@ function makeTaskCard(task, lookups) {
 
   const chips = makeGeneratedChips(task);
   if (chips.children.length) card.appendChild(chips);
+
+  card.appendChild(makeRecurrenceRow(task, lookups.rulesById[task.recurrence_id] || null));
 
   if (task.measurable_goal) card.appendChild(makeEditableGoal(task));
 
@@ -776,11 +845,12 @@ export async function refreshTaskList() {
   if (projectId) params.set("project_id", projectId);
   if (status) params.set("status", status);
 
-  const [tasks, projects, locations, schedule] = await Promise.all([
+  const [tasks, projects, locations, schedule, rulesById] = await Promise.all([
     fetch(`/api/tasks${params.toString() ? "?" + params : ""}`).then((r) => r.json()),
     fetch("/api/projects").then((r) => r.json()),
     fetch("/api/locations").then((r) => r.json()),
     fetch("/api/schedule").then((r) => r.json()),
+    loadRulesById(),
   ]);
 
   await populateProjectOptions(projects);
@@ -825,6 +895,7 @@ export async function refreshTaskList() {
         blocksByTask,
         slippingIds,
         deliverablesByProject,
+        rulesById,
       })
     );
   });

@@ -19,6 +19,8 @@
  * reads at-risk data back out through onDataLoaded.
  */
 
+import { cadenceTag } from "./recurrence.js";
+
 const PX_PER_MIN = 1; // 60px/hour -- keeps every time<->pixel conversion a plain subtraction
 // A day, for scheduling purposes, starts at 5am and runs a full 24 hours --
 // through midnight and into the small hours (12am-4:59am) of the FOLLOWING
@@ -153,7 +155,7 @@ async function getJSON(url) {
 export async function loadCalendarData(startDate, endDate) {
   const fetchEnd = addDays(endDate, 1);
   const [schedule, commitments, workingHours, domesticHours, workingOverrides,
-    domesticOverrides, bedtimes, tasks, projects, locations] = await Promise.all([
+    domesticOverrides, bedtimes, tasks, projects, locations, recurrenceRules] = await Promise.all([
     getJSON(`/api/schedule?start=${startDate}&end=${fetchEnd}`),
     getJSON("/api/commitments"),
     getJSON("/api/working-hours"),
@@ -164,6 +166,7 @@ export async function loadCalendarData(startDate, endDate) {
     getJSON("/api/tasks"),
     getJSON("/api/projects"),
     getJSON("/api/locations"),
+    getJSON("/api/recurrence-rules"),
   ]);
   const locationsById = Object.fromEntries((locations || []).map((l) => [l.id, l]));
 
@@ -194,6 +197,7 @@ export async function loadCalendarData(startDate, endDate) {
     bedtimes: bedtimes || [],
     tasksById,
     deliverablesById,
+    recurrenceRulesById: Object.fromEntries((recurrenceRules || []).map((r) => [r.id, r])),
     projects: projects || [],
     locationsById,
   };
@@ -653,6 +657,23 @@ export function createCalendar(container, options = {}) {
         const mark = document.createElement("span");
         mark.className = "dr-index";
         mark.textContent = String(idx).padStart(2, "0");
+        el.appendChild(mark);
+      }
+    }
+
+    // A recurring task will quietly reappear after it is done; one that won't
+    // is a different thing and must not read the same. A small letterspaced
+    // tag in the corner says the cadence -- no hue, this language has none to
+    // spend (see the full phrasing on the Tasks tab and in the detail key).
+    if (ev.type === "block" && ev.block.kind === "task" && ev.task?.recurrence_id) {
+      const rule = data.recurrenceRulesById[ev.task.recurrence_id];
+      const tag = cadenceTag(rule);
+      if (tag) {
+        el.classList.add("dr-block--recurring");
+        const mark = document.createElement("span");
+        mark.className = "dr-recur";
+        mark.textContent = tag;
+        mark.title = `Repeats ${rule.interval_days === 1 ? "every day" : `about every ${rule.interval_days} days`}`;
         el.appendChild(mark);
       }
     }

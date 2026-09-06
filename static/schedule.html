@@ -108,6 +108,7 @@
             </label>
           </div>
         </details>
+        <div id="task-recurrence-slot"></div>
         <p id="task-save-status" class="muted"></p>
       </div>
 
@@ -202,6 +203,21 @@
           this won't wake you up if the tab (or the computer) is closed.
         </p>
         <p id="bedtime-settings-status" class="muted"></p>
+      </div>
+
+      <div class="settings-section">
+        <h3>Recurring tasks</h3>
+        <p class="muted">
+          Each rule spawns the next instance of a task once its interval has come round again,
+          measured from when the last one was completed rather than from when it was scheduled.
+          Editing a rule changes future instances only -- tasks already done keep their history.
+          Deleting a rule leaves every task it has already made exactly as it is; only the
+          repeat stops.
+        </p>
+        <div id="recurrence-rules-list" class="recurrence-rules-list"></div>
+        <p id="recurrence-rules-empty" class="muted" hidden>
+          No recurring tasks yet -- turn on "Repeats" when adding or editing a task.
+        </p>
       </div>
     </section>
   </main>
