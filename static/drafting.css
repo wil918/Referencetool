@@ -3185,6 +3185,15 @@
   color: var(--dr-red);
 }
 
+/* Re-import diff: a matched deliverable (unchanged or changed) is annotated,
+   not re-offered as a fresh editable block. */
+.drafting .brief-row--matched { grid-template-columns: auto 1fr; align-items: start; }
+.drafting .brief-reimport-note { margin: 0 0 0.6rem; }
+.drafting .brief-change { align-items: baseline; }
+.drafting .brief-change-old { text-decoration: line-through; color: var(--dr-ink-3); }
+.drafting .brief-change-new { color: var(--dr-ink); }
+.drafting .brief-gone { color: var(--dr-red); padding: 0.5rem 0; border-top: var(--dr-rule-hair); }
+
 .drafting .brief-spec-json {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: var(--dr-t-body);

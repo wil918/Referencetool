@@ -578,14 +578,42 @@ function renderBriefBanner(briefs) {
   const when = new Date(brief.imported_at).toLocaleDateString();
   row.append(document.createTextNode(`Brief imported ${when}. `));
 
-  if (!applied) {
-    const review = document.createElement("button");
-    review.className = "btn";
-    review.textContent = "Review & approve";
-    review.addEventListener("click", () =>
-      briefImport.review(brief.id, { onApplied: () => refreshDeliverables() }),
-    );
-    row.append(review, document.createTextNode(" "));
+  const review = document.createElement("button");
+  review.className = "btn";
+  // Once applied, the same sheet is the re-import path: it shows the diff of a
+  // reissued brief against what is already here.
+  review.textContent = applied ? "Review re-import" : "Review & approve";
+  review.addEventListener("click", () =>
+    briefImport.review(brief.id, { onApplied: () => refreshDeliverables() }),
+  );
+  row.append(review, document.createTextNode(" "));
+
+  if (applied) {
+    const reset = document.createElement("button");
+    reset.className = "btn";
+    reset.textContent = "Remove imported items";
+    reset.addEventListener("click", async () => {
+      if (!confirm(
+        "Remove the deliverables and tasks this brief created?\n\n" +
+        "Tasks you have already worked (completed, part-done, or with recorded " +
+        "time) are kept — only untouched import artefacts go.",
+      )) return;
+      const res = await fetch(`/api/briefs/${brief.id}/reset`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        const d = data.deleted || {};
+        alert(
+          `Removed ${d.deliverables || 0} deliverable(s) and ${d.tasks || 0} task(s). ` +
+          `Kept ${data.kept_tasks || 0} task(s) that had been worked on.`,
+        );
+      }
+      refreshDeliverables();
+    });
+    row.append(reset, document.createTextNode(" "));
   }
 
   const link = document.createElement("a");

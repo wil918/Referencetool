@@ -978,6 +978,7 @@ def init_db():
             except sqlite3.OperationalError:
                 pass  # column already exists
         _migrate_text_widget_to_notepad(conn)
+        _backfill_brief_provenance(conn)
 
 
 # One-off: the `text` widget type was removed in favour of `notepad`, which
@@ -993,6 +994,92 @@ def init_db():
 # idempotent: once no row has type/config.type "text", both loops below find
 # nothing and no-op, so this is safe to run on every boot rather than
 # needing a one-time flag.
+def _backfill_brief_provenance(conn):
+    """One-off: link the deliverables and tasks that briefs created before the
+    brief_id / source_key columns existed, so a re-import diffs against them
+    instead of proposing a duplicate set.
+
+    Best effort. brief_id comes from each brief's stored `applied` envelope,
+    which already records the row ids that /apply made. source_key is matched
+    back by title against that same brief's extraction, re-keyed through
+    briefs.assign_source_keys -- a row whose title has since been hand-edited
+    away keeps its brief_id (a reset still scopes it) with source_key NULL.
+    The re-keyed extraction is written back so /diff and the review sheet see
+    the keys too.
+
+    Idempotent: a brief whose rows already carry brief_id and whose extraction
+    is already keyed is skipped, so this is safe on every boot.
+    """
+    rows = conn.execute("SELECT id, extracted FROM briefs").fetchall()
+    if not rows:
+        return
+    import briefs as _briefs  # lazy: avoids an import cycle at module load
+
+    for br in rows:
+        try:
+            envelope = json.loads(br["extracted"]) if br["extracted"] else None
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(envelope, dict):
+            continue
+
+        extraction = envelope.get("extraction") or {}
+        needs_keys = any(
+            not item.get("source_key")
+            for group in ("deliverables", "mandatory_activities")
+            for item in extraction.get(group) or []
+            if isinstance(item, dict)
+        )
+        applied = envelope.get("applied") or {}
+        applied_deliverables = applied.get("deliverables") or []
+        applied_tasks = applied.get("tasks") or []
+        if not needs_keys and not applied_deliverables and not applied_tasks:
+            continue
+
+        _briefs.assign_source_keys(extraction)
+        deliverable_key = {
+            (d.get("title") or "").strip().lower(): d.get("source_key")
+            for d in extraction.get("deliverables") or []
+        }
+        activity_key = {
+            (a.get("title") or "").strip().lower(): a.get("source_key")
+            for a in extraction.get("mandatory_activities") or []
+        }
+
+        changed = False
+        for d in applied_deliverables:
+            row = conn.execute(
+                "SELECT brief_id, title FROM deliverables WHERE id = ?", (d.get("id"),)
+            ).fetchone()
+            if not row or row["brief_id"]:
+                continue
+            conn.execute(
+                "UPDATE deliverables SET brief_id = ?, source_key = ? WHERE id = ?",
+                (br["id"], deliverable_key.get((row["title"] or "").strip().lower()), d.get("id")),
+            )
+            changed = True
+
+        for t in applied_tasks:
+            row = conn.execute(
+                "SELECT brief_id, title FROM tasks WHERE id = ?", (t.get("id"),)
+            ).fetchone()
+            if not row or row["brief_id"]:
+                continue
+            # Only mandatory-activity tasks have a reconstructable key; a
+            # skeleton task's was positional. brief_id alone still scopes a reset.
+            conn.execute(
+                "UPDATE tasks SET brief_id = ?, source_key = ? WHERE id = ?",
+                (br["id"], activity_key.get((row["title"] or "").strip().lower()), t.get("id")),
+            )
+            changed = True
+
+        if needs_keys or changed:
+            envelope["extraction"] = extraction
+            conn.execute(
+                "UPDATE briefs SET extracted = ? WHERE id = ?", (json.dumps(envelope), br["id"])
+            )
+
+
 def _migrate_text_widget_to_notepad(conn):
     conn.execute("UPDATE widgets SET type = 'notepad' WHERE type = 'text'")
 

@@ -204,62 +204,156 @@ function taskRows(container, tasks) {
   return built;
 }
 
-function deliverableRows(container, deliverables, priorTitles) {
-  const built = [];
-  (deliverables || []).forEach((d) => {
-    const flag = d.title && !priorTitles.has(d.title.trim().toLowerCase()) && priorTitles.size
-      ? "new since last import"
-      : null;
-    const { row, accepted, body } = reviewRow(true, flag);
-    row.classList.add("brief-row--block");
+// A brand-new deliverable: fully editable, opt-out, carries its task skeleton.
+function newDeliverableRow(container, d, priorTitles) {
+  const flag = d.title && !priorTitles.has(d.title.trim().toLowerCase()) && priorTitles.size
+    ? "new since last import"
+    : null;
+  const { row, accepted, body } = reviewRow(true, flag);
+  row.classList.add("brief-row--block");
 
-    const title = input("text", d.title || "");
-    const due = input("date", DATE(d.due_date));
-    const weighting = input("number", d.weighting ?? "");
-    weighting.min = "0";
-    weighting.step = "any";
-    weighting.placeholder = "40 or 0.4";
-    const description = document.createElement("textarea");
-    description.rows = 2;
-    description.value = d.description || "";
-    const spec = document.createElement("textarea");
-    spec.rows = 5;
-    spec.className = "brief-spec-json";
-    spec.spellcheck = false;
-    spec.value = d.spec != null ? JSON.stringify(d.spec, null, 2) : "";
-    spec.placeholder = '{\n  "pages": 20,\n  "required_items": ["…"]\n}';
+  const title = input("text", d.title || "");
+  const due = input("date", DATE(d.due_date));
+  const weighting = input("number", d.weighting ?? "");
+  weighting.min = "0";
+  weighting.step = "any";
+  weighting.placeholder = "40 or 0.4";
+  const description = document.createElement("textarea");
+  description.rows = 2;
+  description.value = d.description || "";
+  const spec = document.createElement("textarea");
+  spec.rows = 5;
+  spec.className = "brief-spec-json";
+  spec.spellcheck = false;
+  spec.value = d.spec != null ? JSON.stringify(d.spec, null, 2) : "";
+  spec.placeholder = '{\n  "pages": 20,\n  "required_items": ["…"]\n}';
 
-    const grid = el("div", "brief-field-grid");
-    grid.append(field("Title", title), field("Due date", due), field("Weighting", weighting));
-    body.append(grid, field("Notes", description), field("Spec (JSON, from the brief)", spec));
+  const grid = el("div", "brief-field-grid");
+  grid.append(field("Title", title), field("Due date", due), field("Weighting", weighting));
+  body.append(grid, field("Notes", description), field("Spec (JSON, from the brief)", spec));
 
-    let taskBuilders = [];
-    if (d.tasks && d.tasks.length) {
-      body.append(el("p", "dr-label brief-subhead", "Task skeleton"));
-      taskBuilders = taskRows(body, d.tasks);
-    }
-    container.append(row);
+  let taskBuilders = [];
+  if (d.tasks && d.tasks.length) {
+    body.append(el("p", "dr-label brief-subhead", "Task skeleton"));
+    taskBuilders = taskRows(body, d.tasks);
+  }
+  container.append(row);
 
-    built.push(() => {
-      if (!accepted() || !title.value.trim()) return null;
-      let parsedSpec = null;
-      if (spec.value.trim()) {
-        try {
-          parsedSpec = JSON.parse(spec.value);
-        } catch {
-          parsedSpec = null; // an invalid hand-edit is dropped rather than blocking approval
-        }
+  return () => {
+    if (!accepted() || !title.value.trim()) return null;
+    let parsedSpec = null;
+    if (spec.value.trim()) {
+      try {
+        parsedSpec = JSON.parse(spec.value);
+      } catch {
+        parsedSpec = null; // an invalid hand-edit is dropped rather than blocking approval
       }
-      let w = weighting.value === "" ? null : Number(weighting.value);
-      return {
-        title: title.value.trim(),
-        due_at: due.value || null,
-        weighting: w,
-        description: description.value.trim() || null,
-        spec: parsedSpec,
-        tasks: taskBuilders.map((b) => b()).filter(Boolean),
-      };
+    }
+    const w = weighting.value === "" ? null : Number(weighting.value);
+    return {
+      source_key: d.source_key || null,
+      title: title.value.trim(),
+      due_at: due.value || null,
+      weighting: w,
+      description: description.value.trim() || null,
+      spec: parsedSpec,
+      tasks: taskBuilders.map((b) => b()).filter(Boolean),
+    };
+  };
+}
+
+// A deliverable already in the schedule that the reissued brief did not change:
+// listed for completeness, no action, resubmitted verbatim so it stays a live
+// target for a key date's "tie to a deliverable" and its task breakdown is left
+// alone.
+function unchangedDeliverableRow(container, d) {
+  const row = el("div", "brief-row brief-row--matched");
+  row.append(el("span", "brief-flag dr-micro", "unchanged"));
+  row.append(el("span", "brief-row-body dr-body", d.title || d.source_key));
+  container.append(row);
+  return () => ({
+    source_key: d.source_key || null,
+    title: (d.title || "").trim(),
+    due_at: DATE(d.due_date) || null,
+    weighting: d.weighting ?? null,
+    description: d.description || null,
+    spec: d.spec ?? null,
+  });
+}
+
+const CHANGED_FIELD_LABELS = {
+  title: "Title",
+  due_at: "Due date",
+  weighting: "Weighting",
+  description: "Notes",
+  spec: "Spec",
+};
+
+function showValue(v) {
+  if (v == null || v === "") return "—";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v).length > 10 ? String(v).slice(0, 10) : String(v);
+}
+
+// A matched deliverable whose reissued values differ. One accept toggle per
+// field (old struck through, new beside it); an unaccepted field keeps its
+// current value. No task skeleton -- the breakdown under this deliverable is
+// the user's work now, and a re-import must not disturb it.
+function changedDeliverableRow(container, d, change) {
+  const row = el("div", "brief-row brief-row--block brief-row--matched");
+  row.append(el("span", "brief-flag dr-micro", "changed"));
+  const body = el("div", "brief-row-body");
+  body.append(el("p", "dr-label brief-subhead", d.title || d.source_key));
+
+  const acceptors = {};
+  Object.entries(change.fields || {}).forEach(([f, [oldV, newV]]) => {
+    const line = el("label", "brief-inline-check brief-change");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = true;
+    const text = el("span", null,
+      `${CHANGED_FIELD_LABELS[f] || f}: `);
+    const was = el("span", "brief-change-old", showValue(oldV));
+    const now = el("span", "brief-change-new", showValue(newV));
+    text.append(was, document.createTextNode(" → "), now);
+    line.append(cb, text);
+    body.append(line);
+    acceptors[f] = { cb, newV, oldV };
+  });
+
+  row.append(body);
+  container.append(row);
+
+  const currentExtracted = {
+    title: (d.title || "").trim(),
+    due_at: DATE(d.due_date) || null,
+    weighting: d.weighting ?? null,
+    description: d.description || null,
+    spec: d.spec ?? null,
+  };
+
+  return () => {
+    const out = { source_key: d.source_key || null, ...currentExtracted };
+    // For a field with a proposed change, honour the toggle: accepted -> new,
+    // rejected -> keep what is stored (the "old" side of the diff).
+    Object.entries(acceptors).forEach(([f, { cb, newV, oldV }]) => {
+      out[f] = cb.checked ? newV : oldV;
     });
+    return out;
+  };
+}
+
+// The "gone" group: a deliverable the reissued brief no longer mentions.
+// Removal is opt-in (toggle starts off) -- nothing is deleted silently.
+function goneRows(container, gone) {
+  const built = [];
+  (gone || []).forEach((g) => {
+    const line = el("label", "brief-inline-check brief-gone");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    line.append(cb, el("span", null, `Remove "${g.title}" — no longer in the brief`));
+    container.append(line);
+    built.push(() => (cb.checked ? g.source_key : null));
   });
   return built;
 }
@@ -289,6 +383,7 @@ function activityRows(container, activities, priorTitles) {
     built.push(() => {
       if (!accepted() || !title.value.trim()) return null;
       return {
+        source_key: a.source_key || null,
         title: title.value.trim(),
         description: note.value.trim() || null,
         location_bound: bound.checked,
@@ -300,10 +395,16 @@ function activityRows(container, activities, priorTitles) {
 
 // --- the sheet ---------------------------------------------------------
 
-function renderReview(brief, { projectId, onApplied, priorApplied }) {
+function renderReview(brief, { projectId, onApplied, priorApplied, diff }) {
   ensureOverlay();
   overlay.hidden = false;
   box.innerHTML = "";
+
+  diff = diff || { unchanged: [], changed: [], new: [], gone: [] };
+  const changedByKey = new Map((diff.changed || []).map((c) => [c.source_key, c]));
+  const unchangedKeys = new Set((diff.unchanged || []).map((c) => c.source_key));
+  const isReimport =
+    (diff.changed || []).length + (diff.unchanged || []).length + (diff.gone || []).length > 0;
 
   const extraction = (brief.extracted && brief.extracted.extraction) || {};
   const deliverableTitles = (extraction.deliverables || []).map((d) => d.title || "");
@@ -345,8 +446,28 @@ function renderReview(brief, { projectId, onApplied, priorApplied }) {
   deliverablesWrap.append(el("p", "dr-label", "Deliverables"));
   const deliverablesList = el("div", "brief-list");
   deliverablesWrap.append(deliverablesList);
-  const deliverableBuilders = deliverableRows(deliverablesList, extraction.deliverables, priorTitles);
+  if (isReimport) {
+    deliverablesWrap.insertBefore(
+      el("p", "muted brief-reimport-note",
+        "Re-import: matched deliverables keep their tasks. Only what moved needs approving."),
+      deliverablesList,
+    );
+  }
+
+  // Builders aligned to extraction.deliverables order, so a key date's
+  // attach_to (an extraction index) still maps cleanly to the submitted list.
+  const deliverableBuilders = (extraction.deliverables || []).map((d) => {
+    if (changedByKey.has(d.source_key)) {
+      return changedDeliverableRow(deliverablesList, d, changedByKey.get(d.source_key));
+    }
+    if (unchangedKeys.has(d.source_key)) {
+      return unchangedDeliverableRow(deliverablesList, d);
+    }
+    return newDeliverableRow(deliverablesList, d, priorTitles);
+  });
   if (!deliverableBuilders.length) deliverablesWrap.append(el("p", "muted", "None found in the brief."));
+
+  const goneBuilders = goneRows(deliverablesList, diff.gone);
 
   const activitiesWrap = el("div", "brief-section");
   activitiesWrap.append(el("p", "dr-label", "Mandatory activities"));
@@ -395,6 +516,7 @@ function renderReview(brief, { projectId, onApplied, priorApplied }) {
 
     const payload = {
       deliverables: submittedDeliverables,
+      remove: goneBuilders.map((b) => b()).filter(Boolean),
       key_dates: keyDates,
       mandatory_activities: activityBuilders.map((b) => b()).filter(Boolean),
     };
@@ -424,28 +546,38 @@ function renderReview(brief, { projectId, onApplied, priorApplied }) {
 
 // --- public ----------------------------------------------------------
 
-async function priorAppliedFor(projectId, exceptBriefId) {
-  // The most recent already-applied brief on this project (not this one), so a
-  // re-import can flag what is new. /apply writes `applied` onto the brief.
+async function priorAppliedFor(brief) {
+  // What the last /apply on this brief recorded -- the review sheet flags a
+  // deliverable or task as "new since last import" against it. The brief row is
+  // reused across re-imports, so this is simply the brief's own applied
+  // envelope (kept through re-extraction by api_import_brief).
+  return (brief.extracted && brief.extracted.applied) || null;
+}
+
+async function diffFor(briefId) {
+  // The four-group comparison of the current extraction against the rows this
+  // brief already created. Empty groups (a first import) -> plain review sheet.
   try {
-    const briefs = await fetch(`/api/projects/${projectId}/briefs`).then((r) => r.json());
-    const applied = briefs
-      .filter((b) => b.id !== exceptBriefId && b.extracted && b.extracted.applied)
-      .map((b) => b.extracted.applied);
-    return applied[0] || null;
+    const d = await fetch(`/api/briefs/${briefId}/diff`).then((r) => r.json());
+    return d && !d.error ? d : null;
   } catch {
     return null;
   }
 }
 
-/** Re-open the review sheet for a brief that was imported but not yet approved
- *  -- reached from the Deliverables tab's banner, so a half-finished review
- *  doesn't cost a second extraction. */
+/** Re-open the review sheet for a brief -- reached from the Deliverables tab's
+ *  banner, so a half-finished review (or a re-import diff) doesn't cost a second
+ *  extraction. */
 export async function openBriefReview(briefId, { onApplied } = {}) {
   const brief = await fetch(`/api/briefs/${briefId}`).then((r) => r.json());
   if (!brief || brief.error) return;
-  const prior = await priorAppliedFor(brief.project_id, brief.id);
-  renderReview(brief, { projectId: brief.project_id, onApplied: onApplied || (() => {}), priorApplied: prior });
+  const [prior, diff] = await Promise.all([priorAppliedFor(brief), diffFor(brief.id)]);
+  renderReview(brief, {
+    projectId: brief.project_id,
+    onApplied: onApplied || (() => {}),
+    priorApplied: prior,
+    diff,
+  });
 }
 
 export function initBriefImport({ getProjectId, onApplied }) {
@@ -475,8 +607,8 @@ export function initBriefImport({ getProjectId, onApplied }) {
         alert(`Couldn't read that brief: ${brief.error || res.status}`);
         return;
       }
-      const prior = await priorAppliedFor(projectId, brief.id);
-      renderReview(brief, { projectId, onApplied, priorApplied: prior });
+      const [prior, diff] = await Promise.all([priorAppliedFor(brief), diffFor(brief.id)]);
+      renderReview(brief, { projectId, onApplied, priorApplied: prior, diff });
     } catch (err) {
       alert(`Couldn't read that brief: ${err}`);
     } finally {

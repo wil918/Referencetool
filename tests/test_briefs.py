@@ -372,6 +372,40 @@ def test_deleting_a_brief_with_purge_removes_everything_it_made(client):
     assert client.get(f"/api/tasks?project_id={pid}").get_json() == []
 
 
+def test_pre_provenance_rows_are_backfilled_on_init(client):
+    # A brief applied before brief_id / source_key existed: rows with no
+    # provenance, and an `applied` envelope naming the ids it made.
+    pid = make_project(client)
+    brief_id = import_brief(client, pid).get_json()["id"]
+
+    did = "leg-deliverable"
+    tid = "leg-activity-task"
+    db.create_deliverable(did, pid, "Part 1 - Research")  # no brief_id
+    db.create_task(tid, "Fabric shop visit", project_id=pid, deliverable_id=did)
+    db.update_brief(brief_id, extracted={
+        "extraction": {
+            "deliverables": [{"title": "Part 1 - Research"}],
+            "mandatory_activities": [{"title": "Fabric shop visit"}],
+        },
+        "applied": {
+            "deliverables": [{"id": did, "title": "Part 1 - Research"}],
+            "tasks": [{"id": tid, "title": "Fabric shop visit"}],
+        },
+    })
+
+    db.init_db()  # runs the backfill migration
+
+    d = db.get_deliverable(did)
+    assert d["brief_id"] == brief_id
+    assert d["source_key"] == "part-1-research"
+    t = db.get_task(tid)
+    assert t["brief_id"] == brief_id
+    assert t["source_key"] == "activity:fabric-shop-visit"
+    # the re-keyed extraction is persisted so /diff can use it
+    stored = db.get_brief(brief_id)["extracted"]["extraction"]
+    assert stored["deliverables"][0]["source_key"] == "part-1-research"
+
+
 def test_deleting_the_project_clears_its_brief(client):
     pid = make_project(client)
     import_brief(client, pid)

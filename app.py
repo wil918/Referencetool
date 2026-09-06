@@ -11,6 +11,7 @@ then open the printed URL in a browser.
 """
 import json
 import mimetypes
+import os
 import tempfile
 import threading
 import uuid
@@ -39,7 +40,10 @@ from config import ARCHIVE_API_TOKEN, REFERENCES_DIR
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 
-PORT = 5050
+# 5050 by default; PORT in the environment overrides it, so a second instance
+# (a preview server, a worktree) can run alongside the one the user keeps open.
+# Client code still never names a port -- see hard rule 3.
+PORT = int(os.environ.get("PORT") or 5050)
 PDF_THUMB_DPI = 72
 # More than enough thumbnails to fill one row of the project preview bar on
 # any reasonable screen width; the bar's CSS (nowrap + overflow hidden) clips
