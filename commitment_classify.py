@@ -108,11 +108,22 @@ def _call_model(descriptions):
         max_tokens=4096,
         messages=[{"role": "user", "content": f"{_PROMPT}\n\n{listing}"}],
     )
+    # A truncated or malformed reply is not a partial answer to salvage. Per the
+    # module contract (NEVER REQUIRED), return nothing and let the import proceed
+    # without the model's fills -- but say so, so a missing room is explained
+    # rather than mysterious.
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        print("  commitment classification: reply hit max_tokens; skipping model fills")
+        return {}
     raw = "".join(block.text for block in response.content if block.type == "text").strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         raw = raw[4:] if raw.startswith("json") else raw
-    data = json.loads(raw.strip())
+    try:
+        data = json.loads(raw.strip())
+    except json.JSONDecodeError:
+        print("  commitment classification: reply was not valid JSON; skipping model fills")
+        return {}
     result = {}
     for obj in data if isinstance(data, list) else []:
         if isinstance(obj, dict) and isinstance(obj.get("n"), int):

@@ -5,12 +5,14 @@ Four things matter more than the feature (see the module docstring):
 distinct-shape batching, caching across re-syncs, never being required, and
 never overwriting a confident parse. One test each.
 """
+import types
 from datetime import date
 
 import commitment_classify
 import config
 import db
 import ics_import
+import tagging
 
 FIXED_WINDOW = {"window_start": date(2026, 1, 1), "window_days": 200}
 
@@ -164,3 +166,25 @@ def test_a_failed_model_call_does_not_fail_the_import(archive, monkeypatch):
 
     assert result["created"] == 1
     assert db.get_commitment_by_external_uid("d1@x")["meta"]["details"] is None
+
+
+def _resp(text, stop_reason="end_turn"):
+    return types.SimpleNamespace(
+        content=[types.SimpleNamespace(type="text", text=text)], stop_reason=stop_reason
+    )
+
+
+def test_a_truncated_model_reply_is_skipped_not_parsed(monkeypatch):
+    # stop_reason "max_tokens" means the JSON array is cut off mid-object;
+    # _call_model must return {} rather than hand it to json.loads.
+    monkeypatch.setattr(tagging, "get_client", lambda: object())
+    monkeypatch.setattr(tagging, "_create_with_retry",
+                        lambda *a, **k: _resp('[{"n": 0, "room": "A3-0', "max_tokens"))
+    assert commitment_classify._call_model(["a shape"]) == {}
+
+
+def test_a_malformed_model_reply_is_skipped_not_raised(monkeypatch):
+    monkeypatch.setattr(tagging, "get_client", lambda: object())
+    monkeypatch.setattr(tagging, "_create_with_retry",
+                        lambda *a, **k: _resp("not json at all"))
+    assert commitment_classify._call_model(["a shape"]) == {}

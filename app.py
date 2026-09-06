@@ -1878,6 +1878,13 @@ def api_import_brief(project_id):
             _restore_or_remove(pdf_path, prior_pdf)
             return jsonify({"error": "couldn't read any text out of that PDF"}), 400
         extraction = briefs.assign_source_keys(briefs.analyse(text))
+    except briefs.BriefExtractionError as e:
+        # A parse failure is a failure, not an empty result -- say so, say why,
+        # and let the user retry. The raw reply is logged for inspection, never
+        # returned as though it were the extraction.
+        _restore_or_remove(pdf_path, prior_pdf)
+        print(f"brief extraction failed ({e.reason}): {e.raw[:2000]!r}")
+        return jsonify({"error": str(e), "reason": e.reason, "retryable": True}), 502
     except Exception as e:
         _restore_or_remove(pdf_path, prior_pdf)
         return jsonify({"error": f"couldn't read the brief: {e}"}), 500
