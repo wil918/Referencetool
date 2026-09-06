@@ -6,6 +6,7 @@ stubbed out. That keeps the suite fast and offline while still exercising the
 real ingest code path -- hashing, duplicate detection, file placement and the
 database writes are all genuine.
 """
+import copy
 import io
 import sys
 from pathlib import Path
@@ -34,6 +35,7 @@ BRIEF_EXTRACTION = {
     "deliverables": [
         {
             "title": "Part 1 - Research",
+            "source_ref": "Part 1",
             "due_date": "2026-02-20",
             "weighting": 40,
             "description": "A research portfolio.",
@@ -47,6 +49,7 @@ BRIEF_EXTRACTION = {
     "mandatory_activities": [
         {
             "title": "Fabric shop visit",
+            "source_ref": "Fabric shop visit",
             "kind": "shop visit",
             "note": "at least one documented visit",
             "location_bound": True,
@@ -81,7 +84,10 @@ def archive(tmp_path, monkeypatch):
         patch("tagging.tag_image", return_value=("Tagged Image", ["tag-a"], "an image")),
         patch("tagging.tag_text", return_value=("Tagged Text", ["tag-b"], "some text")),
         patch("tagging.tag_pdf", return_value=("Tagged PDF", ["tag-c"], "a pdf")),
-        patch("briefs.analyse", return_value=BRIEF_EXTRACTION),
+        # A fresh deep copy per call: briefs.analyse (the real one) stamps
+        # source_key onto the extraction in place, and tests must not see one
+        # call's mutation leak into the shared constant or the next call.
+        patch("briefs.analyse", side_effect=lambda *a, **k: copy.deepcopy(BRIEF_EXTRACTION)),
         # The ICS classification fallback's single network seam -- off by
         # default so no test reaches Claude. A test exercising the fallback
         # monkeypatches this locally with a real-shaped return (see
