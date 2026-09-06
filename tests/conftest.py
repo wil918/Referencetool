@@ -82,6 +82,11 @@ def archive(tmp_path, monkeypatch):
         patch("tagging.tag_text", return_value=("Tagged Text", ["tag-b"], "some text")),
         patch("tagging.tag_pdf", return_value=("Tagged PDF", ["tag-c"], "a pdf")),
         patch("briefs.analyse", return_value=BRIEF_EXTRACTION),
+        # The ICS classification fallback's single network seam -- off by
+        # default so no test reaches Claude. A test exercising the fallback
+        # monkeypatches this locally with a real-shaped return (see
+        # test_commitment_classify.py).
+        patch("commitment_classify._call_model", return_value={}),
         patch("embeddings.embed_image", return_value=[0.1] * 512),
         patch("embeddings.embed_text", return_value=[0.2] * 512),
         patch("embeddings.embed_combined", return_value=[0.3] * 512),

@@ -49,6 +49,7 @@ from zoneinfo import ZoneInfo
 import icalendar
 import recurring_ical_events
 
+import commitment_classify
 import db
 from config import LOCAL_TIMEZONE
 
@@ -124,6 +125,15 @@ _EVENT_ID_LINE = re.compile(r"^Event id \d+$")
 _TEACHING_CATEGORY_LINE = re.compile(r"^Teaching(?:\s+SEM\d+)?$")
 _RECURRENCE_BLURB = re.compile(r"^(Every\s+\d+\s+wks?|Wkly)\b", re.I)
 _WHITESPACE_RUN = re.compile(r"\s+")
+# A parallel-teaching-group tag, e.g. "gp3", "gp4". Westminster splits this
+# cohort into two and encodes it on a trailing DESCRIPTION line -- "gp3; gp4"
+# for a session running both groups in parallel rooms, "gp4" for one only.
+_GROUP_TOKEN = re.compile(r"^gp\d+$", re.I)
+
+# delivery_type values (see below) where a tutor is present and the session is
+# the student's to use -- support_level 'priority' on import rather than 'none'
+# (they have first claim on staff attention there). Consumed by sync_feed.
+PRIORITY_DELIVERY_TYPES = frozenset({"Induction", "Workshop"})
 
 
 def _normalize_ws(text):
@@ -151,7 +161,37 @@ def _split_site_room(location_group):
     return _normalize_ws(site), (_normalize_ws(room) if room else None)
 
 
-def _parse_meta(summary, location, description):
+def _group_tokens(lines):
+    """The parallel-teaching-group tags a session names, in the order the feed
+    lists them ("gp4; gp3" -> ["gp4", "gp3"]), or None if it names none.
+
+    Found by shape, not position: the one DESCRIPTION line whose every
+    "; "-separated token is a group tag. Unambiguous against the "Wk 30" /
+    "Wks 26-27,29" lines that sit near it, and against everything above.
+    The order matters -- _parse_meta pairs it against the room list.
+    """
+    for line in lines:
+        tokens = [_normalize_ws(t) for t in line.split(";")]
+        if tokens and all(_GROUP_TOKEN.match(t) for t in tokens):
+            return tokens
+    return None
+
+
+def _session_is_mine(group_tokens, cohort_group):
+    """Whether a session with these group tags is one the user attends.
+
+    A session that names no group applies to the whole cohort. A user who
+    hasn't recorded their group (see schedule_settings.cohort_group) can't be
+    told apart from the cohort either, so nothing is excluded for them. Only a
+    session that names groups, none of which is the user's, is not theirs.
+    """
+    if not group_tokens or not cohort_group:
+        return True
+    wanted = _normalize_ws(cohort_group).lower()
+    return any(t.lower() == wanted for t in group_tokens)
+
+
+def _parse_meta(summary, location, description, cohort_group=None):
     """Structured fields pulled from one VEVENT's SUMMARY/LOCATION/DESCRIPTION,
     for commitments.meta -- see this module's docstring and COMMITMENTS_SCHEMA.
 
@@ -164,12 +204,26 @@ def _parse_meta(summary, location, description):
     by shape (see the marker regexes above), not by counting lines from the
     top, because whether a recurrence blurb or a lecturer line comes next
     depends on what the session actually has.
+
+    `cohort_group` (the user's parallel-teaching-group tag) resolves the one
+    ambiguity the deterministic parser otherwise can't: a session listing
+    several rooms for several groups lists them in the same order, so the
+    user's group picks their room out of a set _uniform would otherwise
+    report as "not one value". It also sets meta["mine"], which is what
+    excludes another group's parallel session from the user's capacity.
     """
     raw = {"summary": summary, "location": location, "description": description}
     meta = {
         "module_code": None, "module_name": None, "delivery_type": None,
-        "site": None, "room": None, "details": None, "lecturer": None, "raw": raw,
+        "site": None, "room": None, "details": None, "lecturer": None,
+        "group": None, "mine": True, "field_sources": {}, "raw": raw,
     }
+
+    lines = [line.strip() for line in (description or "").split("\n") if line.strip()]
+
+    group_tokens = _group_tokens(lines)
+    meta["group"] = group_tokens
+    meta["mine"] = _session_is_mine(group_tokens, cohort_group)
 
     if location:
         pairs = [_split_site_room(group) for group in location.split("; ")]
@@ -177,8 +231,22 @@ def _parse_meta(summary, location, description):
         rooms = [p[1] for p in pairs if p[1] is not None]
         if len(rooms) == len(pairs):
             meta["room"] = _uniform(rooms)
+        # A multi-room, multi-group session lists rooms in group order -- if the
+        # user's group is one of them, that's their room, even where _uniform
+        # above found the rooms too different to call.
+        if cohort_group and group_tokens and len(group_tokens) == len(pairs):
+            wanted = _normalize_ws(cohort_group).lower()
+            match = next(
+                (i for i, t in enumerate(group_tokens) if t.lower() == wanted), None
+            )
+            if match is not None:
+                site_i, room_i = pairs[match]
+                if room_i and room_i != meta["room"]:
+                    meta["room"] = room_i
+                    meta["field_sources"]["room"] = "group"
+                    if site_i:
+                        meta["site"] = site_i
 
-    lines = [line.strip() for line in (description or "").split("\n") if line.strip()]
     if len(lines) > 0:
         meta["module_code"] = _uniform(lines[0].split("; "))
     if len(lines) > 1:
@@ -229,7 +297,7 @@ def _parse_meta(summary, location, description):
     return meta
 
 
-def parse_events(ics_text, window_start=None, window_days=None):
+def parse_events(ics_text, window_start=None, window_days=None, cohort_group=None):
     """Every occurrence in the window -- including each instance of a
     recurring series -- plus how many events the file actually defines, so a
     sync that places nothing can say why instead of just reporting a zero
@@ -274,7 +342,7 @@ def parse_events(ics_text, window_start=None, window_days=None):
             "title": summary,
             "start": start.isoformat(),
             "end": end.isoformat(),
-            "meta": _parse_meta(summary, location, description),
+            "meta": _parse_meta(summary, location, description, cohort_group),
         })
     return {
         "events": events,
@@ -324,20 +392,37 @@ def sync_feed(source, ics_text, window_start=None, window_days=None):
     An existing row matches by external_uid and gets title/start/end/meta
     refreshed -- meta always, on both a new row and an update, so a re-sync
     backfills the structured fields onto commitments imported before this
-    parser existed. support_level and energy_cost are never touched, and
-    location_id only gets a value when the row doesn't already have one (see
-    _resolve_import_location) -- those three are the user's own
+    parser existed. support_level, energy_cost and capacity_override are never
+    touched, and location_id only gets a value when the row doesn't already
+    have one (see _resolve_import_location) -- those are the user's own
     classification of a commitment (see app.py's commitment routes), and
     filling in a location the feed can now identify is not the same as
     overwriting one the user already set.
 
-    A new commitment is inserted with support_level defaulted to 'none' per
-    COMMITMENTS_SCHEMA, ready for the bulk reclassify route. Anything
-    previously imported from this source that the feed no longer contains is
-    deleted, so an upstream cancellation removes it here too.
+    A new commitment is inserted with support_level 'none', except an Induction
+    or Workshop the session belongs to the user, which defaults to 'priority'
+    (see PRIORITY_DELIVERY_TYPES) -- a tutor is present and the student has
+    first claim on them. Anything previously imported from this source that the
+    feed no longer contains is deleted, so an upstream cancellation removes it
+    here too.
+
+    After the deterministic parse and the group logic, commitment_classify
+    fills any remaining meta gaps from a cached, batched model call -- never
+    required (no API key, no network, or a failed call and the import still
+    completes with whatever the parser got), and never overwriting a field the
+    parser was confident about. See commitment_classify.classify_gaps.
     """
-    parsed = parse_events(ics_text, window_start, window_days)
+    cohort_group = db.get_schedule_settings().get("cohort_group")
+    parsed = parse_events(ics_text, window_start, window_days, cohort_group)
     events = parsed["events"]
+
+    # Fallback classification is a nice-to-have layered on top of a complete
+    # parse -- any failure at all leaves `events` exactly as the parser left
+    # them, and the import proceeds.
+    try:
+        commitment_classify.classify_gaps(events)
+    except Exception as e:  # noqa: BLE001 -- deliberately never fatal
+        print(f"  commitment classification skipped ({type(e).__name__}: {e})")
 
     seen_uids = set()
     created = updated = 0
@@ -355,10 +440,14 @@ def sync_feed(source, ics_text, window_start=None, window_days=None):
             updated += 1
         else:
             location_id = _resolve_import_location(event["meta"].get("site"))
+            meta = event["meta"]
+            support_level = "none"
+            if meta.get("mine", True) and (meta.get("delivery_type") or "") in PRIORITY_DELIVERY_TYPES:
+                support_level = "priority"
             db.create_commitment(
                 str(uuid.uuid4()), event["title"], event["start"], event["end"],
                 source=source, external_uid=event["external_uid"],
-                location_id=location_id, meta=event["meta"],
+                location_id=location_id, support_level=support_level, meta=meta,
             )
             created += 1
 

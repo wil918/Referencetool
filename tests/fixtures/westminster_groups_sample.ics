@@ -1,0 +1,68 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//ddaysoftware.com//NONSGML DDay.iCal 1.0//EN
+X-WR-TIMEZONE:Europe/London
+BEGIN:VEVENT
+CATEGORIES:Loftus Lauren
+CATEGORIES:5FADE002W/1
+CATEGORIES:Surface
+CATEGORIES:gp4
+CATEGORIES:gp3
+CATEGORIES:Studio
+CATEGORIES:Teaching
+DESCRIPTION:5FADE002W/1 \nSurface \nStudio\; Studio \nA Building\, A4-07 - FD L5 Studio\; A Building\, A4-05 - FD L5 Studio \nLoftus\, Lauren \nEvent id 900001 \n3D Masterclass \nTeaching \nWk 8 \ngp4\; gp3 \n
+DTEND;TZID=Europe/London:20260302T130000
+DTSTAMP:20260101T000000Z
+DTSTART;TZID=Europe/London:20260302T100000
+LOCATION:A Building\, A4-07 - FD L5 Studio\; A Building\, A4-05 - FD L5 Studio
+SEQUENCE:0
+SUMMARY:5FADE002W/1 Surface
+UID:groups-both@timetabling.westminster.ac.uk
+END:VEVENT
+BEGIN:VEVENT
+CATEGORIES:Bigg-Wither Jan
+CATEGORIES:5FADE002W/1
+CATEGORIES:Surface
+CATEGORIES:gp4
+CATEGORIES:Workshop
+CATEGORIES:Teaching
+DESCRIPTION:5FADE002W/1 \nSurface \nWorkshop \nB Building\, B2-10 \nBigg-Wither\, Jan \nEvent id 900002 \nMachine knit intro \nTeaching \nWk 8 \ngp4 \n
+DTEND;TZID=Europe/London:20260303T120000
+DTSTAMP:20260101T000000Z
+DTSTART;TZID=Europe/London:20260303T100000
+LOCATION:B Building\, B2-10
+SEQUENCE:0
+SUMMARY:5FADE002W/1 Surface
+UID:groups-gp4-only@timetabling.westminster.ac.uk
+END:VEVENT
+BEGIN:VEVENT
+CATEGORIES:Loftus Lauren
+CATEGORIES:5FADE002W/1
+CATEGORIES:Surface
+CATEGORIES:Induction
+CATEGORIES:Teaching
+DESCRIPTION:5FADE002W/1 \nSurface \nInduction \nA Building\, A4-01 \nLoftus\, Lauren \nEvent id 900003 \nHealth and safety induction \nTeaching \nWk 1 \n
+DTEND;TZID=Europe/London:20260302T150000
+DTSTAMP:20260101T000000Z
+DTSTART;TZID=Europe/London:20260302T140000
+LOCATION:A Building\, A4-01
+SEQUENCE:0
+SUMMARY:5FADE002W/1 Surface
+UID:groups-induction@timetabling.westminster.ac.uk
+END:VEVENT
+BEGIN:VEVENT
+CATEGORIES:Abdullaeva Nafisa
+CATEGORIES:5FADE002W/1
+CATEGORIES:Surface
+CATEGORIES:Optional  Event
+CATEGORIES:Teaching
+DESCRIPTION:5FADE002W/1 \nSurface \nOptional  Event \nE Building\, E1.01 \nAbdullaeva\, Nafisa \nEvent id 900004 \nCLO3D drop-in \nTeaching \nWk 9 \n
+DTEND;TZID=Europe/London:20260304T130000
+DTSTAMP:20260101T000000Z
+DTSTART;TZID=Europe/London:20260304T100000
+LOCATION:E Building\, E1.01
+SEQUENCE:0
+SUMMARY:5FADE002W/1 Surface
+UID:groups-optional@timetabling.westminster.ac.uk
+END:VEVENT
+END:VCALENDAR

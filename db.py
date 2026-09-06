@@ -530,13 +530,26 @@ CREATE TABLE IF NOT EXISTS scheduled_blocks (
 #
 # meta is JSON: the structured fields ics_import.py's parser can confidently
 # pull out of an institutional feed's house format (module_code, module_name,
-# delivery_type, site, room, details, lecturer), plus a "raw" object holding
-# the feed's own summary/location/description text so a later reparse -- the
-# parser improving, or the university changing its export -- never needs a
-# re-fetch. Its own JSON column rather than seven of its own, and versioned by
-# convention rather than a schema field, for the same reason as
-# deliverables.spec: parsed source data whose shape is expected to move.
-# Always NULL for a commitment entered by hand -- there's no feed to parse.
+# delivery_type, site, room, details, lecturer), plus a "group" list and a
+# "mine" flag (which of an institution's parallel teaching groups a session is
+# for, and whether that includes the user -- see schedule_settings.cohort_group),
+# a "field_sources" map naming any field the deterministic parser did NOT
+# produce ("group" for a room resolved from the group order, "model" for a gap
+# filled by commitment_classify.py), and a "raw" object holding the feed's own
+# summary/location/description text so a later reparse -- the parser improving,
+# or the university changing its export -- never needs a re-fetch. Its own JSON
+# column rather than a dozen of its own, and versioned by convention rather than
+# a schema field, for the same reason as deliverables.spec: parsed source data
+# whose shape is expected to move. Always NULL for a commitment entered by hand
+# -- there's no feed to parse.
+#
+# capacity_override is the user's manual answer to "does this session count
+# against my schedule". A sync classifies a session as not-mine (a different
+# group's parallel session) or exempt (an Optional Event) and it then blocks no
+# time; this column, which a sync NEVER writes, lets the user force it back in
+# (1) or out (0) regardless -- see _commitment_to_dict's counts_for_capacity.
+# NULL means "trust the classification", and is the case for everything the
+# user hasn't touched.
 COMMITMENTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS commitments (
     id TEXT PRIMARY KEY,
@@ -553,7 +566,8 @@ CREATE TABLE IF NOT EXISTS commitments (
     prep_minutes INTEGER,
     location_name TEXT,
     travel_minutes INTEGER,
-    meta TEXT
+    meta TEXT,
+    capacity_override INTEGER
 );
 """
 
@@ -564,6 +578,27 @@ CREATE TABLE IF NOT EXISTS commitments (
 ICS_FEED_SCHEMA = """
 CREATE TABLE IF NOT EXISTS ics_feed (
     feed_url TEXT NOT NULL
+);
+"""
+
+# A cache of the model's classification of one distinct feed-description SHAPE
+# -- the fallback commitment_classify.py runs for the events the deterministic
+# parser couldn't fully classify (see ics_import.py). Its own table, keyed and
+# versioned exactly like colour_analysis: `description_hash` is a hash of the
+# raw DESCRIPTION with its volatile parts (event id, week numbers, dates)
+# normalised away, so many events collapse to one row; `version` is the
+# algorithm version (commitment_classify.CLASSIFY_VERSION), so a re-sync after
+# the prompt changes recomputes, and a re-sync that changes nothing re-pays for
+# nothing. `fields` is the JSON the model returned for that shape
+# (module_code / module_name / delivery_type / site / room / details, any of
+# them null). Recomputable and disposable -- a wipe just means the next sync
+# with an API key refills it.
+COMMITMENT_CLASSIFICATION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS commitment_classification (
+    description_hash TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    fields TEXT NOT NULL,
+    computed_at TEXT NOT NULL
 );
 """
 
@@ -786,12 +821,20 @@ CREATE TABLE IF NOT EXISTS daily_capacity (
 # created location under when a feed's `site` has never been seen before --
 # nullable, since a user who hasn't set one just gets a parentless
 # (self-umbrella) location, same as before this column existed.
+#
+# cohort_group is which of an institution's parallel teaching groups the user
+# is in (Westminster splits this cohort into "gp3" / "gp4"). Free text, not an
+# enum -- next year's export may label them differently. ics_import.py reads it
+# at sync time to pick the right room from a multi-group session and to mark
+# sessions that belong to a different group as not counting against capacity.
+# NULL / "" means "not set", and every session then applies to the user.
 SCHEDULE_SETTINGS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schedule_settings (
     sleep_target_minutes INTEGER NOT NULL,
     morning_routine_minutes INTEGER NOT NULL,
     bedtime_notifications_enabled INTEGER NOT NULL DEFAULT 0,
-    default_location_umbrella_id TEXT
+    default_location_umbrella_id TEXT,
+    cohort_group TEXT
 );
 """
 
@@ -868,6 +911,7 @@ def init_db():
         conn.execute(SCHEDULED_BLOCKS_SCHEMA)
         conn.execute(COMMITMENTS_SCHEMA)
         conn.execute(ICS_FEED_SCHEMA)
+        conn.execute(COMMITMENT_CLASSIFICATION_SCHEMA)
         conn.execute(LOCATIONS_SCHEMA)
         conn.execute(LOCATION_HOURS_SCHEMA)
         conn.execute(LOCATION_OVERRIDES_SCHEMA)
@@ -901,9 +945,11 @@ def init_db():
             "ALTER TABLE commitments ADD COLUMN location_name TEXT",
             "ALTER TABLE commitments ADD COLUMN travel_minutes INTEGER",
             "ALTER TABLE commitments ADD COLUMN meta TEXT",
+            "ALTER TABLE commitments ADD COLUMN capacity_override INTEGER",
             "ALTER TABLE locations ADD COLUMN parent_location_id TEXT",
             "ALTER TABLE locations ADD COLUMN is_online INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE schedule_settings ADD COLUMN default_location_umbrella_id TEXT",
+            "ALTER TABLE schedule_settings ADD COLUMN cohort_group TEXT",
         ):
             try:
                 conn.execute(ddl)
@@ -3021,8 +3067,15 @@ def list_commitments_between(range_start, range_end):
 COMMITMENT_PATCH_COLUMNS = (
     "title", "start", "end", "kind", "location_id", "support_level", "source",
     "external_uid", "energy_cost", "home_first", "prep_minutes", "location_name",
-    "travel_minutes", "meta",
+    "travel_minutes", "meta", "capacity_override",
 )
+
+# delivery_type values (see ics_import.py's house-format parser) that a session
+# carries because a tutor is there and it's optional to the student: it lands on
+# the calendar but doesn't reserve any of the user's own working time unless
+# they say otherwise (capacity_override). Kept here because _commitment_to_dict
+# is the one place it's consumed.
+CAPACITY_EXEMPT_DELIVERY_TYPES = frozenset({"Optional Event"})
 
 
 def update_commitment(commitment_id, **fields):
@@ -3033,6 +3086,8 @@ def update_commitment(commitment_id, **fields):
         value = fields[column]
         if column == "home_first":
             value = 1 if value else 0
+        elif column == "capacity_override":
+            value = None if value is None else (1 if value else 0)
         elif column == "meta":
             value = json.dumps(value) if value is not None else None
         sets.append(f"{column} = ?")
@@ -3045,16 +3100,77 @@ def update_commitment(commitment_id, **fields):
         )
 
 
+def _capacity_exclusion_reason(meta):
+    """Why a session wouldn't count against the user's schedule, ignoring any
+    manual capacity_override -- so the UI can still say "not your group" on a
+    session the user has chosen to keep. None when nothing excludes it."""
+    if not meta:
+        return None
+    if meta.get("mine") is False:
+        return "not-your-group"
+    if (meta.get("delivery_type") or "") in CAPACITY_EXEMPT_DELIVERY_TYPES:
+        return "optional-event"
+    return None
+
+
 def _commitment_to_dict(row):
     d = dict(row)
     d["home_first"] = bool(d["home_first"])
     d["meta"] = json.loads(d["meta"]) if d["meta"] else None
+    # Two read-only derived fields the scheduler and the calendar both read
+    # instead of re-deriving: whether this session reserves the user's time,
+    # and (kept separate, computed before the override) why it might not.
+    reason = _capacity_exclusion_reason(d["meta"])
+    d["capacity_exclusion_reason"] = reason
+    if d["capacity_override"] is not None:
+        d["counts_for_capacity"] = bool(d["capacity_override"])
+    else:
+        d["counts_for_capacity"] = reason is None
     return d
 
 
 def delete_commitment(commitment_id):
     with get_conn() as conn:
         conn.execute("DELETE FROM commitments WHERE id = ?", (commitment_id,))
+
+
+# --- Schedule: commitment classification cache -----------------------------
+#
+# Keyed and versioned exactly like colour_analysis (see
+# COMMITMENT_CLASSIFICATION_SCHEMA and commitment_classify.py): one row per
+# distinct normalised feed-description shape, so a frequent re-sync never
+# re-pays the model for a description it has already classified.
+
+
+def get_commitment_classifications(description_hashes, version):
+    """Cached model classifications for these description shapes, as
+    {description_hash: fields_dict}. A row at a different algorithm version is
+    not a hit -- it's recomputed -- so it's simply left out."""
+    if not description_hashes:
+        return {}
+    placeholders = ",".join("?" for _ in description_hashes)
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"""SELECT description_hash, fields FROM commitment_classification
+                WHERE version = ? AND description_hash IN ({placeholders})""",
+            [version, *description_hashes],
+        ).fetchall()
+        return {r["description_hash"]: json.loads(r["fields"]) for r in rows}
+
+
+def save_commitment_classification(description_hash, version, fields):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO commitment_classification
+                   (description_hash, version, fields, computed_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(description_hash) DO UPDATE SET
+                   version = excluded.version,
+                   fields = excluded.fields,
+                   computed_at = excluded.computed_at""",
+            (description_hash, version, json.dumps(fields),
+             datetime.now(timezone.utc).isoformat()),
+        )
 
 
 def get_ics_feed_url():
@@ -3760,6 +3876,7 @@ def get_schedule_settings():
                 "morning_routine_minutes": DEFAULT_MORNING_ROUTINE_MINUTES,
                 "bedtime_notifications_enabled": False,
                 "default_location_umbrella_id": None,
+                "cohort_group": None,
             }
         d = dict(row)
         d["bedtime_notifications_enabled"] = bool(d["bedtime_notifications_enabled"])
@@ -3767,16 +3884,17 @@ def get_schedule_settings():
 
 
 def save_schedule_settings(sleep_target_minutes, morning_routine_minutes,
-                           bedtime_notifications_enabled, default_location_umbrella_id=None):
+                           bedtime_notifications_enabled, default_location_umbrella_id=None,
+                           cohort_group=None):
     with get_conn() as conn:
         conn.execute("DELETE FROM schedule_settings")
         conn.execute(
             """INSERT INTO schedule_settings
                    (sleep_target_minutes, morning_routine_minutes, bedtime_notifications_enabled,
-                    default_location_umbrella_id)
-               VALUES (?, ?, ?, ?)""",
+                    default_location_umbrella_id, cohort_group)
+               VALUES (?, ?, ?, ?, ?)""",
             (sleep_target_minutes, morning_routine_minutes, 1 if bedtime_notifications_enabled else 0,
-             default_location_umbrella_id),
+             default_location_umbrella_id, cohort_group or None),
         )
 
 

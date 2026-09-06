@@ -205,7 +205,23 @@ def support_windows(date_str):
 
 def _commitments_on(date_str):
     following = (date.fromisoformat(date_str) + timedelta(days=1)).isoformat()
-    return db.list_commitments_between(f"{date_str}T00:00:00", f"{following}T00:00:00")
+    return [
+        c for c in db.list_commitments_between(f"{date_str}T00:00:00", f"{following}T00:00:00")
+        if _counts_for_capacity(c)
+    ]
+
+
+def _counts_for_capacity(commitment):
+    """Whether this session is on the user's calendar for scheduling at all.
+
+    An imported session that belongs to a parallel teaching group the user
+    isn't in, or a delivery type that's optional to attend, blocks no time,
+    offers no support and doesn't move you -- it is genuinely not theirs. The
+    user's manual capacity_override beats that classification in either
+    direction. db._commitment_to_dict resolves both into this one read-only
+    flag; a hand-entered commitment has no meta and simply always counts.
+    """
+    return commitment.get("counts_for_capacity", True)
 
 
 def _offers_support(commitment):
@@ -311,7 +327,7 @@ def _location_before(moment, exclude_commitment_id=None):
     """
     location = HOME
     for commitment in sorted(db.list_commitments(), key=lambda c: (c["end"], c["start"], c["id"])):
-        if commitment["id"] == exclude_commitment_id:
+        if commitment["id"] == exclude_commitment_id or not _counts_for_capacity(commitment):
             continue
         if datetime.fromisoformat(commitment["end"]) > moment:
             continue
@@ -328,7 +344,7 @@ def _home_first_blocks_between(window_start, window_end):
     """
     blocks = []
     for commitment in db.list_commitments():
-        if not commitment.get("home_first"):
+        if not commitment.get("home_first") or not _counts_for_capacity(commitment):
             continue
         for block in home_first_chain(commitment):
             if block["start"] < window_end and block["end"] > window_start:
@@ -392,7 +408,7 @@ def _window_minus_commitments(window_start, window_end):
     """
     busy = []
     for commitment in db.list_commitments_between(window_start.isoformat(), window_end.isoformat()):
-        if _offers_support(commitment):
+        if _offers_support(commitment) or not _counts_for_capacity(commitment):
             continue
         overlap_start = max(datetime.fromisoformat(commitment["start"]), window_start)
         overlap_end = min(datetime.fromisoformat(commitment["end"]), window_end)
@@ -535,6 +551,7 @@ def infer_energy(date_str):
         (commitment["energy_cost"] or 0) >= HIGH_ENERGY_COST
         and datetime.fromisoformat(commitment["end"]).hour >= LATE_HOUR
         for commitment in commitments
+        if _counts_for_capacity(commitment)
     )
     return LOW_ENERGY if rough_start else BASELINE_ENERGY
 
@@ -636,6 +653,8 @@ def suggested_bedtime(evening_date_str):
 
     candidates = []
     for commitment in db.list_commitments_between(f"{tomorrow}T00:00:00", f"{day_after}T00:00:00"):
+        if not _counts_for_capacity(commitment):
+            continue  # a different group's session -- not the user's morning to protect
         if commitment["start"] < f"{tomorrow}T00:00:00":
             continue  # started the evening before -- not "tomorrow's first thing"
         if datetime.fromisoformat(commitment["start"]).hour >= MORNING_CUTOFF_HOUR:
