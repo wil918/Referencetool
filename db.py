@@ -3298,7 +3298,18 @@ def _commitment_to_dict(row):
 
 
 def delete_commitment(commitment_id):
+    """Delete a commitment and the home-first prep/travel blocks the scheduler
+    inserted for it.
+
+    Those blocks carry commitment_id (see SCHEDULED_BLOCKS_SCHEMA) and mean
+    nothing once the commitment is gone -- a "getting ready" block for a
+    meeting that no longer exists. A replan would clear them on its own, but
+    only from its cutoff forward and only once it runs; deleting them here
+    keeps the table referentially clean in the meantime, the same way
+    _delete_task_rows clears a task's blocks. They hold no actuals, so unlike
+    a completed task's block there is no history to preserve."""
     with get_conn() as conn:
+        conn.execute("DELETE FROM scheduled_blocks WHERE commitment_id = ?", (commitment_id,))
         conn.execute("DELETE FROM commitments WHERE id = ?", (commitment_id,))
 
 

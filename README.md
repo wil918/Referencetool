@@ -110,7 +110,9 @@ type-in text box, and a visual archive browser — running on top of the same
 ```bash
 python app.py
 ```
-This opens `http://127.0.0.1:5050` in your browser automatically.
+This opens `http://127.0.0.1:5050` in your browser automatically. The homepage
+is the **Schedule** (below); the reference library lives under the Add / Archive
+/ Projects / Settings tabs of `index.html`.
 
 **Add tab:**
 - Drag and drop files *or whole folders* onto the drop zone (folders are
@@ -131,6 +133,51 @@ This opens `http://127.0.0.1:5050` in your browser automatically.
   similar items (by embedding search) below — click one to jump straight to
   it.
 
+## Schedule
+
+The homepage (`schedule.html`, served at `/`) is a planner for the work a
+project actually involves — not just what to make, but when there is time to
+make it. It runs on the same Flask app and the same SQLite file as the
+reference library; the only outbound calls are still to Claude, for reading a
+brief and classifying an imported timetable.
+
+- **Deliverables and briefs.** A project owes deliverables, each with a due
+  date, a weighting and a free-form `spec` (page counts, required items to tick
+  off). Drop the assignment brief PDF in and Claude proposes the whole
+  structure — key dates, deliverables with their requirements, a task skeleton
+  per deliverable, the mandatory activities (shop visits, workshops) that imply
+  location-bound tasks. Nothing is written until you approve it on a review
+  sheet, item by item; re-importing a reissued brief shows a diff against what
+  it already created rather than duplicating it.
+- **Tasks and estimates.** Each task carries an estimate, an importance and a
+  difficulty — either typed or guessed by Claude from similar past tasks — plus
+  optional dependencies, a required location, and a "needs someone around"
+  level. Finishing what you started is tracked: a task done part-way spawns a
+  remainder that picks up where it left off.
+- **The plan.** The scheduler walks from now to the furthest deadline, placing
+  every outstanding task into the hours you actually have — around classes,
+  shifts, appointments, travel between places, and a protected buffer before
+  each deadline for finishing work. Near-term days get real times; further-out
+  days get "this task, that day" and no more, because a time five weeks out
+  would be fiction. Anything that cannot be reached in time is called out
+  **at the deliverable level** ("4 of 6 tasks can't be placed — Part 2 will not
+  be finished in time") rather than as scattered per-task warnings.
+- **Your calendar.** Import an institutional `.ics` feed and its sessions
+  become commitments, with rooms and teaching groups resolved from the feed's
+  house format. Add personal events by hand. Set your regular working and
+  domestic (chores) hours per weekday, with per-date overrides for a day that
+  runs late. Locations carry travel times and opening hours; recurring tasks
+  ("water the samples every 3 days") spawn themselves.
+- **Views.** Week, day and month calendars, a Tasks list, and a Deliverables
+  tab. The whole schedule surface is drawn in a **technical-drafting visual
+  language** — paper ground, ruled line weights, hatch and stipple for tone,
+  two accent colours — deliberately distinct from the soft-shadow look of the
+  reference library. `static/schedule/specimen.html` is its specimen sheet.
+- **On the project homepage.** Three read-only widgets echo the schedule onto a
+  project's own grid: **Deliverables** (progress and risk), **Up Next** (the
+  next few scheduled work sessions), and **Brief** (the imported brief rendered
+  readably).
+
 ## Project layout
 
 ```
@@ -141,9 +188,14 @@ fashion-reference-tool/
 ├── tagging.py          Claude calls for auto-tagging / description
 ├── embeddings.py        CLIP embeddings + Chroma vector store
 ├── analyze.py           Claude call for cross-reference write-ups
-├── db.py              SQLite metadata storage
+├── briefs.py            reads an assignment brief PDF into a proposed structure
+├── scheduling.py         the planner: places tasks into the hours you have
+├── ics_import.py         parses an institutional timetable feed into commitments
+├── db.py              SQLite metadata storage (library + schedule)
 ├── config.py            paths & settings
 ├── static/             GUI front end (HTML/CSS/JS, served by app.py)
+│   ├── schedule/         the planner homepage, calendars and drafting language
+│   └── project/          the per-project widget homepage and canvas
 ├── references/
 │   ├── images/          your original image files
 │   └── texts/            your original text/PDF files
@@ -174,6 +226,9 @@ tab) instead of just a flat reference grid:
   connect edges with per-edge colour/arrowhead/shape styling, and colour-
   palette/analysis widgets you can drop onto it. Every change persists
   immediately; there's no save step.
+
+Phase 4 is the **Schedule** (above): briefs, deliverables, tasks, the planner
+and the timetable, drawn in their own technical-drafting language.
 
 What's left is desktop packaging. The app is already built desktop-ready —
 no `localStorage` for anything the user creates, no absolute URLs or

@@ -58,6 +58,9 @@ import constellationWidget from "./widgets/constellation.js";
 import canvasWidget from "./widgets/canvas.js";
 import colourPaletteWidget from "./widgets/colour-palette.js";
 import analysisWidget from "./widgets/analysis.js";
+import deliverablesWidget from "./widgets/deliverables.js";
+import upcomingWidget from "./widgets/upcoming.js";
+import briefWidget from "./widgets/brief.js";
 
 const MODULES = [
   titleWidget,
@@ -75,6 +78,9 @@ const MODULES = [
   canvasWidget,
   colourPaletteWidget,
   analysisWidget,
+  deliverablesWidget,
+  upcomingWidget,
+  briefWidget,
 ];
 
 // How long a widget's config sits before it is written. Config saves are the

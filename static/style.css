@@ -2763,6 +2763,87 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   overflow-x: hidden;
 }
 
+/* --- Project widgets: the schedule readouts (deliverables, upcoming, brief) ---
+   Read-only echoes of the schedule surface. They live on the neumorphic
+   homepage, not the drafting surface, so they carry no drafting classes and
+   no borders or fills of their own (hard rule 6) -- structure comes from
+   spacing and weight alone. .widget-body clips to the rounded box; this
+   wrapper is what scrolls inside it. */
+.widget-schedule {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  font-size: calc(0.82rem * var(--content-scale, 1));
+  line-height: 1.45;
+}
+
+.widget-schedule p { margin: 0; }
+.widget-schedule ul,
+.widget-schedule ol { margin: 0.15rem 0 0; padding-left: 1.1rem; }
+.widget-schedule li { margin: 0.1rem 0; }
+.widget-schedule a { color: var(--accent); }
+
+.widget-schedule-summary {
+  font-family: var(--serif);
+  margin-bottom: 0.6rem !important;
+}
+.widget-schedule-summary.is-risk { color: var(--accent); }
+
+/* deliverables */
+.widget-deliverable-row { margin-bottom: 0.7rem; }
+.widget-deliverable-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+.widget-deliverable-title { font-weight: 600; }
+.widget-deliverable-meta {
+  font-family: var(--serif);
+  color: var(--muted);
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+.widget-deliverable-progress { color: var(--muted); font-size: 0.9em; }
+.widget-deliverable-risk { color: var(--accent); margin-top: 0.2rem !important; }
+
+/* upcoming */
+.widget-upcoming-day {
+  font-family: var(--serif);
+  color: var(--muted);
+  margin-top: 0.55rem !important;
+  margin-bottom: 0.15rem !important;
+}
+.widget-upcoming-day:first-child { margin-top: 0 !important; }
+.widget-upcoming-row { display: flex; gap: 0.5rem; align-items: baseline; }
+.widget-upcoming-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.widget-upcoming-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* brief */
+.widget-brief-banner { margin-bottom: 0.6rem !important; }
+.widget-brief-summary { margin-bottom: 0.7rem !important; }
+.widget-brief-heading {
+  font-family: var(--serif);
+  font-weight: 600;
+  margin-top: 0.8rem !important;
+  margin-bottom: 0.2rem !important;
+}
+.widget-brief-deliverable { margin: 0.5rem 0; }
+.widget-brief-deliverable-title { font-weight: 600; }
+.widget-brief-spec-key {
+  font-family: var(--serif);
+  color: var(--muted);
+  margin-top: 0.35rem !important;
+}
+.widget-brief-fact { color: var(--muted); font-size: 0.9em; }
+.widget-brief-body { margin-top: 0.2rem !important; }
+
 /* --- Project widgets: the Three.js scenes (colourspace, similarity) ---
    project/scene-widget.js's frame, shared by both. The canvas is transparent
    (shared/scene-host.js), so the scene sits directly on the project's own
