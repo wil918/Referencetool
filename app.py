@@ -1567,6 +1567,39 @@ def api_remove_task_dependency(task_id):
     return jsonify({"ok": True})
 
 
+@app.get("/api/tasks/<task_id>/resources")
+def api_list_task_resources(task_id):
+    if not db.get_task(task_id):
+        abort(404)
+    return jsonify(db.list_resources_for_task(task_id))
+
+
+@app.post("/api/tasks/<task_id>/resources")
+def api_add_task_resource(task_id):
+    """Link a resource to a task. The task inherits the resource's location if
+    it has none of its own -- see db.add_task_resource."""
+    if not db.get_task(task_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    resource_id = body.get("resource_id")
+    if not resource_id or not db.get_resource(resource_id):
+        return jsonify({"error": "resource_id must be an existing resource"}), 400
+    db.add_task_resource(task_id, resource_id)
+    return jsonify(db.list_resources_for_task(task_id))
+
+
+@app.delete("/api/tasks/<task_id>/resources")
+def api_remove_task_resource(task_id):
+    if not db.get_task(task_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    resource_id = body.get("resource_id")
+    if not resource_id:
+        return jsonify({"error": "resource_id is required"}), 400
+    db.remove_task_resource(task_id, resource_id)
+    return jsonify(db.list_resources_for_task(task_id))
+
+
 @app.post("/api/tasks/generate")
 def api_generate_task_fields():
     """Given the one sentence a quick-added task requires, ask Claude to
@@ -2516,6 +2549,13 @@ def api_reset_schedule():
 @app.get("/api/resources")
 def api_list_resources():
     return jsonify(db.list_resources())
+
+
+@app.get("/api/resources/search")
+def api_search_resources():
+    """One box over the whole library -- matches resource name/notes and any
+    item's text or tags. Blank query returns nothing rather than everything."""
+    return jsonify(db.search_resource_items(request.args.get("q", "")))
 
 
 @app.post("/api/resources")

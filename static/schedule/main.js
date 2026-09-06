@@ -13,6 +13,7 @@ import { refreshSchedule } from "./schedule.js";
 import { refreshDay } from "./day.js";
 import { createMonth } from "./month.js";
 import { refreshDeliverables } from "./deliverables.js";
+import { initResources, refreshResources } from "./resources.js";
 import { initScheduleSettings } from "./settings.js";
 import { initRecurrenceRulesPanel, refreshRecurrenceRules } from "./recurrence-rules-panel.js";
 import { startBedtimeWatch } from "./bedtime-watch.js";
@@ -30,6 +31,7 @@ function activateTab(name) {
 
   if (name === "today") refreshDay();
   if (name === "tasks") tasks.refreshTaskList();
+  if (name === "resources") refreshResources();
   if (name === "schedule") refreshSchedule();
   if (name === "month") refreshMonth();
   if (name === "deliverables") refreshDeliverables();
@@ -73,6 +75,7 @@ initLocationsManager(() => tasks.refreshTaskList());
 initCalendarImport();
 initCommitments();
 initScheduleSettings();
+initResources();
 initRecurrenceRulesPanel();
 startBedtimeWatch();
 

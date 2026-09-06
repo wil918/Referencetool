@@ -104,6 +104,65 @@ function makeSlotValue(block, refresh) {
  * deliverable owes and can move the task's effective deadline (a task inherits
  * its deliverable's due date -- see scheduling._own_deadline), so onChange
  * fires for the caller to reload. */
+/* The resources this task is a trip for. Linking one can fill the task's
+ * location (db.add_task_resource), which moves it on the calendar -- so both
+ * refresh() and onChange() fire after a change here. */
+async function linkResource(taskId, resourceId, refresh, onChange) {
+  await fetch(`/api/tasks/${taskId}/resources`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ resource_id: resourceId }),
+  });
+  refresh();
+  onChange();
+}
+
+async function unlinkResource(taskId, resourceId, refresh, onChange) {
+  await fetch(`/api/tasks/${taskId}/resources`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ resource_id: resourceId }),
+  });
+  refresh();
+  onChange();
+}
+
+function makeResourcesValue(task, linked, allResources, refresh, onChange) {
+  const wrap = document.createElement("span");
+  wrap.className = "task-schedule-row task-panel-resources";
+  const linkedIds = linked.map((r) => r.id);
+
+  linked.forEach((r) => {
+    const chip = document.createElement("span");
+    chip.className = "task-chip";
+    chip.textContent = r.name;
+    const x = document.createElement("button");
+    x.className = "task-resource-unlink";
+    x.setAttribute("aria-label", `Unlink ${r.name}`);
+    x.textContent = "×";
+    x.addEventListener("click", () => unlinkResource(task.id, r.id, refresh, onChange));
+    chip.appendChild(x);
+    wrap.appendChild(chip);
+  });
+
+  const unlinked = allResources.filter((r) => !linkedIds.includes(r.id));
+  if (unlinked.length) {
+    const add = document.createElement("select");
+    add.innerHTML = `<option value="">${linkedIds.length ? "Link another…" : "Link a resource…"}</option>`;
+    unlinked.forEach((r) => {
+      const opt = document.createElement("option");
+      opt.value = r.id;
+      opt.textContent = r.name;
+      add.appendChild(opt);
+    });
+    add.addEventListener("change", () => {
+      if (add.value) linkResource(task.id, add.value, refresh, onChange);
+    });
+    wrap.appendChild(add);
+  }
+  return wrap;
+}
+
 async function setDeliverable(taskId, deliverableId, refresh, onChange) {
   await fetch(`/api/tasks/${taskId}`, {
     method: "PUT",
@@ -245,10 +304,12 @@ function makeActionsRow(task, block, refresh, onChange) {
 
 async function render(taskId, onChange) {
   box.innerHTML = "";
-  const [task, actual, blocks] = await Promise.all([
+  const [task, actual, blocks, linkedResources, allResources] = await Promise.all([
     fetch(`/api/tasks/${taskId}`).then((r) => (r.ok ? r.json() : null)),
     fetch(`/api/tasks/${taskId}/actual`).then((r) => (r.ok ? r.json() : null)),
     fetch(`/api/tasks/${taskId}/blocks`).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+    fetch(`/api/tasks/${taskId}/resources`).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+    fetch(`/api/resources`).then((r) => (r.ok ? r.json() : [])).catch(() => []),
   ]);
   // The rule this task carries, if any -- read-only here: the calendar block is
   // for acting on the plan, and a rule's cadence is edited on the Tasks tab.
@@ -307,6 +368,11 @@ async function render(taskId, onChange) {
     ["Deliverable", task.project_id
       ? makeDeliverableValue(task, deliverables, refresh, onChange)
       : null],
+    ["Resources", (linkedResources.length || allResources.length) && !done
+      ? makeResourcesValue(task, linkedResources, allResources, refresh, onChange)
+      : linkedResources.length
+        ? linkedResources.map((r) => r.name).join(", ")
+        : null],
     ["Slot", currentBlock && !done ? makeSlotValue(currentBlock, refresh) : null],
     ["Spent", done && actual?.actual_minutes != null ? formatMinutes(actual.actual_minutes) : null],
     ["Goal", task.measurable_goal, { wide: true }],

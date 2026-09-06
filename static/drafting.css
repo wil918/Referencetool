@@ -2901,3 +2901,188 @@
   font-weight: 400;
   cursor: default;
 }
+
+/* --- The Resources tab -------------------------------------------------
+   A manual archive of places to get things. Same ruled-line idiom as the
+   Tasks tab: a hair rule down the left of each thing, no fills, uppercase
+   micro labels. Every value here is an existing --dr-* token (hard rule 6);
+   borders are the hierarchy on this surface. */
+
+.drafting .resource-entry {
+  border-left: var(--dr-rule-hair);
+  padding-left: 0.9rem;
+  margin-bottom: 1.6rem;
+}
+
+.drafting .resource-entry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.6rem 1rem;
+}
+.drafting .resource-field-wide { grid-column: 1 / -1; }
+.drafting .resource-entry-actions { margin-top: 0.8rem; }
+
+.drafting .resource-search-row {
+  border-left: var(--dr-rule-hair);
+  padding-left: 0.9rem;
+  margin-bottom: 1.6rem;
+}
+.drafting .resource-search-row input {
+  width: 100%;
+  max-width: 26rem;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+}
+.drafting .resource-search-row p { margin: 0.3rem 0 0; }
+
+.drafting .resource-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.drafting .resource-card {
+  border-left: var(--dr-rule-line);
+  padding-left: 0.9rem;
+}
+
+.drafting .resource-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  margin-bottom: 0.5rem;
+}
+.drafting .resource-name.dr-title {
+  font-size: var(--dr-t-head);
+  outline: none;
+}
+.drafting .resource-name.dr-title:focus { border-bottom: var(--dr-rule-hair); }
+
+.drafting .resource-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.7rem;
+}
+.drafting .resource-fact {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-size: var(--dr-t-body);
+  color: var(--dr-ink-2);
+}
+.drafting .resource-fact-term {
+  flex: 0 0 4.5rem;
+  font-size: var(--dr-t-label);
+  letter-spacing: var(--dr-track-label);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+}
+.drafting .resource-url,
+.drafting .resource-notes {
+  outline: none;
+  min-width: 6rem;
+}
+.drafting .resource-url:focus,
+.drafting .resource-notes:focus { border-bottom: var(--dr-rule-hair); }
+.drafting .resource-url-open {
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+}
+
+.drafting .resource-stock-label { margin: 0.4rem 0 0.3rem; }
+
+.drafting .resource-item-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  border-left: var(--dr-rule-hair);
+  padding: 0.1rem 0 0.1rem 0.5rem;
+  margin-bottom: 0.2rem;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+  color: var(--dr-ink-2);
+}
+.drafting .resource-item-row.is-matched {
+  border-left-color: var(--dr-c-cut);
+  color: var(--dr-ink);
+}
+.drafting .resource-item-name { flex: 0 0 auto; }
+
+.drafting .resource-item-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.drafting .resource-tag {
+  border: var(--dr-rule-hair);
+  padding: 0 0.3rem;
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+}
+
+.drafting .resource-item-remove,
+.drafting .task-resource-unlink {
+  border: 0;
+  background: transparent;
+  padding: 0 0.2rem;
+  font-size: var(--dr-t-body);
+  line-height: 1;
+  color: var(--dr-ink-3);
+  cursor: pointer;
+}
+.drafting .resource-item-remove:hover,
+.drafting .task-resource-unlink:hover { color: var(--dr-c-cut); }
+
+.drafting .resource-item-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+.drafting .resource-item-add input {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+}
+
+.drafting .resource-actions,
+.drafting .resource-delete-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+}
+.drafting .resource-delete-confirm p {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+}
+
+/* The per-task resource link, on the Tasks tab card and in the calendar
+   detail panel. */
+.drafting .task-resources-row,
+.drafting .task-panel-resources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+.drafting .task-resources-term {
+  font-size: var(--dr-t-label);
+  letter-spacing: var(--dr-track-label);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+}
+.drafting .task-resource-chip { display: inline-flex; align-items: center; gap: 0.2rem; }
+.drafting .task-resource-add {
+  font-size: var(--dr-t-micro);
+  letter-spacing: 0;
+  text-transform: none;
+}

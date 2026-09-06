@@ -679,6 +679,18 @@ CREATE TABLE IF NOT EXISTS resource_items (
 );
 """
 
+# Which resources a task is a trip for. A plain edge table, exactly like
+# task_dependencies -- a shop run can be for several resources at once, and a
+# resource feeds many tasks over a project's life. Clears with the task (it is
+# working data, not the resource itself); see SCHEDULE_DATA_TABLES.
+TASK_RESOURCES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS task_resources (
+    task_id TEXT NOT NULL,
+    resource_id TEXT NOT NULL,
+    PRIMARY KEY (task_id, resource_id)
+);
+"""
+
 # An imported assignment brief. `extracted` is JSON -- whatever structure the
 # extraction step produced -- kept as the durable record of what a deliverable
 # was built from, independent of deliverables.spec which is the (possibly
@@ -858,6 +870,7 @@ def init_db():
         conn.execute(RECURRENCE_RULES_SCHEMA)
         conn.execute(RESOURCES_SCHEMA)
         conn.execute(RESOURCE_ITEMS_SCHEMA)
+        conn.execute(TASK_RESOURCES_SCHEMA)
         conn.execute(BRIEFS_SCHEMA)
         conn.execute(WORKING_HOURS_SCHEMA)
         conn.execute(DOMESTIC_HOURS_SCHEMA)
@@ -2593,7 +2606,8 @@ def update_task(task_id, **fields):
 def delete_task(task_id):
     """Delete a task and everything that only exists because of it: its
     dependency edges (both directions -- it may depend on others and have
-    others depending on it), its recorded actuals, and its scheduled blocks.
+    others depending on it), its recorded actuals, its resource links, and its
+    scheduled blocks.
     Mirrors delete_reference's cleanup of everything pointing at a deleted
     reference."""
     with get_conn() as conn:
@@ -2602,6 +2616,7 @@ def delete_task(task_id):
             (task_id, task_id),
         )
         conn.execute("DELETE FROM task_actuals WHERE task_id = ?", (task_id,))
+        conn.execute("DELETE FROM task_resources WHERE task_id = ?", (task_id,))
         conn.execute("DELETE FROM scheduled_blocks WHERE task_id = ?", (task_id,))
         conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
 
@@ -2610,6 +2625,10 @@ def _task_to_dict(row):
     d = dict(row)
     d["is_finishing"] = bool(d["is_finishing"])
     d["is_domestic"] = bool(d["is_domestic"])
+    # The resources this task is a trip for, inlined so a task card can show
+    # its links without a request per card. Writes still go through the
+    # /api/tasks/<id>/resources routes -- this is read-only sugar.
+    d["resource_ids"] = list_task_resources(d["id"])
     return d
 
 
@@ -3368,16 +3387,36 @@ def create_resource(resource_id, name, location_id=None, url=None, notes=None):
         )
 
 
+def _resource_row_to_dict(row):
+    """A resource plus the two things every view of it wants: its place's name
+    (from the JOIN in _RESOURCE_SELECT, so the UI needn't cross-reference
+    locations) and its stock, inline."""
+    d = dict(row)
+    d["items"] = list_resource_items(d["id"])
+    return d
+
+
+_RESOURCE_SELECT = """
+    SELECT r.*, l.name AS location_name
+    FROM resources r
+    LEFT JOIN locations l ON l.id = r.location_id
+"""
+
+
 def list_resources():
     with get_conn() as conn:
-        rows = conn.execute("SELECT * FROM resources ORDER BY date_added DESC").fetchall()
-        return [dict(r) for r in rows]
+        rows = conn.execute(
+            _RESOURCE_SELECT + " ORDER BY r.date_added DESC"
+        ).fetchall()
+        return [_resource_row_to_dict(r) for r in rows]
 
 
 def get_resource(resource_id):
     with get_conn() as conn:
-        row = conn.execute("SELECT * FROM resources WHERE id = ?", (resource_id,)).fetchone()
-        return dict(row) if row else None
+        row = conn.execute(
+            _RESOURCE_SELECT + " WHERE r.id = ?", (resource_id,)
+        ).fetchone()
+        return _resource_row_to_dict(row) if row else None
 
 
 RESOURCE_PATCH_COLUMNS = ("name", "location_id", "url", "notes")
@@ -3401,6 +3440,7 @@ def update_resource(resource_id, **fields):
 def delete_resource(resource_id):
     with get_conn() as conn:
         conn.execute("DELETE FROM resource_items WHERE resource_id = ?", (resource_id,))
+        conn.execute("DELETE FROM task_resources WHERE resource_id = ?", (resource_id,))
         conn.execute("DELETE FROM resources WHERE id = ?", (resource_id,))
 
 
@@ -3432,6 +3472,102 @@ def _resource_item_to_dict(row):
     d = dict(row)
     d["tags"] = json.loads(d["tags"]) if d["tags"] else []
     return d
+
+
+def search_resource_items(query):
+    """One box over the whole library -- "who sells horsehair canvas". Matches
+    a resource's name or notes, or any of its items' text or tags, all
+    case-insensitively. Each matching resource comes back once, in the same
+    shape as list_resources, with `matched_items` naming the items whose text
+    or tags matched (empty when only the name/notes matched)."""
+    query = (query or "").strip()
+    if not query:
+        return []
+    like = f"%{query.lower()}%"
+    with get_conn() as conn:
+        rows = conn.execute(
+            _RESOURCE_SELECT
+            + """ WHERE lower(r.name) LIKE ?
+                     OR lower(coalesce(r.notes, '')) LIKE ?
+                     OR EXISTS (
+                         SELECT 1 FROM resource_items ri
+                         WHERE ri.resource_id = r.id
+                           AND (lower(ri.item) LIKE ? OR lower(coalesce(ri.tags, '')) LIKE ?)
+                     )
+                  ORDER BY r.date_added DESC""",
+            (like, like, like, like),
+        ).fetchall()
+        results = []
+        for row in rows:
+            d = _resource_row_to_dict(row)
+            d["matched_items"] = [
+                it
+                for it in d["items"]
+                if query.lower() in it["item"].lower()
+                or any(query.lower() in tag.lower() for tag in it["tags"])
+            ]
+            results.append(d)
+        return results
+
+
+# --- Schedule: task <-> resource links ---------------------------------------
+#
+# A plain edge table like task_dependencies: a shop trip can be for several
+# resources, and a resource feeds many tasks. Linking also fills the task's
+# location if it has none -- a trip to a shop happens at that shop.
+
+
+def list_task_resources(task_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT resource_id FROM task_resources WHERE task_id = ?", (task_id,)
+        ).fetchall()
+        return [r["resource_id"] for r in rows]
+
+
+def list_resources_for_task(task_id):
+    """The linked resources as full dicts, newest link-target first -- what the
+    task card and the calendar detail panel render."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            _RESOURCE_SELECT
+            + """ JOIN task_resources tr ON tr.resource_id = r.id
+                  WHERE tr.task_id = ?
+                  ORDER BY r.date_added DESC""",
+            (task_id,),
+        ).fetchall()
+        return [_resource_row_to_dict(r) for r in rows]
+
+
+def add_task_resource(task_id, resource_id):
+    """Link a resource to a task. If the task has no required location yet and
+    the resource has one, the task inherits it -- a visible write the user can
+    override on the task afterwards, not a scheduler special case."""
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO task_resources (task_id, resource_id) VALUES (?, ?)",
+            (task_id, resource_id),
+        )
+        conn.execute(
+            """UPDATE tasks
+                  SET required_location_id = (
+                      SELECT location_id FROM resources WHERE id = :rid
+                  )
+                WHERE id = :tid
+                  AND required_location_id IS NULL
+                  AND (SELECT location_id FROM resources WHERE id = :rid) IS NOT NULL""",
+            {"rid": resource_id, "tid": task_id},
+        )
+
+
+def remove_task_resource(task_id, resource_id):
+    """Unlink only -- a location the task inherited on link stays put, the same
+    way removing a reference from a folder leaves the reference alone."""
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM task_resources WHERE task_id = ? AND resource_id = ?",
+            (task_id, resource_id),
+        )
 
 
 # --- Schedule: briefs ----------------------------------------------------------
@@ -3633,6 +3769,7 @@ SCHEDULE_DATA_TABLES = (
     "scheduled_blocks",
     "task_actuals",
     "task_dependencies",
+    "task_resources",
     "tasks",
     "commitments",
     "deliverables",

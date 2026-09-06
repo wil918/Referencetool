@@ -26,6 +26,7 @@
     <nav>
       <button class="tab-btn active" data-tab="today">Today</button>
       <button class="tab-btn" data-tab="tasks">Tasks</button>
+      <button class="tab-btn" data-tab="resources">Resources</button>
       <button class="tab-btn" data-tab="schedule">Schedule</button>
       <button class="tab-btn" data-tab="month">Month</button>
       <button class="tab-btn" data-tab="deliverables">Deliverables</button>
@@ -80,6 +81,12 @@
               Location
               <select id="task-location-select">
                 <option value="" selected>Anywhere</option>
+              </select>
+            </label>
+            <label>
+              Resource
+              <select id="task-resource-select">
+                <option value="" selected>None</option>
               </select>
             </label>
             <label>
@@ -138,6 +145,51 @@
       <div id="task-at-risk-panel" class="task-at-risk-panel" hidden></div>
       <div id="task-list" class="task-list"></div>
       <p id="task-list-empty" class="muted" hidden>No tasks yet -- describe one above.</p>
+    </section>
+
+    <section id="tab-resources" class="tab">
+      <!-- Places to get things: fabric shops, haberdashers, suppliers.
+           schedule/resources.js draws this. Reusing locations means a
+           resource's travel time and opening hours come for free, and a task
+           linked to a resource inherits its location. No external lookup in
+           v1 -- that needs a places API and a decision about sending location
+           data off-machine. -->
+      <div class="resource-entry">
+        <div class="resource-entry-grid">
+          <label class="resource-field-wide">
+            Name
+            <input type="text" id="resource-name-input" placeholder="Shop, supplier, library">
+          </label>
+          <label>
+            Location
+            <select id="resource-location-input">
+              <option value="" selected>No location</option>
+            </select>
+          </label>
+          <label>
+            URL
+            <input type="url" id="resource-url-input" placeholder="https://">
+          </label>
+          <label class="resource-field-wide">
+            Notes
+            <input type="text" id="resource-notes-input" placeholder="Which branch, what for, who to ask">
+          </label>
+        </div>
+        <div class="resource-entry-actions">
+          <button id="resource-save-btn" class="btn primary">Add resource</button>
+        </div>
+        <p id="resource-save-status" class="muted"></p>
+      </div>
+
+      <div class="resource-search-row">
+        <input type="search" id="resource-search-input"
+               placeholder="Search stock &mdash; &ldquo;horsehair canvas&rdquo;, &ldquo;petersham&rdquo;">
+        <p class="muted">Searches every resource's name, notes and what it stocks, tags included.</p>
+      </div>
+
+      <div id="resource-list" class="resource-list"></div>
+      <p id="resource-list-empty" class="muted" hidden>No resources yet &mdash; add one above.</p>
+      <p id="resource-search-empty" class="muted" hidden>Nothing stocks that.</p>
     </section>
 
     <section id="tab-schedule" class="tab">

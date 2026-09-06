@@ -30,6 +30,7 @@ const projectSelect = document.getElementById("task-project-select");
 const deliverableSelect = document.getElementById("task-deliverable-select");
 const deadlineInput = document.getElementById("task-deadline-input");
 const locationSelect = document.getElementById("task-location-select");
+const resourceSelect = document.getElementById("task-resource-select");
 const supportSelect = document.getElementById("task-support-select");
 const importanceInput = document.getElementById("task-importance-input");
 const difficultyInput = document.getElementById("task-difficulty-input");
@@ -89,6 +90,21 @@ function populateLocationOptions(locations) {
   locationSelect.value = current;
 }
 
+// Resources for the entry form's optional "Resource" link. Linking one on
+// save carries that resource's location onto the task if it has none (see
+// db.add_task_resource) -- a shop trip happens at the shop.
+function populateResourceOptions(resources) {
+  const current = resourceSelect.value;
+  resourceSelect.innerHTML = '<option value="" selected>None</option>';
+  resources.forEach((r) => {
+    const opt = document.createElement("option");
+    opt.value = r.id;
+    opt.textContent = r.name;
+    resourceSelect.appendChild(opt);
+  });
+  resourceSelect.value = current;
+}
+
 async function populateDeliverableOptions(projectId) {
   deliverableSelect.innerHTML = '<option value="" selected>No deliverable</option>';
   deliverableSelect.disabled = true;
@@ -114,6 +130,7 @@ function resetEntryForm() {
   populateDeliverableOptions("");
   deadlineInput.value = "";
   locationSelect.value = "";
+  resourceSelect.value = "";
   supportSelect.value = "independent";
   importanceInput.value = "";
   difficultyInput.value = "";
@@ -197,6 +214,16 @@ saveBtn.addEventListener("click", async () => {
     if (!res.ok) {
       saveStatus.textContent = `Error: ${data.error}`;
     } else {
+      // Link the chosen resource once the task exists -- this also fills the
+      // task's location from the resource if it had none (see
+      // db.add_task_resource). A failure here doesn't undo the saved task.
+      if (resourceSelect.value) {
+        await fetch(`/api/tasks/${data.id}/resources`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ resource_id: resourceSelect.value }),
+        });
+      }
       saveStatus.textContent = `Saved "${data.title}".`;
       resetEntryForm();
       refreshTaskList();
@@ -657,6 +684,75 @@ function makeRecurrenceRow(task, rule) {
   return field.el;
 }
 
+// --- Resources, per card -------------------------------------------------
+//
+// The resources a shop trip is for. Linking one carries its location onto
+// the task when the task has none (db.add_task_resource), so the list is
+// refreshed after any change -- the card's location meta reads
+// required_location_id.
+
+async function linkResource(taskId, resourceId) {
+  await fetch(`/api/tasks/${taskId}/resources`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ resource_id: resourceId }),
+  });
+  refreshTaskList();
+}
+
+async function unlinkResource(taskId, resourceId) {
+  await fetch(`/api/tasks/${taskId}/resources`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ resource_id: resourceId }),
+  });
+  refreshTaskList();
+}
+
+function makeResourcesRow(task, lookups) {
+  const linkedIds = task.resource_ids || [];
+  const row = document.createElement("div");
+  row.className = "task-resources-row";
+
+  const term = document.createElement("span");
+  term.className = "task-resources-term";
+  term.textContent = "Resources";
+  row.appendChild(term);
+
+  linkedIds.forEach((id) => {
+    const resource = lookups.resourcesById[id];
+    const chip = document.createElement("span");
+    chip.className = "task-chip task-resource-chip";
+    chip.textContent = resource ? resource.name : "unknown";
+    const x = document.createElement("button");
+    x.className = "task-resource-unlink";
+    x.setAttribute("aria-label", `Unlink ${resource ? resource.name : "resource"}`);
+    x.textContent = "×";
+    x.addEventListener("click", () => unlinkResource(task.id, id));
+    chip.appendChild(x);
+    row.appendChild(chip);
+  });
+
+  const unlinked = (lookups.allResources || []).filter((r) => !linkedIds.includes(r.id));
+  if (unlinked.length) {
+    const add = document.createElement("select");
+    add.className = "task-resource-add";
+    add.innerHTML = `<option value="">${linkedIds.length ? "Link another…" : "Link a resource…"}</option>`;
+    unlinked.forEach((r) => {
+      const opt = document.createElement("option");
+      opt.value = r.id;
+      opt.textContent = r.name;
+      add.appendChild(opt);
+    });
+    add.addEventListener("change", () => {
+      if (add.value) linkResource(task.id, add.value);
+    });
+    row.appendChild(add);
+  }
+
+  return row;
+}
+
 // --- Task card ---
 
 function makeTaskCard(task, lookups) {
@@ -726,6 +822,10 @@ function makeTaskCard(task, lookups) {
   if (chips.children.length) card.appendChild(chips);
 
   card.appendChild(makeRecurrenceRow(task, lookups.rulesById[task.recurrence_id] || null));
+
+  if ((task.resource_ids || []).length || (lookups.allResources || []).length) {
+    card.appendChild(makeResourcesRow(task, lookups));
+  }
 
   if (task.measurable_goal) card.appendChild(makeEditableGoal(task));
 
@@ -845,22 +945,25 @@ export async function refreshTaskList() {
   if (projectId) params.set("project_id", projectId);
   if (status) params.set("status", status);
 
-  const [tasks, projects, locations, schedule, rulesById] = await Promise.all([
+  const [tasks, projects, locations, resources, schedule, rulesById] = await Promise.all([
     fetch(`/api/tasks${params.toString() ? "?" + params : ""}`).then((r) => r.json()),
     fetch("/api/projects").then((r) => r.json()),
     fetch("/api/locations").then((r) => r.json()),
+    fetch("/api/resources").then((r) => r.json()),
     fetch("/api/schedule").then((r) => r.json()),
     loadRulesById(),
   ]);
 
   await populateProjectOptions(projects);
   populateLocationOptions(locations);
+  populateResourceOptions(resources);
   filterProjectSelect.value = projectId;
   filterStatusSelect.value = status;
   renderAtRiskPanel(schedule);
 
   const projectsById = Object.fromEntries(projects.map((p) => [p.id, p.title]));
   const locationsById = Object.fromEntries(locations.map((l) => [l.id, l.name]));
+  const resourcesById = Object.fromEntries(resources.map((r) => [r.id, r]));
 
   // Deliverables for every project a listed task belongs to, so each card can
   // offer its own deliverable picker -- one request per distinct project.
@@ -891,6 +994,8 @@ export async function refreshTaskList() {
       makeTaskCard(task, {
         projectsById,
         locationsById,
+        resourcesById,
+        allResources: resources,
         actualsByTask,
         blocksByTask,
         slippingIds,
