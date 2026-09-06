@@ -186,6 +186,10 @@ export async function loadCalendarData(startDate, endDate) {
 
   return {
     schedule: schedule || { blocks: [], at_risk: [], at_risk_by_deliverable: [], chronically_slipping: [] },
+    // Provisional future occurrences of the recurrence rules -- drawn faintly
+    // so a repeat reads as a repeat, not counted toward anything (see
+    // scheduling._recurrence_ghosts).
+    recurrenceGhosts: (schedule && schedule.recurrence_ghosts) || [],
     // Minutes reserved before each deadline for finishing work. Only the month
     // view (month.js) draws this; the hourly grid ignores it.
     finishingBufferMinutes: schedule?.finishing_buffer_minutes ?? 24 * 60,
@@ -469,6 +473,22 @@ export function createCalendar(container, options = {}) {
         endMin: Math.max(startMin + 1, endMin),
       });
     });
+    (data.recurrenceGhosts || []).forEach((g) => {
+      if (g.granularity !== "slot") return;
+      const eventDateStr = dateOfIso(g.start);
+      const rawStart = minutesOfIso(g.start);
+      if (!belongsHere(eventDateStr, rawStart)) return;
+      const startMin = elapsedInColumn(dateStr, eventDateStr, rawStart);
+      const endMin = elapsedInColumn(dateStr, dateOfIso(g.end), minutesOfIso(g.end));
+      events.push({
+        type: "block",
+        block: g,
+        kind: "recurrence",
+        task: g.task_id ? data.tasksById[g.task_id] : null,
+        startMin,
+        endMin: Math.max(startMin + 1, endMin),
+      });
+    });
     data.commitments.forEach((c) => {
       const eventDateStr = dateOfIso(c.start);
       const rawStart = minutesOfIso(c.start);
@@ -491,9 +511,16 @@ export function createCalendar(container, options = {}) {
   }
 
   function dayListFor(dateStr) {
-    return (data.schedule.blocks || [])
+    const real = (data.schedule.blocks || [])
       .filter((b) => b.granularity === "day" && b.start === dateStr && b.kind === "task")
       .map((b) => ({ block: b, task: data.tasksById[b.task_id] }));
+    // Provisional recurrence occurrences past the slot-detail window land
+    // here too -- faint, non-interactive, so a repeat still shows up further
+    // out even though it has no time of day yet.
+    const ghosts = (data.recurrenceGhosts || [])
+      .filter((g) => g.granularity === "day" && g.start === dateStr)
+      .map((g) => ({ block: g, task: g.task_id ? data.tasksById[g.task_id] : null, ghost: true }));
+    return [...real, ...ghosts];
   }
 
   function bedtimeFor(dateStr) {
@@ -595,8 +622,6 @@ export function createCalendar(container, options = {}) {
   function makeEventEl(ev, dateStr) {
     const el = document.createElement("div");
     const kindClass = ev.type === "commitment" ? "timetabled" : ev.block.kind;
-    el.className = `dr-block dr-block--${kindClass}`;
-    el.dataset.kind = kindClass;
 
     const top = yForElapsed(ev.startMin);
     const height = Math.max(yForElapsed(ev.endMin) - top, MIN_BLOCK_HEIGHT_PX);
@@ -604,6 +629,30 @@ export function createCalendar(container, options = {}) {
     el.style.height = `${height}px`;
     el.style.left = `${(ev.lane / ev.laneCount) * 100}%`;
     el.style.width = `${(1 / ev.laneCount) * 100}%`;
+
+    // A projected recurrence occurrence: outline only, faint, not a real
+    // placement -- no drag, no lock, no index. It says "this repeats and
+    // roughly lands here"; the real instance is drawn properly elsewhere.
+    if (ev.type === "block" && ev.block.kind === "recurrence") {
+      el.className = "dr-block dr-block--projected";
+      el.dataset.kind = "recurrence";
+      const label = document.createElement("span");
+      label.className = "dr-block-label";
+      label.textContent = ev.task ? ev.task.title : "Recurring task";
+      el.appendChild(label);
+      const tag = cadenceTag(data.recurrenceRulesById[ev.block.rule_id]);
+      if (tag) {
+        const mark = document.createElement("span");
+        mark.className = "dr-recur";
+        mark.textContent = tag;
+        el.appendChild(mark);
+      }
+      el.title = "Provisional -- a future repeat, not yet scheduled";
+      return el;
+    }
+
+    el.className = `dr-block dr-block--${kindClass}`;
+    el.dataset.kind = kindClass;
 
     if (ev.type === "block" && ev.block.kind === "task" && atRiskTaskIds.has(ev.block.task_id)) {
       el.classList.add("dr-block--at-risk");
@@ -730,10 +779,10 @@ export function createCalendar(container, options = {}) {
     heading.className = "schedule-day-list-heading muted";
     heading.textContent = "Later this week -- no specific time yet:";
     wrap.appendChild(heading);
-    items.forEach(({ block, task }) => {
-      const chip = document.createElement("button");
-      chip.type = "button";
-      chip.className = "schedule-day-list-item";
+    items.forEach(({ block, task, ghost }) => {
+      const chip = document.createElement(ghost ? "span" : "button");
+      chip.className = "schedule-day-list-item" + (ghost ? " is-projected" : "");
+      if (!ghost) chip.type = "button";
       const idx = task?.deliverable_id ? deliverableIndex.get(task.deliverable_id) : null;
       if (idx) {
         const mark = document.createElement("span");
@@ -742,7 +791,17 @@ export function createCalendar(container, options = {}) {
         chip.appendChild(mark);
       }
       chip.appendChild(document.createTextNode(task ? task.title : "Task"));
-      chip.addEventListener("click", () => onOpenTask(block.task_id));
+      if (ghost) {
+        const tag = cadenceTag(data.recurrenceRulesById[block.rule_id]);
+        if (tag) {
+          const mark = document.createElement("span");
+          mark.className = "dr-recur schedule-day-list-recur";
+          mark.textContent = tag;
+          chip.appendChild(mark);
+        }
+      } else {
+        chip.addEventListener("click", () => onOpenTask(block.task_id));
+      }
       wrap.appendChild(chip);
     });
     return wrap;

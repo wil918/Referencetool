@@ -203,3 +203,99 @@ def test_recurrence_rule_creation_rejects_a_bad_interval(client):
     assert client.post(
         "/api/recurrence-rules", json={"interval_days": 3, "window_days": -1}
     ).status_code == 400
+
+
+# --- The forecast overlay: projected future occurrences ------------------------
+#
+# A rule only ever has one real outstanding instance, so the calendar past it
+# looks empty. scheduling._recurrence_ghosts projects each active rule forward
+# RECURRENCE_PROJECTION_DAYS as block-shaped rows that are drawn but never
+# stored and never counted toward capacity or the at-risk list.
+
+def _ghosts(now):
+    return scheduling.plan(now=now)["recurrence_ghosts"]
+
+
+def test_an_active_rule_projects_a_month_of_future_occurrences(archive):
+    rule = make_rule(interval_days=7, window_days=1)
+    make_instance(rule, deadline="2026-03-04")  # first real instance
+
+    ghosts = _ghosts("2026-03-02T09:00:00")
+
+    assert len(ghosts) >= 3  # a rolling month of a weekly task
+    assert all(g["kind"] == "recurrence" and g["provisional"] for g in ghosts)
+    assert all(g["rule_id"] == rule for g in ghosts)
+    # First ghost is one interval past the real instance's ideal date
+    # (deadline 4 Mar - window 1 = 3 Mar; + 7 = 10 Mar), and they step by the
+    # interval from there.
+    dates = sorted(g["start"][:10] for g in ghosts)
+    assert dates[0] == "2026-03-10"
+    assert dates[1] == "2026-03-17"
+    # ...and none past the projection horizon.
+    assert dates[-1] <= "2026-04-01"
+
+
+def test_projected_occurrences_are_never_persisted(archive):
+    db.save_working_hours([{"weekday": wd, "opens": "09:00", "closes": "18:00"}
+                           for wd in range(7)])
+    rule = make_rule(interval_days=3)
+    make_instance(rule, deadline="2026-03-20", est_minutes=30)
+
+    scheduling.replan(now="2026-03-02T09:00:00")
+
+    # Not one ghost row reached the blocks table -- they are recomputed on
+    # every read, never stored.
+    stored = db.list_scheduled_blocks_between("2026-03-01", "2026-05-01")
+    assert all(b["kind"] != "recurrence" for b in stored)
+    # ...but plan() still hands them back, and the real instance is fine.
+    result = scheduling.plan(now="2026-03-02T09:00:00")
+    assert result["recurrence_ghosts"]
+    assert result["at_risk"] == []
+
+
+def test_a_paused_rule_projects_nothing(archive):
+    rule = make_rule(interval_days=3, active=False)
+    make_instance(rule, deadline="2026-03-03")
+
+    assert _ghosts("2026-03-02T09:00:00") == []
+
+
+def test_a_rule_with_no_instance_projects_nothing(archive):
+    make_rule(interval_days=3)  # never attached to a task
+
+    assert _ghosts("2026-03-02T09:00:00") == []
+
+
+def test_projection_follows_the_last_completion_when_nothing_is_outstanding(archive):
+    rule = make_rule(interval_days=5, window_days=1)
+    first = make_instance(rule)
+    # Complete it far enough back that the backstop hasn't re-spawned yet.
+    scheduling.resolve_completed(first, actual_minutes=10, now="2026-03-02T09:00:00")
+    # Pause so generate_recurring_tasks can't make a live instance, leaving
+    # only completed history to project from.
+    db.update_recurrence_rule(rule, active=True)
+
+    ghosts = _ghosts("2026-03-03T09:00:00")
+    dates = sorted(g["start"][:10] for g in ghosts)
+    # last completion 2 Mar + interval 5 = 7 Mar is the first projection
+    # (the real successor spawned by completion sits at its own deadline and
+    # is scheduled as a task, so ghosts start one interval past it).
+    assert dates[0] >= "2026-03-07"
+
+
+def test_the_api_returns_projected_occurrences_in_range(client):
+    # GET /api/schedule plans against the real current date, so anchor the
+    # instance a little ahead of it and query the weeks after.
+    from datetime import date, timedelta
+    today = date.today()
+    rule = client.post("/api/recurrence-rules", json={"interval_days": 7}).get_json()
+    client.post("/api/tasks", json={"title": "Water samples", "recurrence_id": rule["id"],
+                                    "deadline": (today + timedelta(days=10)).isoformat()})
+
+    start = today.isoformat()
+    end = (today + timedelta(days=40)).isoformat()
+    body = client.get(f"/api/schedule?start={start}&end={end}").get_json()
+    assert "recurrence_ghosts" in body
+    assert body["recurrence_ghosts"]
+    assert all(g["rule_id"] == rule["id"] for g in body["recurrence_ghosts"])
+    assert all(start <= g["start"][:10] <= end for g in body["recurrence_ghosts"])

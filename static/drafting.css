@@ -2862,3 +2862,42 @@
   letter-spacing: var(--dr-track-micro);
   text-transform: uppercase;
 }
+
+/* --- Projected future occurrences (the forecast overlay) --------------
+   A recurring task only has one real instance at a time, so without this the
+   month past it looks empty. scheduling._recurrence_ghosts projects each
+   rule forward ~30 days; these are drawn as outline-only, faint, and NEVER
+   interactive -- a repeat you can see coming, not a booked slot. Distinct
+   from the construction layer (which comes off with .dr-no-construction):
+   this is information the user asked for, so it stays. The dashed edge is
+   the same "not closed off, comes round again" language as .dr-block--recurring. */
+.drafting .dr-block--projected {
+  background: transparent;
+  border: var(--dr-w-construction) dashed var(--dr-c-hair);
+  color: var(--dr-ink-4);
+  pointer-events: none;
+}
+.drafting .dr-block--projected .dr-block-label {
+  font-weight: 400;
+  color: var(--dr-ink-4);
+}
+
+/* In the week view's "no specific time yet" list, and in the month cell. */
+.drafting .schedule-day-list-item.is-projected {
+  border-left-style: dashed;
+  border-left-color: var(--dr-c-hair);
+  color: var(--dr-ink-4);
+  cursor: default;
+}
+.drafting .schedule-day-list-recur,
+.drafting .dr-month-entry-recur {
+  position: static;
+  margin-left: 0.4rem;
+}
+
+.drafting .dr-month-entry--projected {
+  border-left: var(--dr-w-hair) dashed var(--dr-c-hair);
+  color: var(--dr-ink-4);
+  font-weight: 400;
+  cursor: default;
+}

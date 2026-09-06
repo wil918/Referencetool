@@ -708,6 +708,16 @@ DEFAULT_HORIZON_DAYS = 14
 # should produce a wrong-looking schedule, not a walk through 36,000 days.
 MAX_HORIZON_DAYS = 365
 
+# How far ahead provisional recurrence occurrences are projected onto the
+# calendar (see _recurrence_ghosts). A rolling month -- far enough to read a
+# cadence off the sheet, near enough that "real work will shift these" is
+# still obviously true. These ghosts are NEVER persisted and NEVER counted
+# toward capacity, load or the at-risk list: they are a forecast drawn on top
+# of the finished plan and recomputed on every read. The real outstanding
+# instance is scheduled normally as its own task; ghosts begin one interval
+# past it.
+RECURRENCE_PROJECTION_DAYS = 30
+
 # What an unestimated or unrated task is worth. Mid-scale for the 1-5 ratings,
 # an hour for a duration -- deliberately unremarkable values, since the
 # estimator (session 8) is what will fill these in properly.
@@ -944,6 +954,7 @@ def plan(now=None, finishing_buffer_minutes=None):
                 queue.append(new_date)
 
     blocks = _blocks(placements, travel, breaks, chain_blocks)
+    ghosts = _recurrence_ghosts(anchor, days, placements, travel, breaks)
 
     slot_days = [d for d in days if d["granularity"] == "slot"]
     return {
@@ -953,6 +964,9 @@ def plan(now=None, finishing_buffer_minutes=None):
         "slot_detail_until": slot_days[-1]["date"] if slot_days else today.isoformat(),
         "finishing_buffer_minutes": buffer_minutes,
         "blocks": blocks,
+        # Provisional future occurrences of every active recurrence rule --
+        # drawn, never stored, never counted (see RECURRENCE_PROJECTION_DAYS).
+        "recurrence_ghosts": ghosts,
         "at_risk": at_risk,
         "at_risk_by_deliverable": _at_risk_by_deliverable(at_risk, tasks, deliverables),
         # Surfaced alongside at-risk rather than folded into it: a chronic
@@ -2380,6 +2394,171 @@ def _blocks(placements, travel, breaks, chain_blocks):
         })
     rows.sort(key=lambda b: (b["start"], b["kind"], b["task_id"] or ""))
     return rows
+
+
+# --- Recurrence ghosts: the forecast overlay ----------------------------------
+#
+# A recurrence rule only ever has one real outstanding task at a time (see the
+# recurrence section) -- so the calendar, left alone, shows a weekly chore
+# exactly once and the month past it looks empty. These functions project the
+# rule forward a rolling month and hand back block-shaped rows the frontend
+# draws faintly. They touch nothing: not the walk, not the at-risk list, not
+# the DB. Every replan recomputes them from the current instance + the rule,
+# so as real work lands and the real instance moves, the whole ghost trail
+# moves with it.
+
+
+def _cut_span(span_start, span_end, occupied):
+    """`[span_start, span_end]` with every `occupied` (start, end) removed,
+    as a list of leftover sub-intervals in order."""
+    segments = [(span_start, span_end)]
+    for occ_start, occ_end in sorted(occupied):
+        nxt = []
+        for seg_start, seg_end in segments:
+            if occ_end <= seg_start or occ_start >= seg_end:
+                nxt.append((seg_start, seg_end))
+                continue
+            if occ_start > seg_start:
+                nxt.append((seg_start, occ_start))
+            if occ_end < seg_end:
+                nxt.append((occ_end, seg_end))
+        segments = nxt
+    return segments
+
+
+def _first_ghost_gap(day, occupied, minutes, preferred_time):
+    """The first (start, end) inside `day`'s free working intervals, minus
+    what the walk has already placed there, big enough to hold `minutes` --
+    first fit, same as the real walk. `preferred_time` wins when that exact
+    slot happens to be clear."""
+    need = timedelta(minutes=minutes)
+    free = []
+    for span_start, span_end in day["intervals"]:
+        free.extend(_cut_span(span_start, span_end, occupied))
+    free.sort()
+
+    if preferred_time:
+        try:
+            want = datetime.fromisoformat(f"{day['date']}T{preferred_time}:00")
+        except ValueError:
+            want = None
+        if want is not None:
+            for seg_start, seg_end in free:
+                if seg_start <= want and want + need <= seg_end:
+                    return (want, want + need)
+
+    for seg_start, seg_end in free:
+        if seg_end - seg_start >= need:
+            return (seg_start, seg_start + need)
+    return None
+
+
+def _recurrence_anchor(rule, instances, placements):
+    """The date the first ghost is measured from, and the task it stands for.
+
+    The live instance if there is one -- placed where the walk put it, or its
+    ideal date if the walk couldn't fit it -- otherwise the last completion.
+    A rule with no instance at all (no task ever attached) projects nothing,
+    the same case generate_recurring_tasks leaves alone.
+    """
+    live = [t for t in instances if t["status"] in SCHEDULABLE_STATUSES]
+    if live:
+        task = live[0]
+        placement = placements.get(task["id"])
+        if placement:
+            return date.fromisoformat(placement["start"][:10]), task
+        moment = _parse_moment(task.get("deadline"), end_of_day=True)
+        if moment:
+            return moment.date() - timedelta(days=rule["window_days"]), task
+        return None, task
+
+    completed = [
+        (db.get_task_actual(t["id"]), t) for t in instances if t["status"] == "done"
+    ]
+    completed = [(a, t) for a, t in completed if a and a.get("completed_at")]
+    if not completed:
+        return None, None
+    actual, task = max(completed, key=lambda pair: pair[0]["completed_at"])
+    return _parse_moment(actual["completed_at"]).date(), task
+
+
+def _ghost_row(rule, template, start, end, granularity, minutes):
+    return {
+        "id": _block_id(f"ghost:{rule['id']}", start, end, kind="recurrence"),
+        "task_id": template["id"],
+        "commitment_id": None,
+        "rule_id": rule["id"],
+        "start": start,
+        "end": end,
+        "kind": "recurrence",
+        "is_locked": False,
+        "provisional": True,
+        "granularity": granularity,
+        "minutes": minutes,
+        "location_id": template.get("required_location_id"),
+        "interval_days": rule["interval_days"],
+    }
+
+
+def _recurrence_ghosts(anchor, days, placements, travel, breaks):
+    today = anchor.date()
+    horizon = today + timedelta(days=RECURRENCE_PROJECTION_DAYS)
+    days_by_date = {d["date"]: d for d in days}
+    slot_dates = {d["date"] for d in days if d["granularity"] == "slot"}
+
+    # Everything already occupying a slot-precision day: the walk's real task
+    # placements, their travel, and its breaks. A ghost fills what's left of
+    # the working band around these -- it never moves any of them.
+    busy = {}
+    for placement in placements.values():
+        if placement["granularity"] != "slot":
+            continue
+        busy.setdefault(placement["start"][:10], []).append(
+            (datetime.fromisoformat(placement["start"]),
+             datetime.fromisoformat(placement["end"]))
+        )
+    for leg in travel:
+        if leg.get("granularity") == "slot":
+            busy.setdefault(leg["date"], []).append((leg["start"], leg["end"]))
+    for br in breaks:
+        if br.get("granularity") == "slot":
+            busy.setdefault(br["date"], []).append((br["start"], br["finish"]))
+
+    ghosts = []
+    for rule in db.list_recurrence_rules(active_only=True):
+        instances = db.list_tasks_for_recurrence(rule["id"])
+        start_date, template = _recurrence_anchor(rule, instances, placements)
+        if start_date is None:
+            continue
+        minutes = _est_minutes(template)
+        interval = timedelta(days=rule["interval_days"])
+        occ = start_date + interval
+        guard = 0
+        while occ <= horizon and guard < 400:
+            guard += 1
+            occ_str = occ.isoformat()
+            if occ > today:
+                day = days_by_date.get(occ_str)
+                placed = None
+                if day is not None and occ_str in slot_dates:
+                    placed = _first_ghost_gap(
+                        day, busy.get(occ_str, []), minutes, rule.get("preferred_time")
+                    )
+                if placed:
+                    start, end = placed
+                    busy.setdefault(occ_str, []).append((start, end))
+                    ghosts.append(_ghost_row(
+                        rule, template, start.isoformat(), end.isoformat(), "slot", minutes
+                    ))
+                else:
+                    # Past the slot-detail window (or no room in it) a ghost
+                    # claims a date only -- the honest shape for far-out work,
+                    # exactly as the real walk degrades.
+                    ghosts.append(_ghost_row(rule, template, occ_str, occ_str, "day", minutes))
+            occ += interval
+
+    ghosts.sort(key=lambda g: (g["start"], g["rule_id"]))
+    return ghosts
 
 
 def _block_id(task_id, start, end, kind="task"):
