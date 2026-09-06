@@ -364,6 +364,14 @@ CAPTURE_PENDING_STATUSES = (CAPTURE_QUEUED, CAPTURE_PROCESSING)
 # brief formats (the source a deliverable's requirements were extracted from)
 # change from year to year and course to course; forcing that into columns
 # would mean a migration every time a new brief shape shows up.
+# brief_id / source_key are provenance: which imported brief created this row,
+# and a stable identifier for the thing in that brief it came from. Both NULL
+# means hand-made -- the common case, and it must keep behaving exactly as a
+# hand-made row always has. source_key is derived from the brief's own words
+# (the part number / printed heading), never from the model-written title,
+# which can be rephrased between runs; that stability is what lets a re-import
+# of a revised brief recognise this as the same deliverable rather than a new
+# one. See briefs.assign_source_keys.
 DELIVERABLES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS deliverables (
     id TEXT PRIMARY KEY,
@@ -373,7 +381,9 @@ CREATE TABLE IF NOT EXISTS deliverables (
     due_at TEXT,
     weighting REAL,
     spec TEXT,
-    position INTEGER NOT NULL DEFAULT 0
+    position INTEGER NOT NULL DEFAULT 0,
+    brief_id TEXT,
+    source_key TEXT
 );
 """
 
@@ -405,6 +415,12 @@ CREATE TABLE IF NOT EXISTS deliverables (
 # away-from-home work left that day (see scheduling._domestic_tiers). A flag
 # rather than a separate table because nothing else about a domestic task
 # differs -- estimate, actuals and dependencies all apply the same way.
+#
+# brief_id / source_key are provenance, same meaning as on deliverables: the
+# imported brief that created this task and a stable key for the brief item it
+# came from. Both NULL for a hand-made task. A brief-created task that has since
+# been worked (done, partial, or carrying a task_actuals row) is no longer a
+# mere import artefact and a brief reset keeps it -- see reset_brief.
 TASKS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
@@ -428,7 +444,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     est_minutes_source TEXT,
     importance_source TEXT,
     difficulty_source TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    brief_id TEXT,
+    source_key TEXT
 );
 """
 
@@ -950,6 +968,10 @@ def init_db():
             "ALTER TABLE locations ADD COLUMN is_online INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE schedule_settings ADD COLUMN default_location_umbrella_id TEXT",
             "ALTER TABLE schedule_settings ADD COLUMN cohort_group TEXT",
+            "ALTER TABLE deliverables ADD COLUMN brief_id TEXT",
+            "ALTER TABLE deliverables ADD COLUMN source_key TEXT",
+            "ALTER TABLE tasks ADD COLUMN brief_id TEXT",
+            "ALTER TABLE tasks ADD COLUMN source_key TEXT",
         ):
             try:
                 conn.execute(ddl)
@@ -2434,14 +2456,16 @@ def _canvas_edge_to_dict(row):
 
 
 def create_deliverable(deliverable_id, project_id, title, description=None, due_at=None,
-                       weighting=None, spec=None, position=None):
+                       weighting=None, spec=None, position=None,
+                       brief_id=None, source_key=None):
     with get_conn() as conn:
         if position is None:
             position = _next_position(conn, "deliverables", project_id)
         conn.execute(
             """INSERT INTO deliverables
-                   (id, project_id, title, description, due_at, weighting, spec, position)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (id, project_id, title, description, due_at, weighting, spec, position,
+                    brief_id, source_key)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 deliverable_id,
                 project_id,
@@ -2451,6 +2475,8 @@ def create_deliverable(deliverable_id, project_id, title, description=None, due_
                 weighting,
                 json.dumps(spec) if spec is not None else None,
                 position,
+                brief_id,
+                source_key,
             ),
         )
 
@@ -2517,6 +2543,29 @@ def delete_deliverable(deliverable_id):
         conn.execute("DELETE FROM deliverables WHERE id = ?", (deliverable_id,))
 
 
+def list_brief_deliverables(brief_id):
+    """Every deliverable a given brief created, in grid order."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM deliverables WHERE brief_id = ? ORDER BY position, due_at",
+            (brief_id,),
+        ).fetchall()
+        return [_deliverable_to_dict(r) for r in rows]
+
+
+def find_brief_deliverable(brief_id, source_key):
+    """The one deliverable this brief created for `source_key`, or None. The
+    pair is what a re-import matches an extracted item against."""
+    if not (brief_id and source_key):
+        return None
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM deliverables WHERE brief_id = ? AND source_key = ?",
+            (brief_id, source_key),
+        ).fetchone()
+        return _deliverable_to_dict(row) if row else None
+
+
 def _deliverable_to_dict(row):
     d = dict(row)
     d["spec"] = json.loads(d["spec"]) if d["spec"] else None
@@ -2531,7 +2580,8 @@ def create_task(task_id, title, project_id=None, deliverable_id=None, descriptio
                 support_level="independent", est_minutes=None, importance=None,
                 difficulty=None, is_finishing=False, is_domestic=False, status="pending",
                 recurrence_id=None, continues_task_id=None,
-                est_minutes_source=None, importance_source=None, difficulty_source=None):
+                est_minutes_source=None, importance_source=None, difficulty_source=None,
+                brief_id=None, source_key=None):
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO tasks
@@ -2539,8 +2589,8 @@ def create_task(task_id, title, project_id=None, deliverable_id=None, descriptio
                     deadline, required_location_id, support_level, est_minutes, importance,
                     difficulty, is_finishing, is_domestic, status, recurrence_id,
                     continues_task_id, slip_count, est_minutes_source, importance_source,
-                    difficulty_source, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
+                    difficulty_source, created_at, brief_id, source_key)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)""",
             (
                 task_id,
                 project_id,
@@ -2563,6 +2613,8 @@ def create_task(task_id, title, project_id=None, deliverable_id=None, descriptio
                 importance_source,
                 difficulty_source,
                 datetime.now(timezone.utc).isoformat(),
+                brief_id,
+                source_key,
             ),
         )
 
@@ -2654,6 +2706,19 @@ def update_task(task_id, **fields):
         conn.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?", [*params, task_id])
 
 
+def _delete_task_rows(conn, task_id):
+    """The row-level teardown of a task, on a caller-supplied connection so it
+    can run inside a larger transaction (see reset_brief)."""
+    conn.execute(
+        "DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_task_id = ?",
+        (task_id, task_id),
+    )
+    conn.execute("DELETE FROM task_actuals WHERE task_id = ?", (task_id,))
+    conn.execute("DELETE FROM task_resources WHERE task_id = ?", (task_id,))
+    conn.execute("DELETE FROM scheduled_blocks WHERE task_id = ?", (task_id,))
+    conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+
+
 def delete_task(task_id):
     """Delete a task and everything that only exists because of it: its
     dependency edges (both directions -- it may depend on others and have
@@ -2662,14 +2727,30 @@ def delete_task(task_id):
     Mirrors delete_reference's cleanup of everything pointing at a deleted
     reference."""
     with get_conn() as conn:
-        conn.execute(
-            "DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_task_id = ?",
-            (task_id, task_id),
-        )
-        conn.execute("DELETE FROM task_actuals WHERE task_id = ?", (task_id,))
-        conn.execute("DELETE FROM task_resources WHERE task_id = ?", (task_id,))
-        conn.execute("DELETE FROM scheduled_blocks WHERE task_id = ?", (task_id,))
-        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        _delete_task_rows(conn, task_id)
+
+
+def list_brief_tasks(brief_id):
+    """Every task a given brief created (skeleton tasks and mandatory-activity
+    tasks alike), newest first."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tasks WHERE brief_id = ? ORDER BY created_at DESC", (brief_id,)
+        ).fetchall()
+        return [_task_to_dict(r) for r in rows]
+
+
+def find_brief_task_by_source(brief_id, source_key):
+    """The task this brief created for `source_key`, or None -- how a re-import
+    matches a mandatory activity against what it produced last time."""
+    if not (brief_id and source_key):
+        return None
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM tasks WHERE brief_id = ? AND source_key = ?",
+            (brief_id, source_key),
+        ).fetchone()
+        return _task_to_dict(row) if row else None
 
 
 def _task_to_dict(row):
@@ -3746,9 +3827,77 @@ def update_brief(brief_id, **fields):
         )
 
 
+def touch_brief(brief_id):
+    """Bump imported_at to now -- a reissued brief was imported again today,
+    and the Deliverables banner shows that date."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE briefs SET imported_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), brief_id),
+        )
+
+
 def delete_brief(brief_id):
     with get_conn() as conn:
         conn.execute("DELETE FROM briefs WHERE id = ?", (brief_id,))
+
+
+# A brief-created task counts as "worked" -- no longer just an import artefact
+# -- once it has been finished, partly finished, or has a recorded actual. Its
+# actuals are also the estimator's training data (estimation.py), which is the
+# expensive thing to lose, so this errs towards keeping.
+_WORKED_TASK_STATUSES = ("done", "partial")
+
+
+def reset_brief(brief_id, purge=False):
+    """Undo what a brief's /apply created: its deliverables and tasks.
+
+    Default (purge=False) PRESERVES WORK. A brief-created task that has been
+    worked (see _WORKED_TASK_STATUSES, or any task_actuals row) is kept; only
+    untouched ones are deleted. Deliverables are always removed -- they carry
+    no work record -- and a kept task whose deliverable goes has its
+    deliverable_id nulled, the same cascade delete_deliverable defines.
+
+    purge=True removes every brief-created deliverable and task regardless.
+    That is the destructive choice and callers must ask for it explicitly.
+
+    Returns {"deleted": {table: n, ...}, "kept_tasks": n, "purged": bool},
+    counts per table like reset_schedule. Does not touch the brief row or its
+    PDF -- delete_brief and the route own that. Nor Chroma: the task-vector
+    collection is rebuilt wholesale from the tasks table on the next estimate
+    (estimation.index_task_collection), so a deleted task falls out on its own.
+    """
+    deleted = {"tasks": 0, "deliverables": 0}
+    kept_tasks = 0
+    with get_conn() as conn:
+        task_rows = conn.execute(
+            "SELECT id, status FROM tasks WHERE brief_id = ?", (brief_id,)
+        ).fetchall()
+        deliverable_ids = [
+            r["id"]
+            for r in conn.execute(
+                "SELECT id FROM deliverables WHERE brief_id = ?", (brief_id,)
+            ).fetchall()
+        ]
+
+        for t in task_rows:
+            worked = t["status"] in _WORKED_TASK_STATUSES or conn.execute(
+                "SELECT 1 FROM task_actuals WHERE task_id = ?", (t["id"],)
+            ).fetchone() is not None
+            if worked and not purge:
+                kept_tasks += 1
+                continue
+            _delete_task_rows(conn, t["id"])
+            deleted["tasks"] += 1
+
+        for did in deliverable_ids:
+            conn.execute(
+                "UPDATE tasks SET deliverable_id = NULL WHERE deliverable_id = ?", (did,)
+            )
+            conn.execute("DELETE FROM deliverables WHERE id = ?", (did,))
+            deleted["deliverables"] += 1
+
+    return {"deleted": deleted, "kept_tasks": kept_tasks, "purged": purge}
 
 
 def _brief_to_dict(row):

@@ -1855,27 +1855,51 @@ def api_import_brief(project_id):
     if not (upload.filename or "").lower().endswith(".pdf"):
         return jsonify({"error": "a brief must be a PDF"}), 400
 
-    brief_id = str(uuid.uuid4())
+    # A project has one assignment brief, and re-importing is how a reissued
+    # brief is brought in. Reuse the existing row (same brief_id, same PDF path)
+    # rather than inserting a second: the re-import diff in the Deliverables tab
+    # matches extracted items against rows by (brief_id, source_key), so the id
+    # has to stay stable across reissues for that to work. A fresh import for a
+    # project with no brief yet creates the row.
+    existing = db.list_briefs(project_id)
+    prior = existing[0] if existing else None
+    brief_id = prior["id"] if prior else str(uuid.uuid4())
     pdf_path = _brief_pdf_path(brief_id)
+    prior_pdf = pdf_path.read_bytes() if pdf_path.exists() else None
     upload.save(pdf_path)
 
     try:
         text = briefs.extract_text(pdf_path)
         if not text:
-            pdf_path.unlink(missing_ok=True)
+            _restore_or_remove(pdf_path, prior_pdf)
             return jsonify({"error": "couldn't read any text out of that PDF"}), 400
-        extraction = briefs.analyse(text)
+        extraction = briefs.assign_source_keys(briefs.analyse(text))
     except Exception as e:
-        pdf_path.unlink(missing_ok=True)
+        _restore_or_remove(pdf_path, prior_pdf)
         return jsonify({"error": f"couldn't read the brief: {e}"}), 500
 
-    db.create_brief(
-        brief_id,
-        project_id,
-        filepath=pdf_path.name,
-        extracted={"extraction": extraction, "applied": None},
-    )
+    if prior:
+        # Keep the prior `applied` envelope -- it is the record the re-import
+        # diffs against and the review sheet flags "new since last import" from.
+        applied = (prior["extracted"] or {}).get("applied")
+        db.update_brief(brief_id, extracted={"extraction": extraction, "applied": applied})
+        db.touch_brief(brief_id)
+    else:
+        db.create_brief(
+            brief_id,
+            project_id,
+            filepath=pdf_path.name,
+            extracted={"extraction": extraction, "applied": None},
+        )
     return jsonify(db.get_brief(brief_id))
+
+
+def _restore_or_remove(path, prior_bytes):
+    """A failed re-import must not leave the project without its previous PDF."""
+    if prior_bytes is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.write_bytes(prior_bytes)
 
 
 @app.get("/api/projects/<project_id>/briefs")
@@ -1904,14 +1928,53 @@ def api_brief_file(brief_id):
 
 @app.delete("/api/briefs/<brief_id>")
 def api_delete_brief(brief_id):
+    """Delete the brief and undo what it created.
+
+    `?purge=1` also removes brief-created tasks that have been worked; the
+    default keeps those (see db.reset_brief) -- a completed task carrying real
+    actuals is a record of what you did, not just an import artefact, and its
+    actuals are the estimator's training data. A kept task whose deliverable
+    goes has its deliverable_id nulled, matching delete_deliverable's cascade.
+    """
     if not db.get_brief(brief_id):
         abort(404)
-    # The deliverables, tasks and commitments a prior /apply created are left
-    # alone -- they outlive their brief the same way a deliverable outlives the
-    # brief it was built from (see delete_deliverable's own note).
+    purge = request.args.get("purge") in ("1", "true", "yes")
+    result = db.reset_brief(brief_id, purge=purge)
     db.delete_brief(brief_id)
     _brief_pdf_path(brief_id).unlink(missing_ok=True)
-    return jsonify({"ok": True, "id": brief_id})
+    return jsonify({"ok": True, "id": brief_id, **result})
+
+
+@app.post("/api/briefs/<brief_id>/reset")
+def api_reset_brief(brief_id):
+    """Undo what this brief created without deleting the brief itself -- the
+    scoped, per-brief cousin of POST /api/schedule/reset.
+
+    Body: {"purge": bool}. purge false (default) preserves worked tasks and
+    clears only untouched import artefacts, and the response says how many were
+    kept. purge true removes everything the brief created. Returns counts per
+    table like the schedule reset does.
+    """
+    if not db.get_brief(brief_id):
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    result = db.reset_brief(brief_id, purge=bool(body.get("purge")))
+    return jsonify({"ok": True, "id": brief_id, **result})
+
+
+@app.get("/api/briefs/<brief_id>/diff")
+def api_brief_diff(brief_id):
+    """The four-group comparison of the brief's current extraction against the
+    deliverable rows it has already created: unchanged / changed / new / gone.
+    The review sheet renders this so a reissued brief costs only the edits that
+    actually moved, never the task breakdown under an unchanged deliverable.
+    """
+    brief = db.get_brief(brief_id)
+    if not brief:
+        abort(404)
+    extraction = (brief["extracted"] or {}).get("extraction") or {}
+    existing = db.list_brief_deliverables(brief_id)
+    return jsonify(briefs.diff_against(extraction, existing))
 
 
 def _date_only(value):
@@ -1928,17 +1991,25 @@ def api_apply_brief(brief_id):
 
         {
           "deliverables": [
-            {"title", "due_at", "weighting", "description", "spec",
+            {"source_key", "title", "due_at", "weighting", "description", "spec",
              "tasks": [{"title", "description", "est_minutes"}]}
           ],
+          "remove": ["<source_key>", ...],   # "gone" deliverables the user OK'd
           "key_dates": [
             {"label", "kind", "start", "end"},           # -> a commitment
             {"label", "attach_to": <deliverables index>}  # -> sets that due_at
           ],
           "mandatory_activities": [
-            {"title", "description", "location_bound", "deliverable_index"}
+            {"source_key", "title", "description", "location_bound", "deliverable_index"}
           ]
         }
+
+    Re-import is a diff, not a replace. A deliverable (or activity) whose
+    (brief_id, source_key) already names a row UPDATES that row -- and, for a
+    deliverable, leaves its task skeleton untouched, because that breakdown is
+    the user's work now. Only a genuinely new item inserts, with a fresh
+    skeleton. `remove` deletes the rows the user accepted as gone; their tasks
+    survive with deliverable_id nulled (see db.delete_deliverable).
     """
     brief = db.get_brief(brief_id)
     if not brief:
@@ -1947,28 +2018,47 @@ def api_apply_brief(brief_id):
     project_id = brief["project_id"]
 
     created = {"deliverables": [], "tasks": [], "commitments": []}
+    updated = {"deliverables": [], "tasks": []}
+    removed = {"deliverables": []}
 
-    # Deliverables first -- key dates and activities can point back at them.
+    # Removals first, so a source_key freed here could in principle be re-added
+    # below as new (it won't be, in practice -- the sheet never offers both).
+    for sk in body.get("remove") or []:
+        row = db.find_brief_deliverable(brief_id, sk)
+        if row:
+            db.delete_deliverable(row["id"])  # its tasks keep, deliverable_id nulled
+            removed["deliverables"].append({"id": row["id"], "source_key": sk})
+
+    # Deliverables -- key dates and activities can point back at them by position
+    # in the submitted list, so every entry (matched or new) gets a slot.
     deliverable_ids = []
     for d in body.get("deliverables") or []:
         title = (d.get("title") or "").strip()
         if not title:
             deliverable_ids.append(None)
             continue
-        did = str(uuid.uuid4())
-        db.create_deliverable(
-            did,
-            project_id,
-            title,
+        source_key = (d.get("source_key") or "").strip() or None
+        fields = dict(
+            title=title,
             description=(d.get("description") or None),
             due_at=(d.get("due_at") or None),
             weighting=d.get("weighting"),
             spec=d.get("spec") or None,
         )
+        existing = db.find_brief_deliverable(brief_id, source_key)
+        if existing:
+            db.update_deliverable(existing["id"], **fields)
+            did = existing["id"]
+            updated["deliverables"].append({"id": did, "title": title})
+            deliverable_ids.append(did)
+            continue  # a matched deliverable keeps its existing task skeleton
+
+        did = str(uuid.uuid4())
+        db.create_deliverable(did, project_id, brief_id=brief_id, source_key=source_key, **fields)
         deliverable_ids.append(did)
         created["deliverables"].append({"id": did, "title": title})
 
-        for t in d.get("tasks") or []:
+        for i, t in enumerate(d.get("tasks") or []):
             t_title = (t.get("title") or "").strip()
             if not t_title:
                 continue
@@ -1982,6 +2072,8 @@ def api_apply_brief(brief_id):
                 description=(t.get("description") or None),
                 est_minutes=est,
                 est_minutes_source="generated" if est else None,
+                brief_id=brief_id,
+                source_key=f"{source_key}#t{i}" if source_key else None,
             )
             created["tasks"].append({"id": tid, "title": t_title})
 
@@ -2005,6 +2097,7 @@ def api_apply_brief(brief_id):
 
     # Mandatory activities become project tasks. A location-bound one keeps a
     # note saying so but is left unbound -- app.py never invents a location.
+    # Re-import matches by (brief_id, source_key) exactly as deliverables do.
     for a in body.get("mandatory_activities") or []:
         title = (a.get("title") or "").strip()
         if not title:
@@ -2019,21 +2112,42 @@ def api_apply_brief(brief_id):
             if isinstance(idx, int) and 0 <= idx < len(deliverable_ids)
             else None
         )
+        source_key = (a.get("source_key") or "").strip() or None
+        existing = db.find_brief_task_by_source(brief_id, source_key)
+        if existing:
+            db.update_task(existing["id"], title=title, description=note or None,
+                           deliverable_id=did)
+            updated["tasks"].append({"id": existing["id"], "title": title})
+            continue
         tid = str(uuid.uuid4())
         db.create_task(
-            tid, title, project_id=project_id, deliverable_id=did, description=note or None
+            tid, title, project_id=project_id, deliverable_id=did, description=note or None,
+            brief_id=brief_id, source_key=source_key,
         )
         created["tasks"].append({"id": tid, "title": title})
 
+    # The applied envelope is what a later re-import diffs against and what the
+    # review sheet reads to flag "new since last import". deliverables/tasks
+    # here are the union of created and updated, so a re-applied item still
+    # counts as known.
     envelope = brief["extracted"] or {}
     envelope["applied"] = {
         "at": datetime.now().isoformat(timespec="seconds"),
-        **created,
+        "deliverables": created["deliverables"] + updated["deliverables"],
+        "tasks": created["tasks"] + updated["tasks"],
+        "commitments": created["commitments"],
+        "removed": removed["deliverables"],
         "discarded": body.get("discarded") or [],
     }
     db.update_brief(brief_id, extracted=envelope)
 
-    return jsonify({"ok": True, "created": created, "brief": db.get_brief(brief_id)})
+    return jsonify({
+        "ok": True,
+        "created": created,
+        "updated": updated,
+        "removed": removed,
+        "brief": db.get_brief(brief_id),
+    })
 
 
 # --- Schedule: locations -------------------------------------------------------
