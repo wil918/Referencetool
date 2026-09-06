@@ -1242,8 +1242,9 @@ export function createNodes({
 
     /** The current marquee/click selection, for concept analysis: the canvas
      *  is the picker, so this exposes exactly what is selected. Widget nodes
-     *  are included -- the caller (concept-panel.js) drops them, since a
-     *  colourspace or palette widget is a view of data, not an idea -- so this
+     *  are included with their `config` -- the caller (canvas-page.js) keeps
+     *  the ones that are the user writing (Notepad) or an earlier critique
+     *  (Analysis) and drops the ones that are only views of data -- so this
      *  stays a plain mirror of the selection, not a policy about it. Selection
      *  mechanics are untouched; this only reads `selectedNodeIds`. */
     selection() {
@@ -1255,6 +1256,7 @@ export function createNodes({
           kind: node.kind,
           reference_id: node.reference_id ?? null,
           content: node.content ?? null,
+          config: node.config ?? null,
         }));
     },
 

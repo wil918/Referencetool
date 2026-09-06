@@ -1004,9 +1004,11 @@ def api_concept_analysis(project_id):
     """Critique the project's concept against its brief, from a canvas selection.
 
     The canvas marquee is the picker: `reference_ids` are the selected
-    reference nodes and `notes` the selected text nodes' contents, passed as
-    distinct inputs (analyze.start_concept_analysis). Both empty is fine -- it
-    falls back to the project's whole reference set. Returns the same envelope
+    reference nodes, `notes` the selected plain text nodes' contents,
+    `note_html` the selected Notepad widgets' stored HTML, and
+    `prior_analysis_ids` any selected Analysis widgets (earlier critiques).
+    All empty is fine -- it falls back to the project's whole reference set
+    and every bit of writing on its canvas. Returns the same envelope
     /api/analyze does, so the follow-up /reply route is reused as-is.
     """
     _require_project(project_id)
@@ -1016,6 +1018,8 @@ def api_concept_analysis(project_id):
             project_id,
             reference_ids=body.get("reference_ids") or [],
             notes=body.get("notes") or [],
+            note_html=body.get("note_html") or [],
+            prior_analysis_ids=body.get("prior_analysis_ids") or [],
         )
     except ValueError as e:
         return jsonify({"error": str(e)}), 400

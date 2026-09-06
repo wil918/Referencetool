@@ -101,6 +101,99 @@ def test_empty_selection_falls_back_to_the_whole_project(client, archive, _stub_
     assert prompt.count("(image)") == 2
 
 
+def test_notepad_html_reaches_the_prompt_with_headings_kept(client, archive, _stub_claude):
+    pid = make_project(client)
+    add_reference(archive, client, pid, "swatch")
+
+    html = (
+        '<span style="font-size: 1.5rem; font-weight: 700;">Movement</span>'
+        '<span style="color: rgb(20,20,20);"> is the whole point of the drape.</span>'
+    )
+    resp = client.post(
+        f"/api/projects/{pid}/concept-analysis",
+        json={"note_html": [html]},
+    )
+    assert resp.status_code == 200
+
+    prompt = _stub_claude[0][0]["content"]
+    assert "## Movement" in prompt
+    assert "is the whole point of the drape." in prompt
+    # the style attributes did not come through
+    assert "rgb(20,20,20)" not in prompt
+    assert "font-size" not in prompt
+
+
+def test_text_nodes_and_notepads_are_both_the_thinking(client, archive, _stub_claude):
+    pid = make_project(client)
+    add_reference(archive, client, pid, "ref")
+
+    resp = client.post(
+        f"/api/projects/{pid}/concept-analysis",
+        json={
+            "reference_ids": [],
+            "notes": ["A plain text node."],
+            "note_html": ['<span style="font-weight: 700;">A notepad line.</span>'],
+        },
+    )
+    assert resp.status_code == 200
+    prompt = _stub_claude[0][0]["content"]
+    assert "A plain text node." in prompt
+    assert "A notepad line." in prompt
+
+
+def test_a_prior_analysis_widget_is_labelled_as_earlier_ai_output(client, archive, _stub_claude):
+    pid = make_project(client)
+    add_reference(archive, client, pid, "ref")
+    db.save_analysis(
+        "prev1",
+        pid,
+        ["r1"],
+        [
+            {"kind": "writeup", "text": "The silhouette is under-argued."},
+            {"kind": "question", "text": "Which reference is weakest?"},
+        ],
+    )
+
+    resp = client.post(
+        f"/api/projects/{pid}/concept-analysis",
+        json={"notes": ["My concept holds together."], "prior_analysis_ids": ["prev1"]},
+    )
+    assert resp.status_code == 200
+    prompt = _stub_claude[0][0]["content"]
+    assert "EARLIER AI CRITIQUE" in prompt
+    assert "The silhouette is under-argued." in prompt
+    # the student's own follow-up question from that transcript is not fed back
+    assert "Which reference is weakest?" not in prompt
+
+
+def test_empty_selection_also_picks_up_canvas_text(client, archive, _stub_claude):
+    pid = make_project(client)
+    add_reference(archive, client, pid, "one")
+
+    db.create_canvas_node("n-text", pid, "text", content="Loose thread about tension.")
+    db.create_canvas_node(
+        "n-pad",
+        pid,
+        "widget",
+        config={
+            "type": "notepad",
+            "widget": {"content": '<span style="font-size: 1.6rem;">Tension</span>'},
+        },
+    )
+    db.create_canvas_node(
+        "n-view",
+        pid,
+        "widget",
+        config={"type": "colourspace", "widget": {}},
+    )
+
+    resp = client.post(f"/api/projects/{pid}/concept-analysis", json={})
+    assert resp.status_code == 200
+    prompt = _stub_claude[0][0]["content"]
+    assert "Loose thread about tension." in prompt
+    assert "## Tension" in prompt
+
+
 def test_an_imported_brief_is_stated_in_the_prompt(client, archive, _stub_claude):
     pid = make_project(client)
     add_reference(archive, client, pid, "swatch")
