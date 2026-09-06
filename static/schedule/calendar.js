@@ -654,6 +654,15 @@ export function createCalendar(container, options = {}) {
     el.className = `dr-block dr-block--${kindClass}`;
     el.dataset.kind = kindClass;
 
+    // A timetabled session the import decided isn't the user's -- another
+    // teaching group's, or an optional event not being counted (see
+    // ics_import.py and commitments.capacity_override). Still drawn, because
+    // it IS on the timetable, but drawn as set-out rather than as an object:
+    // it reserves none of the user's time.
+    if (ev.type === "commitment" && ev.commitment.counts_for_capacity === false) {
+      el.classList.add("is-excluded");
+    }
+
     if (ev.type === "block" && ev.block.kind === "task" && atRiskTaskIds.has(ev.block.task_id)) {
       el.classList.add("dr-block--at-risk");
       const flag = document.createElement("span");

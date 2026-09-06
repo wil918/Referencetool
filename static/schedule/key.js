@@ -16,9 +16,11 @@
  * once per row.
  */
 
-/** entries: [term, value, { wide }] -- value null/undefined/"" drops the row.
- *  `wide` gives the value the full width under its term, for prose that would
- *  be unreadable right-aligned in a narrow column. */
+/** entries: [term, value, { wide, note }] -- value null/undefined/"" drops the
+ *  row. `wide` gives the value the full width under its term, for prose that
+ *  would be unreadable right-aligned in a narrow column. `note` is a short
+ *  provenance aside printed after the value ("from your group", "classified by
+ *  Claude") -- for a field the deterministic parser didn't produce. */
 export function makeKey(entries) {
   const key = document.createElement("div");
   key.className = "dr-key";
@@ -54,6 +56,13 @@ export function makeKey(entries) {
       // live too, not only its readable ones.
       if (value instanceof Node) valueEl.appendChild(value);
       else valueEl.textContent = value;
+
+      if (opts?.note) {
+        const note = document.createElement("span");
+        note.className = "dr-key-note";
+        note.textContent = opts.note;
+        valueEl.appendChild(note);
+      }
 
       key.appendChild(row);
     });

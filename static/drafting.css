@@ -1407,6 +1407,18 @@
   cursor: pointer;
 }
 
+/* On the timetable, but not the user's to attend (another teaching group's, or
+   an optional event left uncounted -- see calendar.js). Drawn as set-out: a
+   dashed hairline all round, no weighted spine, ink dropped back. It occupies
+   its slot on the page without claiming any of the user's time. */
+.dr-block--timetabled.is-excluded {
+  border: 1px dashed var(--dr-c-hair);
+  padding-left: 6px;
+  color: var(--dr-ink-3);
+  opacity: 0.85;
+}
+.dr-block--timetabled.is-excluded:hover { border-color: var(--dr-c-line); }
+
 /* Prep: not an object, a preparation. Corner brackets only, no closed
    outline -- the drawing says "this region" without drawing a thing in it. */
 .dr-block--prep {
@@ -1848,6 +1860,18 @@
   grid-column: 2 / -1;
   text-align: left;
   color: var(--dr-ink-2);
+}
+
+/* A provenance aside on a value the deterministic parser didn't produce --
+   "from your group", "classified by Claude" (see key.js, commitment-panel.js).
+   An annotation, so it takes the annotation ink and sits a size down. */
+.dr-key-note {
+  display: block;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: 0.04em;
+  color: var(--dr-ink-4);
+  text-transform: none;
 }
 
 /* ==========================================================================

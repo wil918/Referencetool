@@ -1,15 +1,27 @@
-// The read-only detail panel a commitment block opens into: everything the
-// sparse calendar block deliberately leaves out of the block itself (see
-// calendar.js's labelForBlock/subtitleForCommitment) -- module code,
-// lecturer, details, site, and whatever the ICS parser couldn't confidently
-// classify (see ics_import.py's meta and COMMITMENTS_SCHEMA). Same modal-box
-// shell as task-panel.js; nothing here is editable, so there's no onChange
-// to report back and no fetch of its own -- calendar.js already has the full
-// commitment and the locations list in memory.
+// The detail panel a commitment block opens into: everything the sparse
+// calendar block deliberately leaves out of the block itself (see calendar.js's
+// labelForBlock/subtitleForCommitment) -- module code, lecturer, details, site,
+// and whatever the ICS parser couldn't confidently classify (see ics_import.py's
+// meta and COMMITMENTS_SCHEMA). Same modal-box shell as task-panel.js.
 //
-// Exports openCommitmentPanel(commitment, locationsById).
+// Mostly read-only -- calendar.js already has the full commitment and the
+// locations list in memory -- with one editable thing: whether a session the
+// import decided isn't the user's (a different teaching group's, or an optional
+// event) should count toward their schedule anyway. That writes
+// commitments.capacity_override and reports back through onChange so the
+// calendar reloads.
+//
+// Exports openCommitmentPanel(commitment, locationsById, { onChange }).
 
 import { makeKey } from "./key.js";
+
+// meta.field_sources names any field the deterministic parser did NOT produce.
+const SOURCE_NOTE = { group: "from your group", model: "classified by Claude" };
+
+const EXCLUSION_TEXT = {
+  "not-your-group": "This session is listed for another teaching group, so it's left out of your schedule.",
+  "optional-event": "This is an optional event, so it isn't counted in your schedule by default.",
+};
 
 let overlay = null;
 let box = null;
@@ -77,12 +89,53 @@ function makeRawSection(meta) {
   return wrap;
 }
 
-export function openCommitmentPanel(commitment, locationsById = {}) {
+/* A session the import classified as not-the-user's shows why, and offers to
+ * override that -- forcing it in (capacity_override = 1) or, once forced,
+ * dropping back to the classification (capacity_override = null). */
+function makeCapacitySection(commitment, onChange) {
+  const reason = commitment.capacity_exclusion_reason;
+  if (!reason) return null;
+
+  const wrap = document.createElement("div");
+  wrap.className = "commitment-panel-capacity";
+
+  const forcedIn = commitment.counts_for_capacity; // true only if overridden in
+  const p = document.createElement("p");
+  p.className = "muted";
+  p.textContent = forcedIn
+    ? "You've chosen to count this toward your schedule."
+    : (EXCLUSION_TEXT[reason] || "This session isn't counted in your schedule.");
+  wrap.appendChild(p);
+
+  const btn = document.createElement("button");
+  btn.className = "btn";
+  btn.textContent = forcedIn ? "Leave it out again" : "Count it in my schedule";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    const res = await fetch(`/api/commitments/${commitment.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ capacity_override: forcedIn ? null : 1 }),
+    });
+    if (res.ok) {
+      close();
+      onChange?.();
+    } else {
+      btn.disabled = false;
+    }
+  });
+  wrap.appendChild(btn);
+  return wrap;
+}
+
+export function openCommitmentPanel(commitment, locationsById = {}, { onChange } = {}) {
   ensureModal();
   overlay.hidden = false;
   box.innerHTML = "";
 
   const meta = commitment.meta || {};
+  const sources = meta.field_sources || {};
+  const noteFor = (key) => SOURCE_NOTE[sources[key]];
   const location = commitment.location_id ? locationsById[commitment.location_id] : null;
 
   const header = document.createElement("div");
@@ -107,13 +160,16 @@ export function openCommitmentPanel(commitment, locationsById = {}) {
   card.className = "task-card commitment-panel-card";
   card.appendChild(makeKey([
     ["Time", formatTimeRange(commitment.start, commitment.end)],
-    ["Module code", meta.module_code],
+    ["Module code", meta.module_code, { note: noteFor("module_code") }],
     ["Lecturer", (meta.lecturer || []).join(", ")],
-    ["Site", meta.site],
-    ["Room", meta.room],
+    ["Site", meta.site, { note: noteFor("site") }],
+    ["Room", meta.room, { note: noteFor("room") }],
     ["Location", location ? location.name : null],
-    ["Details", meta.details, { wide: true }],
+    ["Details", meta.details, { wide: true, note: noteFor("details") }],
   ]));
+
+  const capacity = makeCapacitySection(commitment, onChange);
+  if (capacity) card.appendChild(capacity);
 
   const raw = makeRawSection(meta);
   if (raw) card.appendChild(raw);
