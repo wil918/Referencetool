@@ -2434,10 +2434,19 @@ def api_get_schedule():
     for block in blocks:
         block["granularity"] = scheduling.block_granularity(block)
 
+    # Provisional future occurrences of the recurrence rules, narrowed to the
+    # same range. Computed by plan(), never stored -- see
+    # scheduling._recurrence_ghosts.
+    ghosts = [
+        g for g in result["recurrence_ghosts"]
+        if range_start <= g["start"][:10] <= range_end
+    ]
+
     return jsonify({
         "start": range_start,
         "end": range_end,
         "blocks": blocks,
+        "recurrence_ghosts": ghosts,
         "at_risk": result["at_risk"],
         "at_risk_by_deliverable": result["at_risk_by_deliverable"],
         "chronically_slipping": result["chronically_slipping"],

@@ -238,6 +238,22 @@ export function createMonth(container, options = {}) {
       }
     });
 
+    // Provisional recurrence occurrences, grouped by day. A month is exactly
+    // the altitude where "this repeats every few days" should be visible, so
+    // they are drawn -- faintly, and never counted into loadByDate above:
+    // they are a forecast, not booked work (see scheduling._recurrence_ghosts).
+    const ghostsByDate = {};
+    (data.recurrenceGhosts || []).forEach((g) => {
+      const d = g.start.slice(0, 10);
+      const rule = data.recurrenceRulesById?.[g.rule_id];
+      (ghostsByDate[d] = ghostsByDate[d] || []).push({
+        title: data.tasksById?.[g.task_id]?.title || "Recurring task",
+        cadence: rule
+          ? (rule.interval_days === 1 ? "daily" : `~${rule.interval_days}d`)
+          : null,
+      });
+    });
+
     // The key under the sheet: every deliverable with a deadline in view.
     deliverableIndex = new Map();
     dates.forEach((dateStr) => {
@@ -250,7 +266,7 @@ export function createMonth(container, options = {}) {
 
     return {
       inMonth, loadByDate, atRiskDates, deadlinesByDate, bufferByDate,
-      commitmentsByDate,
+      commitmentsByDate, ghostsByDate,
       dayCapacity: (dateStr) => {
         const band = effectiveBandWindow(dateStr, data.workingHours || [], data.workingOverrides || []);
         if (!band) return FALLBACK_DAY_MINUTES;
@@ -367,8 +383,26 @@ export function createMonth(container, options = {}) {
       cell.appendChild(line);
     }
 
+    // Projected recurrence occurrences: at most one faint line per cell, the
+    // rest folded into the +N tally. The point is that the day is marked at
+    // all -- a repeat you can see coming.
+    const ghosts = model.ghostsByDate[dateStr] || [];
+    if (ghosts.length && !outside) {
+      const line = document.createElement("span");
+      line.className = "dr-month-entry dr-month-entry--projected";
+      line.appendChild(document.createTextNode(ghosts[0].title));
+      if (ghosts[0].cadence) {
+        const mark = document.createElement("span");
+        mark.className = "dr-recur dr-month-entry-recur";
+        mark.textContent = ghosts[0].cadence;
+        line.appendChild(mark);
+      }
+      cell.appendChild(line);
+    }
+
     const hidden = Math.max(0, deadlines.length - 2)
-      + Math.max(0, commitments.length - (deadlines.length < 2 ? 1 : 0));
+      + Math.max(0, commitments.length - (deadlines.length < 2 ? 1 : 0))
+      + Math.max(0, ghosts.length - 1);
     if (hidden && !outside) {
       const more = document.createElement("span");
       more.className = "dr-month-more dr-micro";
