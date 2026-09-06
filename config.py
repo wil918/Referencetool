@@ -12,6 +12,10 @@ TEXTS_DIR = REFERENCES_DIR / "texts"
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "references.db"
 CHROMA_DIR = DATA_DIR / "chroma_db"
+# Original assignment-brief PDFs, kept so a re-import can be re-read and so the
+# review sheet can link "view original". Not references -- a brief is the source
+# a project's deliverables were built from, not an item in the library.
+BRIEFS_DIR = DATA_DIR / "briefs"
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 # You can swap this for any current Claude model via the .env file.
@@ -45,5 +49,5 @@ def _detect_local_timezone():
 
 LOCAL_TIMEZONE = _detect_local_timezone()
 
-for _d in (IMAGES_DIR, TEXTS_DIR, DATA_DIR, CHROMA_DIR):
+for _d in (IMAGES_DIR, TEXTS_DIR, DATA_DIR, CHROMA_DIR, BRIEFS_DIR):
     _d.mkdir(parents=True, exist_ok=True)

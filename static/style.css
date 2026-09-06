@@ -3513,6 +3513,30 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   color: var(--muted);
 }
 
+/* Concept analysis: a raised pill above the zoom cluster, same corner and same
+   soft-UI treatment as .canvas-view-controls. Acts on the marquee selection,
+   so it stays put rather than appearing only when something is selected --
+   an empty selection is a valid input (the whole project). */
+.canvas-concept-btn {
+  position: fixed;
+  left: 1.15rem;
+  bottom: 3.9rem;
+  padding: 0.4rem 0.9rem;
+  border: none;
+  border-radius: 999px;
+  background: var(--project-bg, var(--bg));
+  color: var(--project-ink, var(--ink));
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow: var(--raise-sm);
+  transition: var(--press);
+}
+
+.canvas-concept-btn:hover { color: var(--ink-strong); box-shadow: var(--raise-md); }
+.canvas-concept-btn:active { box-shadow: var(--press-sm); transform: scale(0.97); }
+
 /* The add dock. Same corner and same shape as the homepage's Add Widget dock
    (.widget-dock-fab), because it is the same idea -- but always visible,
    since the canvas has no edit mode to reveal it in. */

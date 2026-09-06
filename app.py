@@ -23,8 +23,10 @@ import fitz  # PyMuPDF
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
 import analyze
+import briefs
 import capture
 import colour
+import config
 import db
 import embeddings
 import graph_layout
@@ -993,6 +995,34 @@ def api_analyze_reply(analysis_id):
     return jsonify({"reply": reply})
 
 
+@app.post("/api/projects/<project_id>/concept-analysis")
+def api_concept_analysis(project_id):
+    """Critique the project's concept against its brief, from a canvas selection.
+
+    The canvas marquee is the picker: `reference_ids` are the selected
+    reference nodes and `notes` the selected text nodes' contents, passed as
+    distinct inputs (analyze.start_concept_analysis). Both empty is fine -- it
+    falls back to the project's whole reference set. Returns the same envelope
+    /api/analyze does, so the follow-up /reply route is reused as-is.
+    """
+    _require_project(project_id)
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        writeup, messages, reference_map = analyze.start_concept_analysis(
+            project_id,
+            reference_ids=body.get("reference_ids") or [],
+            notes=body.get("notes") or [],
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    analysis_id = str(uuid.uuid4())
+    _analysis_sessions[analysis_id] = messages
+    return jsonify({"analysis_id": analysis_id, "writeup": writeup, "references": reference_map})
+
+
 def _analysis_summary(a):
     refs = db.get_references_by_ids(a["reference_ids"])
     return {
@@ -1800,6 +1830,210 @@ def api_delete_deliverable(deliverable_id):
         abort(404)
     db.delete_deliverable(deliverable_id)
     return jsonify({"ok": True, "id": deliverable_id})
+
+
+# --- Schedule: briefs --------------------------------------------------------
+#
+# A brief PDF is read by briefs.py into a proposal; nothing here writes to the
+# schedule. The proposal is stored in briefs.extracted and reviewed in the
+# Deliverables tab, and only /apply -- carrying the human-edited, human-filtered
+# set -- turns any of it into deliverables, tasks and commitments.
+
+
+def _brief_pdf_path(brief_id):
+    # config.BRIEFS_DIR read at call time, not import-bound, so the test
+    # fixture's temp dir applies (conftest monkeypatches config).
+    return config.BRIEFS_DIR / f"{brief_id}.pdf"
+
+
+@app.post("/api/projects/<project_id>/briefs")
+def api_import_brief(project_id):
+    _require_project(project_id)
+    if "file" not in request.files:
+        return jsonify({"error": "no file uploaded"}), 400
+    upload = request.files["file"]
+    if not (upload.filename or "").lower().endswith(".pdf"):
+        return jsonify({"error": "a brief must be a PDF"}), 400
+
+    brief_id = str(uuid.uuid4())
+    pdf_path = _brief_pdf_path(brief_id)
+    upload.save(pdf_path)
+
+    try:
+        text = briefs.extract_text(pdf_path)
+        if not text:
+            pdf_path.unlink(missing_ok=True)
+            return jsonify({"error": "couldn't read any text out of that PDF"}), 400
+        extraction = briefs.analyse(text)
+    except Exception as e:
+        pdf_path.unlink(missing_ok=True)
+        return jsonify({"error": f"couldn't read the brief: {e}"}), 500
+
+    db.create_brief(
+        brief_id,
+        project_id,
+        filepath=pdf_path.name,
+        extracted={"extraction": extraction, "applied": None},
+    )
+    return jsonify(db.get_brief(brief_id))
+
+
+@app.get("/api/projects/<project_id>/briefs")
+def api_list_briefs(project_id):
+    _require_project(project_id)
+    return jsonify(db.list_briefs(project_id))
+
+
+@app.get("/api/briefs/<brief_id>")
+def api_get_brief(brief_id):
+    brief = db.get_brief(brief_id)
+    if not brief:
+        abort(404)
+    return jsonify(brief)
+
+
+@app.get("/api/briefs/<brief_id>/file")
+def api_brief_file(brief_id):
+    if not db.get_brief(brief_id):
+        abort(404)
+    path = _brief_pdf_path(brief_id)
+    if not path.exists():
+        abort(404)
+    return send_file(path, mimetype="application/pdf")
+
+
+@app.delete("/api/briefs/<brief_id>")
+def api_delete_brief(brief_id):
+    if not db.get_brief(brief_id):
+        abort(404)
+    # The deliverables, tasks and commitments a prior /apply created are left
+    # alone -- they outlive their brief the same way a deliverable outlives the
+    # brief it was built from (see delete_deliverable's own note).
+    db.delete_brief(brief_id)
+    _brief_pdf_path(brief_id).unlink(missing_ok=True)
+    return jsonify({"ok": True, "id": brief_id})
+
+
+def _date_only(value):
+    """The YYYY-MM-DD prefix of a date or datetime string, or None."""
+    return value[:10] if isinstance(value, str) and len(value) >= 10 else None
+
+
+@app.post("/api/briefs/<brief_id>/apply")
+def api_apply_brief(brief_id):
+    """Turn the reviewed, accepted subset of a brief into real rows.
+
+    The body is what the review sheet approved -- already filtered to accepted
+    items and carrying the user's edits:
+
+        {
+          "deliverables": [
+            {"title", "due_at", "weighting", "description", "spec",
+             "tasks": [{"title", "description", "est_minutes"}]}
+          ],
+          "key_dates": [
+            {"label", "kind", "start", "end"},           # -> a commitment
+            {"label", "attach_to": <deliverables index>}  # -> sets that due_at
+          ],
+          "mandatory_activities": [
+            {"title", "description", "location_bound", "deliverable_index"}
+          ]
+        }
+    """
+    brief = db.get_brief(brief_id)
+    if not brief:
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    project_id = brief["project_id"]
+
+    created = {"deliverables": [], "tasks": [], "commitments": []}
+
+    # Deliverables first -- key dates and activities can point back at them.
+    deliverable_ids = []
+    for d in body.get("deliverables") or []:
+        title = (d.get("title") or "").strip()
+        if not title:
+            deliverable_ids.append(None)
+            continue
+        did = str(uuid.uuid4())
+        db.create_deliverable(
+            did,
+            project_id,
+            title,
+            description=(d.get("description") or None),
+            due_at=(d.get("due_at") or None),
+            weighting=d.get("weighting"),
+            spec=d.get("spec") or None,
+        )
+        deliverable_ids.append(did)
+        created["deliverables"].append({"id": did, "title": title})
+
+        for t in d.get("tasks") or []:
+            t_title = (t.get("title") or "").strip()
+            if not t_title:
+                continue
+            tid = str(uuid.uuid4())
+            est = t.get("est_minutes")
+            db.create_task(
+                tid,
+                t_title,
+                project_id=project_id,
+                deliverable_id=did,
+                description=(t.get("description") or None),
+                est_minutes=est,
+                est_minutes_source="generated" if est else None,
+            )
+            created["tasks"].append({"id": tid, "title": t_title})
+
+    # Key dates: a date tied to a deliverable sets that deliverable's due date;
+    # any other becomes a plain commitment on the calendar.
+    for k in body.get("key_dates") or []:
+        attach = k.get("attach_to")
+        if attach is not None and isinstance(attach, int) and 0 <= attach < len(deliverable_ids):
+            did = deliverable_ids[attach]
+            due = _date_only(k.get("start") or k.get("date"))
+            if did and due:
+                db.update_deliverable(did, due_at=due)
+            continue
+        label = (k.get("label") or "Brief date").strip()
+        start, end = k.get("start"), k.get("end")
+        if not start or not end:
+            continue
+        cid = str(uuid.uuid4())
+        db.create_commitment(cid, label, start, end, kind="brief", support_level="none")
+        created["commitments"].append({"id": cid, "title": label})
+
+    # Mandatory activities become project tasks. A location-bound one keeps a
+    # note saying so but is left unbound -- app.py never invents a location.
+    for a in body.get("mandatory_activities") or []:
+        title = (a.get("title") or "").strip()
+        if not title:
+            continue
+        note = (a.get("description") or "").strip()
+        if a.get("location_bound"):
+            prefix = "Needs a specific location -- set it in Tasks."
+            note = f"{prefix}\n\n{note}" if note else prefix
+        idx = a.get("deliverable_index")
+        did = (
+            deliverable_ids[idx]
+            if isinstance(idx, int) and 0 <= idx < len(deliverable_ids)
+            else None
+        )
+        tid = str(uuid.uuid4())
+        db.create_task(
+            tid, title, project_id=project_id, deliverable_id=did, description=note or None
+        )
+        created["tasks"].append({"id": tid, "title": title})
+
+    envelope = brief["extracted"] or {}
+    envelope["applied"] = {
+        "at": datetime.now().isoformat(timespec="seconds"),
+        **created,
+        "discarded": body.get("discarded") or [],
+    }
+    db.update_brief(brief_id, extracted=envelope)
+
+    return jsonify({"ok": True, "created": created, "brief": db.get_brief(brief_id)})
 
 
 # --- Schedule: locations -------------------------------------------------------
