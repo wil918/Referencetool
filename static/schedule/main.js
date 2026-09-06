@@ -14,6 +14,7 @@ import { refreshDay } from "./day.js";
 import { createMonth } from "./month.js";
 import { refreshDeliverables } from "./deliverables.js";
 import { initScheduleSettings } from "./settings.js";
+import { initRecurrenceRulesPanel, refreshRecurrenceRules } from "./recurrence-rules-panel.js";
 import { startBedtimeWatch } from "./bedtime-watch.js";
 
 // --- Tabs ---
@@ -32,6 +33,7 @@ function activateTab(name) {
   if (name === "schedule") refreshSchedule();
   if (name === "month") refreshMonth();
   if (name === "deliverables") refreshDeliverables();
+  if (name === "settings") refreshRecurrenceRules();
   return true;
 }
 
@@ -71,6 +73,7 @@ initLocationsManager(() => tasks.refreshTaskList());
 initCalendarImport();
 initCommitments();
 initScheduleSettings();
+initRecurrenceRulesPanel();
 startBedtimeWatch();
 
 // A hash deep link picks its own tab; failing that, the Today tab is the one

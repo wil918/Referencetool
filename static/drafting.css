@@ -590,7 +590,7 @@
   /* --- Defusing the neumorphic system ----------------------------------
      style.css is still loaded here for the modals, forms and buttons this
      page shares with the archive, and every one of its surfaces reads
-     --raise-*/--press-* at point of use. Blanking the five of them switches
+     --raise-* and --press-* at point of use. Blanking the five of them switches
      the whole soft-UI illusion off inside this scope alone, without editing
      a single rule in style.css and therefore without any way to reach the
      pages that do want it. The few declarations that put a raise/press in a
@@ -2195,7 +2195,7 @@
    layout -- that subgrid arrangement is load-bearing and is left completely
    alone. What is overridden here is only its *appearance*: the rounded
    corners, the tinted today column, the borders that the drawn rules now
-   provide, and the neumorphic chips. Blanking --raise-*/--press-* higher up
+   provide, and the neumorphic chips. Blanking --raise-* and --press-* higher up
    already removed every shadow.
    ========================================================================== */
 
@@ -2736,4 +2736,129 @@
   text-transform: none;
   border: var(--dr-rule-hair);
   padding: 0.5rem;
+}
+
+/* ==========================================================================
+   17. RECURRENCE
+   The repeat control on a task, the cadence marker on a block, and the rule
+   manager in Settings. Interval-based and floating (scheduling.py): a rule
+   is a cadence, not a calendar. No value of its own -- every weight, tone,
+   size and the one red are section 1's.
+   ========================================================================== */
+
+/* --- The one-line control, in the entry form and on a live task card --- */
+.drafting .task-recurrence-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.5rem;
+  margin-top: 0.5rem;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+  color: var(--dr-ink-3);
+}
+
+.drafting .task-recurrence-rest[hidden] { display: none; }
+
+.drafting .task-recurrence-num,
+.drafting .task-recurrence-time {
+  font-size: var(--dr-t-body);
+  color: var(--dr-ink);
+  padding: 0.1rem 0.15rem;
+}
+.drafting .task-recurrence-num { width: 2.6rem; text-align: center; }
+
+.drafting .task-recurrence-static {
+  margin: 0.5rem 0 0;
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+}
+
+/* --- The cadence marker on a calendar block ---------------------------
+   A recurring task carries a dashed trailing edge -- it is not closed off,
+   it comes round again -- and a letterspaced tag in the low corner, opposite
+   the deliverable index. No hue: this language has none to spend on it. */
+.drafting .dr-block--recurring { border-right-style: dashed; }
+
+.drafting .dr-recur {
+  position: absolute;
+  bottom: 1px;
+  left: 6px;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+  pointer-events: none;
+}
+
+/* --- The rule manager in Settings ----------------------------------- */
+.drafting .recurrence-rules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+}
+
+.drafting .recurrence-rule-row {
+  border-left: var(--dr-rule-hair);
+  padding: 0.35rem 0 0.35rem 0.9rem;
+}
+.drafting .recurrence-rule-row.is-paused { border-left-style: dashed; }
+
+.drafting .recurrence-rule-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem 0.7rem;
+}
+
+.drafting .recurrence-rule-title {
+  font-size: var(--dr-t-lead);
+  color: var(--dr-ink);
+}
+.drafting .recurrence-rule-row.is-paused .recurrence-rule-title { color: var(--dr-ink-3); }
+
+.drafting .recurrence-rule-cadence {
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+}
+
+.drafting .recurrence-rule-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+
+.drafting .recurrence-rule-slot:not(:empty) { margin-top: 0.6rem; }
+
+.drafting .recurrence-edit-form,
+.drafting .recurrence-delete-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem 0.8rem;
+}
+
+.drafting .recurrence-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-label);
+  letter-spacing: var(--dr-track-label);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+}
+.drafting .recurrence-edit-field input { width: 6rem; }
+
+.drafting .recurrence-edit-note,
+.drafting .recurrence-delete-confirm p {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
 }
