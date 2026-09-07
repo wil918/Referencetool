@@ -77,6 +77,16 @@
 
   .note { margin: 0.9rem 0 0; max-width: 62ch; }
 
+  /* Plate 14 only: the axonometric studies, laid out like plate 11's. */
+  .axo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
+    gap: 1.4rem 1.6rem;
+  }
+
+  .axo-cell > .dr-micro { display: block; color: var(--dr-ink-4); margin-bottom: 0.3rem; }
+  .axo-cell > svg { display: block; }
+
   /* Plate 11 only: each texture shown ruled beside drawn. */
   .tex-grid {
     display: grid;
@@ -1116,6 +1126,107 @@
         is a word, the way the month's buffer is <span class="dr-micro">Reserved</span>. The full
         phrasing — interval, tolerance, whether it is paused — is a row in the detail key and a
         line on the Tasks tab; the block only has to say <em>that</em> it repeats.
+      </p>
+    </section>
+
+    <!-- 14 THE AXONOMETRIC -->
+    <section class="plate plate--wide">
+      <div class="plate-head">
+        <span class="dr-key-num">14</span>
+        <span class="dr-key-term">The axonometric</span>
+        <span class="dr-key-leader"></span>
+        <span class="dr-micro">Height is load · 30° axes</span>
+      </div>
+      <div class="axo-grid">
+        <div class="axo-cell">
+          <span class="dr-micro">The plane, set out</span>
+          <svg viewBox="0 0 224 168" width="100%" aria-hidden="true">
+      <defs>
+        <pattern id="dr-axo-hatch-b" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)">
+          <path class="dr-axo-hatch-line" d="M0.5,0L0.5,4"/>
+        </pattern>
+      </defs>
+      <path class="dr-axo-setout" d="M128.19,48.65L7.47,118.35M157.64,65.65L36.92,135.35M187.08,82.65L66.36,152.35M216.53,99.65L95.81,169.35M95.81,48.65L216.53,118.35M66.36,65.65L187.08,135.35M36.92,82.65L157.64,152.35M7.47,99.65L128.19,169.35"/>
+      <path class="dr-axo-ground" d="M112.0,58.0L141.44,75.0L112.0,92.0L82.56,75.0Z"/>
+      <path class="dr-axo-ground" d="M141.44,75.0L170.89,92.0L141.44,109.0L112.0,92.0Z"/>
+      <path class="dr-axo-ground dr-axo-ground--today" d="M170.89,92.0L200.33,109.0L170.89,126.0L141.44,109.0Z"/>
+      <path class="dr-axo-ground" d="M82.56,75.0L112.0,92.0L82.56,109.0L53.11,92.0Z"/>
+      <path class="dr-axo-ground dr-axo-ground--buffer" d="M112.0,92.0L141.44,109.0L112.0,126.0L82.56,109.0Z"/>
+      <path class="dr-axo-ground dr-axo-ground--at-risk" d="M141.44,109.0L170.89,126.0L141.44,143.0L112.0,126.0Z"/>
+      <path class="dr-axo-ground dr-axo-ground--outside" d="M53.11,92.0L82.56,109.0L53.11,126.0L23.67,109.0Z"/>
+      <path class="dr-axo-ground dr-axo-ground--outside" d="M82.56,109.0L112.0,126.0L82.56,143.0L53.11,126.0Z"/>
+      <path class="dr-axo-ground dr-axo-ground--outside" d="M112.0,126.0L141.44,143.0L112.0,160.0L82.56,143.0Z"/>
+          </svg>
+        </div>
+        <div class="axo-cell">
+          <span class="dr-micro">A day, stacked</span>
+          <svg viewBox="0 0 224 168" width="100%" aria-hidden="true">
+      <path class="dr-axo-ray" d="M112.0,160.32L112.0,52.32M145.46,141.0L145.46,33.0M78.54,141.0L78.54,33.0"/>
+      <path class="dr-axo-ground" d="M112.0,118.0L151.84,141.0L112.0,164.0L72.16,141.0Z"/>
+      <path class="dr-axo-face" d="M112.0,88.68L145.46,108.0L112.0,127.32L78.54,108.0ZM145.46,108.0L112.0,127.32L112.0,160.32L145.46,141.0ZM78.54,108.0L112.0,127.32L112.0,160.32L78.54,141.0Z"/>
+      <path class="dr-axo-spine" d="M112.0,160.32L112.0,127.32"/>
+      <path class="dr-axo-face dr-axo-face--timetabled" d="M112.0,55.68L145.46,75.0L112.0,94.32L78.54,75.0ZM145.46,75.0L112.0,94.32L112.0,127.32L145.46,108.0ZM78.54,75.0L112.0,94.32L112.0,127.32L78.54,108.0Z"/>
+      <path class="dr-axo-spine dr-axo-spine--double" d="M112.0,127.32L112.0,94.32"/>
+      <path class="dr-axo-spine dr-axo-spine--double" transform="translate(-3.5 0)" d="M112.0,127.32L112.0,94.32"/>
+      <path class="dr-axo-face" d="M112.0,31.68L145.46,51.0L112.0,70.32L78.54,51.0ZM145.46,51.0L112.0,70.32L112.0,94.32L145.46,75.0ZM78.54,51.0L112.0,70.32L112.0,94.32L78.54,75.0Z"/>
+      <path class="dr-axo-spine" d="M112.0,94.32L112.0,70.32"/>
+          </svg>
+        </div>
+        <div class="axo-cell">
+          <span class="dr-micro">Set out, not inked</span>
+          <svg viewBox="0 0 224 168" width="100%" aria-hidden="true">
+      <path class="dr-axo-ground" d="M70.0,96.0L104.64,116.0L70.0,136.0L35.36,116.0Z"/>
+      <path class="dr-axo-face dr-axo-face--excluded" d="M70.0,60.2L99.1,77.0L70.0,93.8L40.9,77.0ZM99.1,77.0L70.0,93.8L70.0,132.8L99.1,116.0ZM40.9,77.0L70.0,93.8L70.0,132.8L40.9,116.0Z"/>
+      <path class="dr-axo-ground" d="M160.0,96.0L194.64,116.0L160.0,136.0L125.36,116.0Z"/>
+      <path class="dr-axo-face dr-axo-face--ghost" d="M160.0,60.2L189.1,77.0L160.0,93.8L130.9,77.0ZM189.1,77.0L160.0,93.8L160.0,132.8L189.1,116.0ZM130.9,77.0L160.0,93.8L160.0,132.8L130.9,116.0Z"/>
+          </svg>
+        </div>
+        <div class="axo-cell">
+          <span class="dr-micro">At risk</span>
+          <svg viewBox="0 0 224 168" width="100%" aria-hidden="true">
+      <path class="dr-axo-ground dr-axo-ground--at-risk" d="M112.0,106.0L151.84,129.0L112.0,152.0L72.16,129.0Z"/>
+      <path class="dr-axo-face" d="M112.0,79.68L145.46,99.0L112.0,118.32L78.54,99.0ZM145.46,99.0L112.0,118.32L112.0,148.32L145.46,129.0ZM78.54,99.0L112.0,118.32L112.0,148.32L78.54,129.0Z"/>
+      <path class="dr-axo-spine" d="M112.0,148.32L112.0,118.32"/>
+      <path class="dr-axo-face dr-axo-face--at-risk" d="M112.0,43.68L145.46,63.0L112.0,82.32L78.54,63.0ZM145.46,63.0L112.0,82.32L112.0,118.32L145.46,99.0ZM78.54,63.0L112.0,82.32L112.0,118.32L78.54,99.0Z"/>
+      <path class="dr-axo-spine dr-axo-spine--at-risk" d="M112.0,118.32L112.0,82.32"/>
+          </svg>
+        </div>
+        <div class="axo-cell">
+          <span class="dr-micro">Travel</span>
+          <svg viewBox="0 0 224 168" width="100%" aria-hidden="true">
+      <path class="dr-axo-ground" d="M112.0,106.0L151.84,129.0L112.0,152.0L72.16,129.0Z"/>
+      <path class="dr-axo-face" d="M112.0,79.68L145.46,99.0L112.0,118.32L78.54,99.0ZM145.46,99.0L112.0,118.32L112.0,148.32L145.46,129.0ZM78.54,99.0L112.0,118.32L112.0,148.32L78.54,129.0Z"/>
+      <path class="dr-axo-spine" d="M112.0,148.32L112.0,118.32"/>
+      <path class="dr-axo-travel" d="M112.0,125.22L112.0,104.22"/>
+      <path class="dr-axo-travel-head" d="M112.0,104.22L108.5,109.22L115.5,109.22Z"/>
+      <path class="dr-axo-face" d="M112.0,28.68L145.46,48.0L112.0,67.32L78.54,48.0ZM145.46,48.0L112.0,67.32L112.0,97.32L145.46,78.0ZM78.54,48.0L112.0,67.32L112.0,97.32L78.54,78.0Z"/>
+      <path class="dr-axo-spine" d="M112.0,97.32L112.0,67.32"/>
+          </svg>
+        </div>
+        <div class="axo-cell">
+          <span class="dr-micro">A deadline, struck whole</span>
+          <svg viewBox="0 0 224 168" width="100%" aria-hidden="true">
+      <ellipse class="dr-axo-arc" cx="112.0" cy="101.0" rx="35.4" ry="20.44"/>
+      <ellipse class="dr-axo-arc" cx="112.0" cy="101.0" rx="62.46" ry="36.06"/>
+      <path class="dr-axo-setout" d="M112.0,101.0L96.1,66.32"/>
+      <path class="dr-axo-ground" d="M112.0,84.0L141.44,101.0L112.0,118.0L82.56,101.0Z"/>
+      <path class="dr-axo-point" d="M106.0,101.0L118.0,101.0M112.0,97.0L112.0,105.0"/>
+      <text class="dr-axo-deadline-num" x="112.0" y="91.0" text-anchor="middle">01</text>
+          </svg>
+        </div>
+
+      </div>
+      <p class="note dr-body">
+        The month's second drawing (<span class="dr-micro">schedule/axonometric.js</span>), which stands the
+        day's work up the vertical axis so that a heavy day is a tower and an empty one is flat ground. Every
+        point of it — these studies included — comes out of one projection function; nothing on the sheet is
+        placed by eye, which is also what makes an orientation control later an afternoon's work rather than a
+        rewrite. It carries no value of its own: a block is paper and object lines, a timetabled one is a step
+        lighter with its leading edge doubled, at&nbsp;risk is a faint red all round and a red spine, and
+        something drawn but claiming none of the user's time is dashed or in construction ink — section 8's
+        vocabulary, stood on end. The deadline is the one mark that gains something in projection: a circle
+        struck on the base plane <em>is</em> an ellipse, so the compass sweep the flat view fakes with a
+        border-radius is here simply true, and it is struck whole with its centre marked and its radius drawn.
       </p>
     </section>
 

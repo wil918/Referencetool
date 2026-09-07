@@ -607,6 +607,7 @@ def test_schedule_settings_default_before_anything_is_saved(client):
         "bedtime_notifications_enabled": False,
         "default_location_umbrella_id": None,
         "cohort_group": None,
+        "month_view": "plan",
     }
 
 
@@ -623,6 +624,7 @@ def test_schedule_settings_round_trip(client):
         "bedtime_notifications_enabled": True,
         "default_location_umbrella_id": None,
         "cohort_group": None,
+        "month_view": "plan",
     }
     assert client.get("/api/schedule-settings").get_json()["sleep_target_minutes"] == 420
 
@@ -638,6 +640,7 @@ def test_schedule_settings_partial_update_keeps_the_rest(client):
         "bedtime_notifications_enabled": True,
         "default_location_umbrella_id": None,
         "cohort_group": None,
+        "month_view": "plan",
     }
 
 
@@ -1097,3 +1100,42 @@ def test_resource_crud_and_items(client):
 
     assert client.delete(f"/api/resources/{resource['id']}").status_code == 200
     assert client.get("/api/resources").get_json() == []
+
+
+# --- The month page's remembered drawing -----------------------------------
+#
+# Which of the two month views was last used (schedule/month.js: the
+# analytical plan, or the axonometric sheet). A preference the user set on
+# purpose, so it goes through the API to SQLite rather than into localStorage
+# -- CLAUDE.md hard rule 2 -- which means the route has to be the thing that
+# defends it, since a stored value naming a drawing the page cannot make would
+# leave the month blank on the next visit.
+
+
+def test_the_month_view_defaults_to_the_plan_and_round_trips(client):
+    assert client.get("/api/schedule-settings").get_json()["month_view"] == "plan"
+
+    saved = client.put("/api/schedule-settings", json={"month_view": "axonometric"}).get_json()
+    assert saved["month_view"] == "axonometric"
+    assert client.get("/api/schedule-settings").get_json()["month_view"] == "axonometric"
+
+    # A partial body keeps it, the same way every other field on this route
+    # survives a write that doesn't mention it.
+    assert client.put("/api/schedule-settings", json={"cohort_group": "gp3"}) \
+        .get_json()["month_view"] == "axonometric"
+
+
+def test_an_unknown_month_view_is_refused(client):
+    client.put("/api/schedule-settings", json={"month_view": "axonometric"})
+    resp = client.put("/api/schedule-settings", json={"month_view": "isometric"})
+    assert resp.status_code == 400
+    assert "month_view" in resp.get_json()["error"]
+    # And the stored value is untouched by the rejected write.
+    assert client.get("/api/schedule-settings").get_json()["month_view"] == "axonometric"
+
+
+def test_a_row_written_before_the_column_existed_reads_as_the_plan(archive):
+    db.save_schedule_settings(8 * 60, 30, False)
+    with db.get_conn() as conn:
+        conn.execute("UPDATE schedule_settings SET month_view = NULL")
+    assert db.get_schedule_settings()["month_view"] == "plan"

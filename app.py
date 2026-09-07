@@ -2648,6 +2648,7 @@ def api_save_schedule_settings():
     notify = body.get("bedtime_notifications_enabled", current["bedtime_notifications_enabled"])
     umbrella_id = body.get("default_location_umbrella_id", current["default_location_umbrella_id"])
     cohort_group = body.get("cohort_group", current["cohort_group"])
+    month_view = body.get("month_view", current["month_view"])
     if not isinstance(sleep_target, (int, float)) or sleep_target <= 0:
         return jsonify({"error": "sleep_target_minutes must be a positive number"}), 400
     if not isinstance(morning_routine, (int, float)) or morning_routine < 0:
@@ -2658,8 +2659,14 @@ def api_save_schedule_settings():
     # differently, and ics_import matches it case-insensitively anyway.
     if cohort_group is not None:
         cohort_group = str(cohort_group).strip() or None
+    # An enum, unlike cohort_group: it names one of the two drawings the month
+    # page can make (schedule/month.js), and anything else would leave the page
+    # with a remembered view it cannot render.
+    if month_view not in db.MONTH_VIEWS:
+        return jsonify({"error": f"month_view must be one of {', '.join(db.MONTH_VIEWS)}"}), 400
     db.save_schedule_settings(
-        int(sleep_target), int(morning_routine), bool(notify), umbrella_id, cohort_group
+        int(sleep_target), int(morning_routine), bool(notify), umbrella_id, cohort_group,
+        month_view,
     )
     return jsonify(db.get_schedule_settings())
 

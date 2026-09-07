@@ -66,6 +66,27 @@ These are not preferences. Violating one means the change gets reverted.
    with it and draws the key under the calendar, which is why `schedule/colour.js` is no
    longer imported anywhere — and **travel is a dashed leader line, not a block**, because it
    is the line between two things rather than a thing.
+   **The month has two drawings and keeps both.** The plan (`.dr-month`, section 15) is the
+   analytical one — a collision is read by looking along a week. The **axonometric**
+   (`schedule/axonometric.js`, section 19) stands the day's work up the vertical axis so
+   *height is load*: a heavy day is a tower, an empty one flat ground, a deadline week a
+   ridge. Neither improves on the other, so the switch remembers which was last used, in
+   SQLite (`schedule_settings.month_view`) and never in `localStorage`. Five things there are
+   decisions, not omissions: it is **SVG, not Three.js** — a drawing wants exact sub-pixel
+   hairlines and no lighting, and CLAUDE.md's fourth-caller rule is about 3D views of the
+   *archive*; **one projection function** produces every point on the sheet, which is what
+   makes an orientation control later an afternoon rather than a rewrite; days are painted
+   **back to front by (row + col)**, which is the entire hidden-surface algorithm and the
+   single most common way an isometric drawing goes wrong; **no cell is lettered**, because a
+   tower stands on every cell that has anything to say — the weekday and week-date scales are
+   set out along the plane's edges and the plan below carries every date, which is a large
+   part of why the two halves are one sheet; and the plan below is sized to the base plane's
+   **own column pitch in projection**, so the setting-out rays land on its column edges rather
+   than near them. Its construction layer is **ruled, not toothed**: a ray runs along one of
+   three axes at once, and section 1b's density masks are elongated along a single one, so a
+   mask that suits one direction reads as a dashed border in the other two. The tone comes
+   instead from a few hundred hairlines crossing, which is section 1b's own rule applied to
+   the sheet rather than to the stroke. Specimen plate 14.
    **Where it lives:** every value — line weights, tones, hatch pitches, the two accents, the
    type scale, the measure — is defined once at the top of `static/drafting.css`, scoped under
    `.drafting`, and nothing further down that file may introduce a colour, weight or size of
@@ -193,6 +214,7 @@ These are not preferences. Violating one means the change gets reverted.
 |---|---|---|
 | `static/index.html` | `app.js` | The SPA: Add / Archive / Projects / Settings tabs. |
 | `static/schedule.html` | `schedule/main.js` | Tasks + calendar, and the schedule's own settings (locations, calendar import, personal events, hours, suggested bedtime). **This is the homepage** — `GET /` serves it, not `index.html`. |
+| `static/schedule/axonometric.js` | — | The month's second drawing: the grid on an isometric base plane, the day's work stacked up the vertical axis, the plan below under one dividing rule. Drawn by `month.js`, which owns the range, the data and the model for both views. |
 | `static/schedule/specimen.html` | — | The drafting language's specimen sheet. Static, unlinked, no logic. Reached directly at `/schedule/specimen.html`. |
 | `static/schedule/key.js` | — | The numbered key with leader lines that both detail panels open into, shared by `task-panel.js` and `commitment-panel.js`. |
 | `static/graph.html` | `graph.js` | 3D similarity graph, reachable at `/graph.html`. |

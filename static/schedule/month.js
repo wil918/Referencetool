@@ -2,6 +2,19 @@
 // visible -- two deadlines in one week, a finishing buffer landing on a trip --
 // not the altitude where a single block is read.
 //
+// TWO DRAWINGS OF ONE MONTH, and this module owns the range, the data and the
+// model for both. The PLAN (below) is the analytical one: deadlines on a row,
+// load as tone, a collision read by looking along a week. The AXONOMETRIC
+// (schedule/axonometric.js) answers a different question -- how heavy is this
+// month, and where -- by standing the day's work up the vertical axis, so
+// height is load and a deadline week is a ridge. Neither improves on the
+// other, so the switch remembers which was last used rather than choosing.
+//
+// The axonometric sheet carries the plan below it, under one dividing rule,
+// aligned to the base plane's own column pitch -- so the SAME grid element is
+// moved into it rather than a second one being built. That is what keeps the
+// two halves from ever disagreeing about the month they are drawing.
+//
 // It does NOT mount the hourly calendar component (calendar.js). A month has
 // no hourly axis, so what it reuses from the shared code is the DATA pass
 // (loadCalendarData) and the working-hours helper, not the grid. What it draws
@@ -21,6 +34,7 @@
 // exactly as it does on the week view.
 
 import { loadCalendarData, effectiveBandWindow } from "./calendar.js";
+import { createAxonometric } from "./axonometric.js";
 
 const MONTH_LABELS = [
   "January", "February", "March", "April", "May", "June",
@@ -64,6 +78,12 @@ export function createMonth(container, options = {}) {
   let anchor = firstOfMonth(options.startDate || todayStr());
   let data = null;
   let lastModel = null;
+  // The range render() last drew, kept so the axonometric can be redrawn on a
+  // resize (its geometry is a function of the container's width) without a
+  // second pass over the data.
+  let lastDates = [];
+  let lastRows = 0;
+  let viewLoaded = false;
 
   // Rebuilt on every load. deliverableIndex numbers the deliverables with a
   // deadline in view, the same idiom the week view keys its blocks by.
@@ -76,6 +96,10 @@ export function createMonth(container, options = {}) {
       <button type="button" class="btn schedule-month-today">This month</button>
       <button type="button" class="btn schedule-month-next">&rarr;</button>
       <span class="schedule-range-label schedule-month-label"></span>
+      <span class="schedule-month-view">
+        <button type="button" class="btn schedule-month-view-btn" data-view="plan">Plan</button>
+        <button type="button" class="btn schedule-month-view-btn" data-view="axonometric">Axonometric</button>
+      </span>
       <span class="schedule-toggles">
         <label class="dr-toggle">
           <input type="checkbox" class="schedule-construction-switch" checked>
@@ -89,6 +113,7 @@ export function createMonth(container, options = {}) {
         </label>
       </span>
     </div>
+    <div class="schedule-month-sheet" hidden></div>
     <div class="dr-month-grid-wrap">
       <div class="dr-month"></div>
       <div class="dr-month-construction dr-construction" aria-hidden="true"></div>
@@ -103,6 +128,18 @@ export function createMonth(container, options = {}) {
   const gridEl = container.querySelector(".dr-month");
   const constructionEl = container.querySelector(".dr-month-construction");
   const keyEl = container.querySelector(".dr-month-key");
+  const sheetEl = container.querySelector(".schedule-month-sheet");
+  const gridWrap = container.querySelector(".dr-month-grid-wrap");
+  const viewBtns = [...container.querySelectorAll(".schedule-month-view-btn")];
+
+  // Which of the two drawings is showing. Not a class on the container: the
+  // axonometric MOVES the grid into itself (it draws the plan below its own
+  // dividing rule), so the two views differ in where the same element lives,
+  // not only in how it is painted.
+  let view = "plan";
+  // Created on first use, like every other lazily-mounted piece of this page --
+  // a month that is never looked at axonometrically builds no sheet.
+  let axo = null;
 
   // The two print switches flip a class on <body>, same as the week view's --
   // the whole layer is one custom property either way, so neither costs a
@@ -298,7 +335,7 @@ export function createMonth(container, options = {}) {
 
   function render() {
     renderLabel();
-    const { dates } = gridDates();
+    const { dates, rows } = gridDates();
     const model = deriveModel(dates);
 
     gridEl.innerHTML = "";
@@ -311,8 +348,74 @@ export function createMonth(container, options = {}) {
 
     dates.forEach((dateStr) => gridEl.appendChild(renderCell(dateStr, model)));
     lastModel = model;
+    lastDates = dates;
+    lastRows = rows;
     renderConstruction();
     renderKey();
+    renderSheet();
+  }
+
+  /* The axonometric half, drawn from the SAME model the plan above was built
+   * from -- deriving it twice would be two chances to disagree about which
+   * days are at risk. It hands back the base plane's own column pitch, and
+   * sizing the plan to that pitch IS the alignment between the two halves:
+   * the setting-out rays land on the plan's column edges because both come out
+   * of one projection rather than out of two guesses at the same one. */
+  function renderSheet() {
+    if (view !== "axonometric" || !lastModel) return;
+    if (!axo) axo = createAxonometric(sheetEl, { onOpenDay });
+    if (gridWrap.parentElement !== axo.planSlot) axo.planSlot.appendChild(gridWrap);
+    const geometry = axo.draw({
+      dates: lastDates,
+      rows: lastRows,
+      model: lastModel,
+      data,
+      deliverableIndex,
+      todayStr: todayStr(),
+      inMonth: lastModel.inMonth,
+    });
+    axo.planSlot.style.width = `${Math.round(geometry.planW)}px`;
+    // The plan's own construction overlay is placed from measured cell boxes,
+    // so it has to be struck again now the grid has been resized to the base
+    // plane's pitch.
+    renderConstruction();
+  }
+
+  /* Which drawing is showing. The plan is the DEFAULT because it is the one
+   * that answers the analytical question, and a month is most often opened to
+   * ask it; the axonometric is chosen, and once chosen it is remembered. */
+  function applyView(next, { persist = true } = {}) {
+    view = next === "axonometric" ? "axonometric" : "plan";
+    viewBtns.forEach((b) => b.classList.toggle("is-active", b.dataset.view === view));
+    sheetEl.hidden = view !== "axonometric";
+    if (view === "plan" && gridWrap.parentElement !== container) {
+      container.insertBefore(gridWrap, keyEl);
+    }
+    if (lastModel) {
+      renderKey();
+      renderSheet();
+      if (view === "plan") renderConstruction();
+    }
+    if (persist) saveView();
+  }
+
+  // Through the API to SQLite, never localStorage: this is a preference the
+  // user set on purpose (CLAUDE.md hard rule 2). The PUT fills every field it
+  // is not sent from the stored row, so a one-key body is enough -- same as
+  // calendar-import.js's umbrella write.
+  async function saveView() {
+    await fetch("/api/schedule-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ month_view: view }),
+    });
+  }
+
+  async function loadView() {
+    const res = await fetch("/api/schedule-settings");
+    const settings = res.ok ? await res.json() : null;
+    viewLoaded = true;
+    applyView(settings?.month_view || "plan", { persist: false });
   }
 
   function renderCell(dateStr, model) {
@@ -459,11 +562,15 @@ export function createMonth(container, options = {}) {
     });
   }
 
+  /* The key under the sheet. In axonometric view the deliverable numbers are
+   * lettered in the drawing's right-hand gutter, beside the deadline marks
+   * that point at them, so they are not repeated here -- what stays is the
+   * legend of the plan's own tones, which the plan below still carries. */
   function renderKey() {
     keyEl.innerHTML = "";
     const rows = [];
 
-    if (deliverableIndex.size) {
+    if (deliverableIndex.size && view !== "axonometric") {
       [...deliverableIndex.entries()].forEach(([id, idx]) => {
         rows.push([
           String(idx).padStart(2, "0"),
@@ -512,7 +619,14 @@ export function createMonth(container, options = {}) {
 
   async function reload() {
     const { dates } = gridDates();
-    data = await loadCalendarData(dates[0], dates[dates.length - 1]);
+    // Both on the first pass, so the remembered view is known before anything
+    // is drawn and the sheet is never built in one form and swapped to the
+    // other a moment later.
+    const [loaded] = await Promise.all([
+      loadCalendarData(dates[0], dates[dates.length - 1]),
+      viewLoaded ? Promise.resolve() : loadView(),
+    ]);
+    data = loaded;
     render();
   }
 
@@ -528,10 +642,19 @@ export function createMonth(container, options = {}) {
     if (resizeRaf) return;
     resizeRaf = requestAnimationFrame(() => {
       resizeRaf = null;
-      renderConstruction();
+      // The axonometric's whole geometry is derived from the container's
+      // width -- the cell shrinks to fit rather than the sheet scrolling
+      // sideways -- so a resize redraws it, and renderSheet strikes the plan's
+      // construction again afterwards.
+      if (view === "axonometric") renderSheet();
+      else renderConstruction();
     });
   }
   window.addEventListener("resize", onResize);
+
+  viewBtns.forEach((btn) => {
+    btn.addEventListener("click", () => applyView(btn.dataset.view));
+  });
 
   reload();
 
@@ -540,6 +663,7 @@ export function createMonth(container, options = {}) {
     getAnchor: () => anchor,
     destroy() {
       window.removeEventListener("resize", onResize);
+      axo?.destroy();
     },
   };
 }
