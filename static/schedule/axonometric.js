@@ -462,7 +462,15 @@ export function createAxonometric(host, options = {}) {
       const from = project(col, g.rows, 0);
       ties.push(line(from, { x: g.planLeft + col * COS30 * g.cellW, y: g.svgH }));
     }
-    layer.appendChild(svg("path", { class: "dr-axo-ray", d: ties.join("") }));
+    // One step up the construction scale from every other mark in this layer,
+    // and the only mark that gets it. A projector between two views of the
+    // same object is a line the draughtsman ruled against a straightedge, not
+    // a pencil trace under the drawing -- and it is the mark that carries the
+    // whole claim that these are two halves of one sheet rather than two
+    // panels stacked. At setting-out ink that claim is asserted and not seen.
+    // Still the construction layer: `.dr-construction` on the group takes it
+    // off with everything else.
+    layer.appendChild(svg("path", { class: "dr-axo-ray dr-axo-ray--tie", d: ties.join("") }));
 
     root.appendChild(layer);
   }
@@ -852,7 +860,7 @@ export function createAxonometric(host, options = {}) {
     return [
       [formatHours(minutes), "Hours committed"],
       [String(deadlines), deadlines === 1 ? "Deadline" : "Deadlines"],
-      [busiest.date ? String(new Date(`${busiest.date}T00:00:00`).getDate()) : "—", "Heaviest day"],
+      [busiest.date ? formatHours(busiest.hours * 60) : "—", "Hours, heaviest day"],
       [String(clear), "Days clear"],
     ];
   }

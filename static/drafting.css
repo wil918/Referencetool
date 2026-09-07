@@ -3821,6 +3821,14 @@
   stroke-width: var(--dr-w-construction);
 }
 
+/* The projectors between the two halves, and nothing else on the sheet: a
+   real drawn construction line (--dr-c-construction) rather than a pencil
+   trace under the drawing (--dr-construction-ink). They are what makes the
+   plan below the SAME month rather than a second panel, and at setting-out
+   ink that is asserted rather than seen. Still construction -- the group
+   carries .dr-construction and goes with the rest of the layer. */
+.dr-axo-ray--tie { stroke: var(--dr-c-construction); }
+
 /* A circle is struck WHOLE, with its centre marked and its radius drawn --
    a compass arc is only the part of it that got inked (section 9). On the
    base plane a circle projects to an ellipse, which is why this is an
