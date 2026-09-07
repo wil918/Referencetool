@@ -3441,3 +3441,417 @@
   border-bottom: var(--dr-rule-hair);
   color: var(--dr-ink-3);
 }
+
+/* ==========================================================================
+   19. THE AXONOMETRIC MONTH
+   The month drawn as a construction: the grid laid on the base plane, the
+   day's work stacked up the vertical axis, and the same month in plan below
+   it under one dividing rule. Composes sections 1-10 and introduces no
+   colour, weight, tone or type size of its own -- what it adds is a MEASURE
+   (below) and a set of names for marks that only exist in projection.
+
+   WHY THIS IS A SECOND VIEW AND NOT A REPLACEMENT. The plan (section 15) is
+   the analytical drawing: two deadlines in one week are two marks on one row,
+   and a collision is read by looking along it. The axonometric answers a
+   different question -- how heavy is this month, and where -- and answers it
+   before a word has been read, because height IS load. Neither is the other's
+   improvement, so both are kept and the last one used is remembered.
+
+   WHY SVG. This is a drawing, not a scene: it wants exact hairlines at
+   sub-pixel widths, the tones and lettering the rest of the surface is drawn
+   in, and no lighting. A WebGL renderer would fight every one of those and
+   pull scene-host.js in for geometry that never moves. CLAUDE.md's
+   "fourth caller" rule is about 3D views of the ARCHIVE; this is not one.
+
+   Everything below is a class the SVG carries. Colour and weight resolve
+   through the same custom properties a border does, so dark mode, the
+   construction switch and the texture switch all reach inside the drawing
+   without it knowing they exist.
+   ========================================================================== */
+
+/* --- The measure ----------------------------------------------------------
+   The same idea as --dr-hour in section 1: the scale of the drawing lives in
+   one place, so changing how tall an hour is, or how big a day cell is, is a
+   value here rather than a second set of derived numbers in the module.
+   axonometric.js reads these three once per render and derives every
+   position from them -- nothing on the sheet is placed by eye.
+
+   --dr-axo-cell is the day cell's side BEFORE projection (the base plane is
+   a true isometric square grid, so one value serves both axes).
+   --dr-axo-unit is one hour of stacked work. Their ratio is what decides
+   whether a heavy day reads as a tower or as a bump: at 92:17 a full working
+   day stands about one and a half cells proud of the ground, which is enough
+   to see across a whole month and not so much that a busy week becomes a
+   wall.
+   --dr-axo-margin is the gutter the sheet's marginal studies live in. */
+.drafting .schedule-month-sheet {
+  position: relative;
+  --dr-axo-cell: 92px;
+  --dr-axo-unit: 17px;
+  --dr-axo-margin: 80px;
+}
+
+.dr-axo { display: block; margin: 0 auto; }
+
+/* --- The lower half: the plan, and the studies beside it -------------------
+   One drawing, not two panels: the plan's column pitch is the base plane's
+   own column pitch in projection (axonometric.js sizes it), it is centred on
+   the same vertical line, and the setting-out rays run down out of the
+   drawing above, cross the dividing rule and arrive on its column edges. The
+   gutters either side are where the reference clusters its small studies. */
+.dr-axo-lower {
+  display: grid;
+  /* minmax(0, ...) on the gutters, not a bare 1fr: an `auto` minimum lets a
+     study's content widen its own track, and two unequal gutters put the plan
+     off the centre line the drawing above is centred on. */
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0 1.2rem;
+}
+
+/* The plan is sized in px by axonometric.js, to the base plane's own column
+   pitch. `1fr` tracks are minmax(auto, 1fr), so a cell holding a long entry
+   would push the grid wider than that and the alignment -- the whole point of
+   putting the two halves on one sheet -- would quietly break. minmax(0, 1fr)
+   is what holds it to the width it was given. */
+.dr-axo-plan { min-width: 0; }
+.dr-axo-plan .dr-month { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+
+.dr-axo-margin { padding-top: 0.9rem; min-width: 12.5rem; max-width: 17rem; }
+.dr-axo-margin--left { justify-self: start; }
+.dr-axo-margin--right { justify-self: end; }
+
+/* Narrow: the gutters go under the plan rather than being squeezed into a
+   measure a keyed term cannot sit on. The plan itself keeps its exact width,
+   because that width is what ties it to the drawing above -- it is the one
+   thing on the sheet that may not respond to the viewport. Matches the 900px
+   breakpoint style.css already uses for the week view's layout. */
+@media (max-width: 900px) {
+  .dr-axo-lower { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+  /* The plan first: stacked, the drawing above should be followed by the
+     drawing below, not by the legend that annotates them both. */
+  .dr-axo-plan { order: -1; }
+  .dr-axo-margin { max-width: none; width: 100%; padding-top: 1.4rem; }
+  .dr-axo-margin--left,
+  .dr-axo-margin--right { justify-self: stretch; }
+}
+
+/* A marginal study: a small drawing with its own caption, the way the corner
+   of a sheet carries a detail at a different scale. No box -- it is on the
+   same paper as everything else. */
+.dr-axo-study { margin-bottom: 1.1rem; }
+.dr-axo-study > .dr-micro { display: block; color: var(--dr-ink-4); margin-bottom: 0.3rem; }
+
+.dr-axo-study-row {
+  display: grid;
+  grid-template-columns: 2.6rem 1fr;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.1rem 0;
+}
+
+.dr-axo-study-row .dr-key-term { white-space: normal; }
+
+/* A sentence in a margin, not a term in a key: .dr-key-term is nowrap by
+   design (a keyed term is one word and must never break) and a note set in it
+   runs straight out of its gutter. */
+.dr-axo-note {
+  display: block;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-label);
+  letter-spacing: var(--dr-track-label);
+  text-transform: uppercase;
+  line-height: 1.5;
+  color: var(--dr-ink-3);
+}
+
+/* --- Ground: the base plane ------------------------------------------------
+   A day is a cell on it. Object lines, one step lighter than a block's --
+   the ground is what the subject stands on, not the subject. */
+.dr-axo-ground {
+  fill: none;
+  stroke: var(--dr-c-hair);
+  stroke-width: var(--dr-w-hair);
+}
+
+/* Today is marked on the PLANE, never by colouring its tower -- the tower
+   says how heavy the day is and may not be asked to say anything else. The
+   heaviest weight in the system, exactly as section 15 marks today's cell. */
+.dr-axo-ground--today {
+  stroke: var(--dr-c-cut);
+  stroke-width: var(--dr-w-cut);
+}
+
+/* Outside the month. The plane is ruled across every week it touches, because
+   the grid was set out before the month was drawn on it -- so a day belonging
+   to a neighbouring month is simply never inked in. Section 15 says "not our
+   material" with its densest crosshatch; in projection the truer and cheaper
+   statement is an uninked cell. */
+.dr-axo-ground--outside {
+  stroke: var(--dr-construction-ink);
+  stroke-width: var(--dr-w-construction);
+}
+
+/* At risk and the finishing buffer, carried over from section 15 unchanged:
+   red is the edge and never a fill; the buffer is hatch B (time being taken,
+   not a thing being done) inside a dashed red-faint edge. */
+.dr-axo-ground--at-risk {
+  stroke: var(--dr-red-faint);
+  stroke-width: var(--dr-w-line);
+}
+
+.dr-axo-ground--buffer {
+  fill: url(#dr-axo-hatch-b);
+  stroke: var(--dr-red-faint);
+  stroke-width: var(--dr-w-hair);
+  stroke-dasharray: 4 3;
+}
+
+/* The one tone the sheet draws inside the SVG. Section 1's hatch B is a CSS
+   background-image and cannot paint an SVG shape, so it is restated here as a
+   paint server at the SAME pitch, width and alpha
+   (--dr-hatch-b-smooth: 135deg, 1px on 4px, graphite at .17) -- the ruled
+   twin, not a new tone. The tooth does not come through: a hatch laid on a
+   sheared face would have to be drawn in the plane of that face, so the
+   sheet's own tile could not have served it in any case. */
+.dr-axo-hatch-line {
+  stroke: rgba(var(--dr-graphite-rgb), 0.17);
+  stroke-width: 1;
+}
+
+/* --- The subject: a day's work as a stack ---------------------------------
+   A block is a prism: a top face and the two side faces the projection
+   leaves visible, drawn as one path so a busy month is one element per
+   block. Paper ground, so it covers what is behind it, and object lines --
+   section 8's rule, in three dimensions. */
+.dr-axo-face {
+  fill: var(--dr-paper);
+  stroke: var(--dr-c-line);
+  stroke-width: var(--dr-w-line);
+  stroke-linejoin: round;
+}
+
+/* Timetabled: a given rather than the subject, so object lines one step
+   lighter and a DOUBLE rule on the leading vertical edge -- the same pairing
+   section 8 gives `.dr-block--timetabled`, which is the existing vocabulary's
+   answer to "distinguish it without a hue". */
+.dr-axo-face--timetabled {
+  stroke: var(--dr-c-hair);
+  stroke-width: var(--dr-w-hair);
+}
+
+/* Not the user's to attend: set out, not inked. No ground at all, so what is
+   behind shows through -- it occupies its slot without claiming any of it. */
+.dr-axo-face--excluded {
+  fill: none;
+  stroke: var(--dr-c-hair);
+  stroke-width: var(--dr-w-hair);
+  stroke-dasharray: 3 2.5;
+}
+
+/* A provisional recurrence: the ghosted repetition of section 8, in three
+   dimensions. Construction ink, outline only -- the real occurrence is drawn
+   properly somewhere else on the same sheet. */
+.dr-axo-face--ghost {
+  fill: none;
+  stroke: var(--dr-construction-ink);
+  stroke-width: var(--dr-w-construction);
+}
+
+/* At risk: the edge goes red and nothing else does -- section 8's pairing
+   exactly, a faint red all round and the spine in the full line. */
+.dr-axo-face--at-risk { stroke: var(--dr-red-faint); }
+
+/* The leading vertical edge -- a block's spine, stood on end. A task gets the
+   structural weight (section 8's cut on the left of a block); a commitment
+   gets it twice, three pixels apart, which is the drafting convention for
+   something fixed and is what `3px double` means on the flat. */
+.dr-axo-spine {
+  fill: none;
+  stroke: var(--dr-c-cut);
+  stroke-width: var(--dr-w-cut);
+}
+
+.dr-axo-spine--double { stroke-width: var(--dr-w-line); }
+/* After the base rule, not before it: same specificity, so source order is
+   the whole difference between a red spine and an inked one. */
+.dr-axo-spine--at-risk { stroke: var(--dr-red-line); }
+
+/* Travel: the thin connective element it already is (section 9's leader), as
+   a riser between what it joins rather than a block of its own. Nothing is
+   boxed, because nothing is happening in that time except moving. */
+.dr-axo-travel {
+  fill: none;
+  stroke: var(--dr-c-line);
+  stroke-width: var(--dr-w-hair);
+  stroke-dasharray: 3 3;
+}
+
+.dr-axo-travel-head { fill: var(--dr-c-line); }
+
+/* Hover identifies, and it identifies the way the rest of the surface does:
+   the line the draughtsman is working goes over in pen (section 8), and the
+   block is lettered in the margin on a leader (section 9). No fill, no tint,
+   no shadow -- there is nothing else a drawing could do.
+
+   ONLY THE SOLIDS ARE HITTABLE. A block's spine sits on top of its own face,
+   the setting-out that crosses the drawing sits on top of everything, and the
+   annotation on top of that -- so without this every one of them intercepts
+   the pointer and hovering a tower flickers as the cursor crosses its own
+   edges. Faces and ground stay hittable, which is exactly the two things a
+   day is: what stands on it and the cell itself. */
+.dr-axo-day { cursor: pointer; }
+.dr-axo-face.is-identified { stroke: var(--dr-c-cut); }
+
+.dr-axo-spine,
+.dr-axo-travel,
+.dr-axo-travel-head,
+.dr-axo-point,
+.dr-axo-leader,
+.dr-axo-construction,
+.dr-axo-annotation,
+.dr-axo-scale-group,
+.dr-axo-callout,
+.dr-axo-totals { pointer-events: none; }
+
+.dr-axo-leader {
+  fill: none;
+  stroke: var(--dr-c-hair);
+  stroke-width: var(--dr-w-hair);
+}
+
+/* --- Annotation ----------------------------------------------------------
+   A deadline's POINT is information and stays whatever the construction
+   layer is doing; the circle struck round it is setting-out. Same division
+   section 9 makes on the flat. */
+.dr-axo-point {
+  fill: none;
+  stroke: var(--dr-red-line);
+  stroke-width: var(--dr-w-line);
+}
+
+.dr-axo-deadline-num {
+  fill: var(--dr-red);
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: 0.08em;
+}
+
+/* --- Lettering, in projection --------------------------------------------
+   Same three sizes as everywhere else; what changes is only that a label
+   lies along an axis instead of along the page. */
+.dr-axo-micro {
+  fill: var(--dr-ink-3);
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: var(--dr-track-micro);
+  text-transform: uppercase;
+}
+
+.dr-axo-figure {
+  fill: var(--dr-ink-3);
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-micro);
+  letter-spacing: 0.04em;
+}
+
+.dr-axo-figure--major { fill: var(--dr-ink); font-weight: 500; }
+
+.dr-axo-total {
+  fill: var(--dr-ink);
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-figure);
+  font-variant-numeric: tabular-nums;
+}
+
+.dr-axo-body {
+  fill: var(--dr-ink-2);
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+}
+
+/* --- The measured vertical scale ------------------------------------------
+   Struck from the base plane's left corner, because that is where the
+   vertical axis actually starts. Section 5's axis, stood up: an inked rule
+   with an inked major tick, and a minor tick in graphite because a half
+   division is setting-out. */
+.dr-axo-scale {
+  fill: none;
+  stroke: var(--dr-c-line);
+  stroke-width: var(--dr-w-line);
+}
+
+.dr-axo-scale-minor {
+  fill: none;
+  stroke: var(--dr-c-hair);
+  stroke-width: var(--dr-w-hair);
+}
+
+/* --- The dividing rule ---------------------------------------------------
+   One structural rule across the whole sheet, which the setting-out crosses
+   -- the reference's own division of elevation from plan. Not a border
+   between two panels: the rays run through it. */
+.dr-axo-divide {
+  stroke: var(--dr-c-cut);
+  stroke-width: var(--dr-w-cut);
+}
+
+/* --- The construction layer ----------------------------------------------
+   THE RATIO THAT MATTERS (section 1): faint geometry, dark subject. Every
+   mark here resolves through --dr-construction-ink, and the whole group
+   carries `.dr-construction`, so `.dr-no-construction` takes it off twice
+   over and nothing readable goes with it.
+
+   It is RULED, not toothed, and that is a decision rather than an omission.
+   Section 1b's pencil textures are background-images on horizontal or
+   vertical elements; a ray on this sheet runs along one of three axes at
+   once, and a mask elongated along one of them reads as a dashed border on
+   the other two -- the exact failure 1b warns about. What replaces the grain
+   is what the reference actually uses at this density: the tone comes from
+   the CROSSING of a few hundred hairlines, which is section 1b's own rule
+   that tone is pitch and density is more passes, applied to the sheet
+   instead of to the stroke.
+
+   Drawn as one path per kind for the whole sheet rather than one per block,
+   so the setting-out costs four elements on a month with four hundred. */
+.dr-axo-setout,
+.dr-axo-ray {
+  fill: none;
+  stroke: var(--dr-construction-ink);
+  stroke-width: var(--dr-w-construction);
+}
+
+/* The projectors between the two halves, and nothing else on the sheet: a
+   real drawn construction line (--dr-c-construction) rather than a pencil
+   trace under the drawing (--dr-construction-ink). They are what makes the
+   plan below the SAME month rather than a second panel, and at setting-out
+   ink that is asserted rather than seen. Still construction -- the group
+   carries .dr-construction and goes with the rest of the layer. */
+.dr-axo-ray--tie { stroke: var(--dr-c-construction); }
+
+/* A circle is struck WHOLE, with its centre marked and its radius drawn --
+   a compass arc is only the part of it that got inked (section 9). On the
+   base plane a circle projects to an ellipse, which is why this is an
+   <ellipse> and not the flat view's border-radius trick. */
+.dr-axo-arc {
+  fill: none;
+  stroke: var(--dr-construction-ink);
+  stroke-width: var(--dr-w-construction);
+}
+
+/* --- The switch between the two drawings ----------------------------------
+   Two states of one control, marked the way section 11 marks an active tab:
+   the heavier bottom edge, never a fill. It sits in the month's own toolbar
+   rather than in the page nav, because it chooses how THIS sheet is drawn --
+   it is not a fourth place to go. */
+.drafting .schedule-month-view {
+  display: inline-flex;
+  gap: 0.3rem;
+  margin-left: 0.4rem;
+}
+
+.drafting .schedule-month-view .btn.is-active {
+  border: var(--dr-rule-line);
+  border-bottom: var(--dr-rule-cut);
+  color: var(--dr-ink);
+}

@@ -852,12 +852,19 @@ CREATE TABLE IF NOT EXISTS schedule_settings (
     morning_routine_minutes INTEGER NOT NULL,
     bedtime_notifications_enabled INTEGER NOT NULL DEFAULT 0,
     default_location_umbrella_id TEXT,
-    cohort_group TEXT
+    cohort_group TEXT,
+    month_view TEXT
 );
 """
 
 DEFAULT_SLEEP_TARGET_MINUTES = 8 * 60
 DEFAULT_MORNING_ROUTINE_MINUTES = 30
+# Which of the month page's two drawings was last used -- the analytical plan
+# or the axonometric sheet (static/schedule/axonometric.js). A remembered view,
+# so it belongs in SQLite like every other preference the user set on purpose
+# rather than in localStorage (CLAUDE.md hard rule 2).
+MONTH_VIEWS = ("plan", "axonometric")
+DEFAULT_MONTH_VIEW = "plan"
 
 SCHEDULE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)",
@@ -968,6 +975,7 @@ def init_db():
             "ALTER TABLE locations ADD COLUMN is_online INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE schedule_settings ADD COLUMN default_location_umbrella_id TEXT",
             "ALTER TABLE schedule_settings ADD COLUMN cohort_group TEXT",
+            "ALTER TABLE schedule_settings ADD COLUMN month_view TEXT",
             "ALTER TABLE deliverables ADD COLUMN brief_id TEXT",
             "ALTER TABLE deliverables ADD COLUMN source_key TEXT",
             "ALTER TABLE tasks ADD COLUMN brief_id TEXT",
@@ -4124,24 +4132,29 @@ def get_schedule_settings():
                 "bedtime_notifications_enabled": False,
                 "default_location_umbrella_id": None,
                 "cohort_group": None,
+                "month_view": DEFAULT_MONTH_VIEW,
             }
         d = dict(row)
         d["bedtime_notifications_enabled"] = bool(d["bedtime_notifications_enabled"])
+        # A row written before the column existed has NULL here; the default is
+        # the plan, which is the drawing that answers the analytical question.
+        d["month_view"] = d["month_view"] or DEFAULT_MONTH_VIEW
         return d
 
 
 def save_schedule_settings(sleep_target_minutes, morning_routine_minutes,
                            bedtime_notifications_enabled, default_location_umbrella_id=None,
-                           cohort_group=None):
+                           cohort_group=None, month_view=None):
     with get_conn() as conn:
         conn.execute("DELETE FROM schedule_settings")
         conn.execute(
             """INSERT INTO schedule_settings
                    (sleep_target_minutes, morning_routine_minutes, bedtime_notifications_enabled,
-                    default_location_umbrella_id, cohort_group)
-               VALUES (?, ?, ?, ?, ?)""",
+                    default_location_umbrella_id, cohort_group, month_view)
+               VALUES (?, ?, ?, ?, ?, ?)""",
             (sleep_target_minutes, morning_routine_minutes, 1 if bedtime_notifications_enabled else 0,
-             default_location_umbrella_id, cohort_group or None),
+             default_location_umbrella_id, cohort_group or None,
+             month_view if month_view in MONTH_VIEWS else DEFAULT_MONTH_VIEW),
         )
 
 
