@@ -50,8 +50,8 @@ These are not preferences. Violating one means the change gets reverted.
    **The shadow pair is derived from the active background.** `--light` and `--dark` are tuned for the default page colour; a project that sets a custom background must recompute them from it, or the shadows stop reading as depth (a pale shadow on a dark surface, or a near-white highlight that glares). `appearance.js` derives both from `--project-bg` before first paint and redefines `--light` / `--dark` on the project root — because `--raise-*` and `--press-*` resolve `var(--light)` at point of use, every shadow in the subtree recomputes automatically. Never hard-code a shadow colour.
    **Exception — project widgets.** A widget on the project grid has **no shadow at rest**. Its content provides the structure; the container is invisible. Shadow is opt-in per widget (`config.shadow`), and edit mode forces it on for every widget so boxes are visible while arranging. Never compensate for the missing shadow with a border or a fill — flat means flat.
    **Exception — the schedule surface does not use this system at all.** It is drawn in a
-   technical-drafting language instead: paper ground, four line weights, hatch and stipple
-   for tone, two colours, uppercase letterspaced labels. Depth is *absent* there by design —
+   technical-drafting language instead: paper ground, three media, four line weights, hatch
+   and stipple for tone, two colours, uppercase letterspaced labels. Depth is *absent* there by design —
    a drawing has no depth — so borders and rules are not only allowed but are the entire
    hierarchy, and this rule's ban on them does not apply. The two systems are not to be
    reconciled; rule 6 still governs `index.html`, `project.html` and the graph pages exactly
@@ -74,8 +74,35 @@ These are not preferences. Violating one means the change gets reverted.
    which is what switches the soft-UI off for everything `schedule.html` inherits from
    `style.css` without editing `style.css` at all. `static/schedule/specimen.html` is the
    specimen sheet: every primitive drawn once, in both themes, with the construction layer on
-   and off. It is not linked from the app and ships as a design artefact — change a value in
+   and off and the texture on and off — the ink scale as a strip from solid to broken (02),
+   the three media side by side (02b), and every texture ruled beside drawn (11). It is not linked from the app and ships as a design artefact — change a value in
    `drafting.css` and check it there first.
+   **Three media, and the scale changes hands in the middle.** A drawing is not made with
+   one pencil, and the first version of this language was: one `--dr-ink-rgb` at eight
+   alphas, which is eight greys. There are now three base triplets — **ink** (warm, for
+   object lines, cut lines and type), **graphite** (cool, for setting-out, the construction
+   layer, hatching and stipple) and **wash** (warm dilute, for tonal areas and *never* a
+   line). The difference is deliberately tiny — about six points warm, three points cool and
+   five points warm at working strength — and the test is: name the hue of a hairline
+   without an object line beside it. If you can, it has gone too far. Which medium a mark is
+   drawn in says what *kind* of mark it is, which is the same thing its weight already says,
+   so the two never disagree: there is no warm hairline and no cool cut. Dark mode re-mixes
+   all three (the arithmetic inverts — on a plate the ink is the *brightest* mark), it does
+   not reuse them. Specimen plate 02b.
+   **Density, not alpha.** Graphite does not get lighter, it gets sparser. In
+   `design-references/02` the palest ruled wall averages 222 and its darkest particle
+   measures 0 — a black field with gaps, not a grey one. So the faint end of the scale is a
+   full-strength graphite stroke under a near-binary noise mask (`feFuncA type='linear'`,
+   slope 9; the **intercept** is the density control, and it selects the duty cycle that the
+   flat alpha used to be), and the strong end stays solid, because a firm line *is* solid.
+   The transition between the object line and the hairline is where the drawing comes alive.
+   Three things this depends on: the noise is **elongated along the stroke** (isotropic noise
+   on a hairline reads as a dashed border, which is a different mark); the **stroke stays at
+   full opacity** and the mask decides how much survives, which is what makes the particles
+   black rather than grey; and a **drawn rule's element must be as tall as its tile**, not as
+   tall as its line, or antialiasing plus the mask leaves nothing visible. Duties are lifted
+   about a third above the alpha they replace, because a broken line reads lighter than a
+   solid one carrying the same mean. Specimen plate 02.
    **The construction layer is texture, never information.** The setting-out (quarter-hour
    rules, half-hour ticks, compass arcs struck from a deadline, ghosted repetitions of a
    recurring task) resolves its colour through the single `--dr-construction-ink` property;
@@ -83,17 +110,42 @@ These are not preferences. Violating one means the change gets reverted.
    Nothing that has to be read at 8am may live in that layer or carry `.dr-construction`.
    **Physicality is texture, and it comes off in one class too.** Paper tooth, toothed
    hatching and the ragged wash live in section 1b of `drafting.css` and are switched off
-   by `.dr-no-texture`, which repoints the four tones at their `--smooth` twins. Those
-   twins are not dead code: the ruled system underneath has to stand up on its own, and if
-   the drawing only reads with texture on, the texture is doing work the system should be.
-   **Texture is never live.** Every grain, hatch, stipple, wash and setting-out line is an
-   SVG data URI used as a `background-image`, so its `feTurbulence` runs once in the image
-   decoder. There is not one `filter:` in the file, and exactly one `mix-blend-mode` layer
-   (the grain, plus a wash wherever one is drawn) — because a live filter or a blend is
-   recomputed whenever the element moves, and this calendar re-renders on every drag. **A
-   task block carries no filter, no blend and no mask, ever.** Its edges are ruled lines,
-   which is what the subject of a drawing is anyway. Every `feTurbulence` is seeded
-   explicitly; an unseeded one may differ between renders and the drawing would shimmer.
+   by `.dr-no-texture`, which repoints the tones at their `--smooth` twins, the drawn rules
+   at their flat ones, and the wash's mask at `none`. Those twins are not dead code: the
+   ruled system underneath has to stand up on its own, and if the drawing only reads with
+   texture on, the texture is doing work the system should be.
+   **Three of the textures are vendored rasters** under `static/vendor/textures/`, with
+   provenance, licence and the generator beside them the way the fonts are: `paper-tooth`
+   and `plate-tooth` (the two grounds) and `graphite-tooth-light/-dark` (the stipple), plus
+   `wash-bleed` as a mask. 160 KB total, seamless by construction (an inverse FFT of a
+   periodic spectrum is periodic), **generated, not scanned** — if a real scan is ever made
+   these are the files to replace, and the CSS cares about nothing but their size and their
+   seams. The reason they are not procedural: turbulence is band-limited Perlin, so its
+   features are round and its histogram symmetric, where paper has directional fibre, a slow
+   pulp cloudiness and a heavy tail of flecks — the three things the eye recognises paper by.
+   `generate.py` is **not a build step**; nothing in the app runs it and the app runs fine
+   with it deleted. **Dark mode gets its own tile, designed as a different material** (a
+   photographic plate: emulsion grain, development mottle, silver specks, no fibre at all,
+   screened rather than multiplied) — an inverted scan of paper is a photographic negative
+   and reads as one instantly.
+   **Texture is never live.** Every hatch, setting-out line and density mask is an SVG data
+   URI used as a `background-image`, so its `feTurbulence` runs once in the image decoder;
+   the grounds and the stipple are decoded rasters. There is not one `filter:` in the file,
+   and exactly one `mix-blend-mode` layer (the grain, plus a wash wherever one is drawn) —
+   because a live filter or a blend is recomputed whenever the element moves, and this
+   calendar re-renders on every drag. A `mask-image` now exists too, but only on the wash,
+   and a week view renders **zero** of them. **A task block carries no filter, no blend and
+   no mask, ever** — that is checkable, and a drag of 400 moves costs 6.4 ms of style and
+   layout in total. Its edges are ruled lines, which is what the subject of a drawing is
+   anyway. Every `feTurbulence` is seeded explicitly; an unseeded one may differ between
+   renders and the drawing would shimmer.
+   **Tone comes from pitch, and density from more passes.** A hatch stroke is near-solid
+   graphite and the *spacing* carries the value — faint strokes at a tight pitch give the
+   same average and read as a screen tint. Where a tone has to get heavier (the month view's
+   load ramp) it is drawn **again**, as layered copies of the tile at different offsets,
+   never by shrinking the tile: shrinking barely moves the density, and past about half size
+   the particles fall under a device pixel and average into a smooth cloud, which is a flat
+   fill arrived at by accident.
    **The drawing is set out before it is drawn.** Every principal line has a pencil line
    (`--dr-pencil-*`) that was ruled first, and three properties make it read as setting-out
    rather than as a sloppy second rule: it is **coincident** with what it constructs, never

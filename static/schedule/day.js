@@ -103,6 +103,10 @@ async function renderCheckin() {
     station.className = "dr-gauge-station";
     if (n === shown) station.classList.add("is-set");
     else if (n === inferred && manual === null) station.classList.add("is-inferred");
+    // Everything up to the reading is the part of the gauge that is filled.
+    // A measured instrument in a drawing shows its level as tone, not as a
+    // single marked station with four blanks beside it.
+    if (n < shown) station.classList.add("is-under");
     station.textContent = String(n);
     station.setAttribute("aria-label", `Set today's energy to ${n} of 5`);
     // Tapping the current manual value again passes null, which clears the

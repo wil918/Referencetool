@@ -121,6 +121,36 @@
   .tex-cross::after { background-image: var(--dr-hatch-b-rough); }
   .tex-cross--blend::after { mix-blend-mode: var(--dr-ink-blend); }
 
+  /* Plate 11: the wash as it is actually drawn -- a colour behind the vendored
+     stain, not a coloured image -- so the deckle and the pooled rim are the
+     tile's and the ink is the page's. */
+  .tex-wash {
+    background-color: var(--dr-cool-wash-flat);
+    -webkit-mask-image: var(--dr-wash-mask-rough);
+    mask-image: var(--dr-wash-mask-rough);
+    -webkit-mask-size: 100% 100%;
+    mask-size: 100% 100%;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+  }
+
+  /* Plate 11: three hairlines stacked, so the density pair is judged as a
+     FIELD of rules rather than as one -- which is how the surface actually
+     uses them, and the scale at which a flat alpha gives itself away. */
+  .tex-lines { background-repeat: repeat-x; }
+  .tex-lines--smooth {
+    background-image:
+      var(--dr-graphite-h-smooth), var(--dr-graphite-h-smooth), var(--dr-graphite-h-smooth);
+    background-size: 400px 4px, 400px 4px, 400px 4px;
+    background-position: left 25%, left 50%, left 75%;
+  }
+  .tex-lines--rough {
+    background-image:
+      var(--dr-graphite-h), var(--dr-graphite-h), var(--dr-graphite-h);
+    background-size: 400px 4px, 400px 4px, 400px 4px;
+    background-position: left 25%, left 50%, left 75%;
+  }
+
   /* Plate 03's overlap: both tones on one element, exactly as two bands
      covering the same hour composite on the track. */
   .tone-overlap {
@@ -157,6 +187,59 @@
   /* Tall enough to hold the whole circle -- clipping it would show an arc,
      which is exactly the thing this row exists to disprove. */
   .setout-circle { height: 8.5rem; }
+
+  /* Plate 02: the scale read top-down from solid to broken, so the eye meets
+     the transition where it happens rather than having to hunt for it. */
+  .scale { display: grid; gap: 0.1rem; }
+  .scale-row {
+    display: grid;
+    grid-template-columns: 7.5rem 1fr 14rem;
+    align-items: center;
+    gap: 0.9rem;
+    padding: 0.34rem 0;
+  }
+  /* The one gap in the scale that means something: above it the drawing is
+     inked, below it the drawing is pencil. */
+  .scale-row--turn { margin-top: 0.55rem; }
+  .scale-row--turn::before {
+    content: "";
+    grid-column: 1 / -1;
+    height: 0;
+    margin-bottom: 0.5rem;
+  }
+  .scale-pencil {
+    height: 6px;
+    background-image: var(--dr-pencil-h-hair);
+    background-size: 600px 6px;
+    background-repeat: repeat-x;
+  }
+
+  /* Plate 02: density beside alpha, at a size where the particles are
+     countable. Nothing here is exaggerated -- both figures are the surface's
+     own values, shown at the surface's own scale. */
+  .against {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 0.9rem 2rem;
+    margin-top: 1.4rem;
+  }
+  .against > div > .dr-micro { color: var(--dr-ink-4); }
+  .against-fig { display: grid; gap: 1.5rem; padding: 1.1rem 0 0.4rem; }
+  .against-line { height: 4px; background-repeat: repeat-x; }
+
+  /* Plate 02b: each medium in its own column, full strength at the top and
+     working strength below, because the whole claim is that the first is
+     obvious and the second is not. */
+  .media-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 1.6rem;
+  }
+  .media-cell { display: grid; gap: 0.6rem; align-content: start; }
+  .media-cell > .dr-micro:first-child { color: var(--dr-ink-4); }
+  .media-cell .dr-body { margin: 0.2rem 0 0; }
+  .media-swatch { height: 2.2rem; }
+  .media-wash { height: 2.6rem; }
 </style>
 </head>
 <body class="drafting">
@@ -247,37 +330,126 @@
     </section>
 
     <!-- 02 LINE -->
-    <section class="plate">
+    <section class="plate plate--wide">
       <div class="plate-head">
         <span class="dr-key-num">02</span>
         <span class="dr-key-term">Line</span>
         <span class="dr-key-leader"></span>
-        <span class="dr-micro">Four weights</span>
+        <span class="dr-micro">Four weights · solid to broken</span>
       </div>
-      <div class="specimen-row">
-        <span class="dr-label">Construction</span>
-        <hr class="dr-rule dr-rule--construction">
-        <span class="dr-micro">0.5px · .20</span>
+      <div class="scale">
+        <div class="scale-row">
+          <span class="dr-label">Structural</span>
+          <hr class="dr-rule dr-rule--cut">
+          <span class="dr-micro">Ink · 1.75px · .94 · solid</span>
+        </div>
+        <div class="scale-row">
+          <span class="dr-label">Object</span>
+          <hr class="dr-rule dr-rule--line">
+          <span class="dr-micro">Ink · 1px · .70 · solid</span>
+        </div>
+        <div class="scale-row scale-row--turn">
+          <span class="dr-label">Hairline</span>
+          <hr class="dr-rule dr-rule--hair">
+          <span class="dr-micro">Graphite · 0.75px · broken</span>
+        </div>
+        <div class="scale-row">
+          <span class="dr-label">Construction</span>
+          <hr class="dr-rule dr-rule--construction">
+          <span class="dr-micro">Graphite · 0.5px · broken</span>
+        </div>
+        <div class="scale-row">
+          <span class="dr-label">Setting out</span>
+          <div class="scale-pencil"></div>
+          <span class="dr-micro">Graphite · 0.5px · sparse</span>
+        </div>
       </div>
-      <div class="specimen-row">
-        <span class="dr-label">Hairline</span>
-        <hr class="dr-rule dr-rule--hair">
-        <span class="dr-micro">0.75px · .32</span>
+
+      <!-- The comparison the whole of section 1b exists for. -->
+      <div class="against">
+        <div>
+          <span class="dr-micro">Density — full-strength graphite, masked</span>
+          <div class="against-fig">
+            <div class="against-line" style="background-image: var(--dr-graphite-h); background-size: 400px 4px;"></div>
+            <div class="against-line" style="background-image: var(--dr-graphite-h-faint); background-size: 400px 4px;"></div>
+          </div>
+        </div>
+        <div>
+          <span class="dr-micro">Alpha — the same mean coverage, flat</span>
+          <div class="against-fig">
+            <div class="against-line" style="background-image: var(--dr-graphite-h-smooth); background-size: 400px 4px;"></div>
+            <div class="against-line" style="background-image: var(--dr-graphite-h-faint-smooth); background-size: 400px 4px;"></div>
+          </div>
+        </div>
       </div>
-      <div class="specimen-row">
-        <span class="dr-label">Object</span>
-        <hr class="dr-rule dr-rule--line">
-        <span class="dr-micro">1px · .58</span>
+
+      <p class="note dr-body">
+        Weight is width, tone <em>and medium</em> together. The scale changes hands in the
+        middle: the two heavy weights are ink and stay solid, because a firm line
+        <em>is</em> solid; the two light ones are graphite and are broken up, because
+        graphite does not get lighter, it gets sparser. That transition is the place the
+        drawing comes alive, and it is visible above between the object line and the
+        hairline. Nothing here is bold; things are heavier.
+        <br><br>
+        The pair below the scale is the argument, drawn twice. Both rows carry the same mean
+        coverage. On the left it is made of near-opaque particles with paper between them,
+        the way a pencil only touches the peaks of the tooth — in
+        <span class="dr-micro">design-references/02</span> the palest ruled wall averages
+        222 and its darkest particle measures 0. On the right it is the flat alpha that
+        average implies, which is what the system used to be all the way down, and is most
+        of why it read as rendered. Turn <span class="dr-micro">Texture</span> off above and
+        the left-hand pair becomes the right-hand one.
+      </p>
+    </section>
+
+    <!-- 02b MEDIA -->
+    <section class="plate plate--wide">
+      <div class="plate-head">
+        <span class="dr-key-num">02<span class="dr-micro">b</span></span>
+        <span class="dr-key-term">Media</span>
+        <span class="dr-key-leader"></span>
+        <span class="dr-micro">Three, and the difference is meant to be small</span>
       </div>
-      <div class="specimen-row">
-        <span class="dr-label">Structural</span>
-        <hr class="dr-rule dr-rule--cut">
-        <span class="dr-micro">1.75px · .88</span>
+      <div class="media-grid">
+        <div class="media-cell">
+          <span class="dr-micro">Ink — warm</span>
+          <div class="media-swatch" style="background: rgb(var(--dr-ink-rgb));"></div>
+          <hr class="dr-rule dr-rule--cut">
+          <hr class="dr-rule dr-rule--line">
+          <p class="dr-body">Object lines, cut lines, type. The subject of the drawing, and
+            the only medium that is ever solid.</p>
+          <span class="dr-micro">--dr-ink-rgb</span>
+        </div>
+        <div class="media-cell">
+          <span class="dr-micro">Graphite — cool</span>
+          <div class="media-swatch" style="background: rgb(var(--dr-graphite-rgb));"></div>
+          <hr class="dr-rule dr-rule--hair">
+          <hr class="dr-rule dr-rule--construction">
+          <p class="dr-body">Setting-out, the construction layer, hatching, stipple.
+            Everything ruled before the drawing was inked.</p>
+          <span class="dr-micro">--dr-graphite-rgb</span>
+        </div>
+        <div class="media-cell">
+          <span class="dr-micro">Wash — warm, dilute</span>
+          <div class="media-swatch" style="background: rgb(var(--dr-wash-rgb));"></div>
+          <div class="media-wash dr-tone--wash-neutral"></div>
+          <p class="dr-body">Tonal areas only, and never a line — a wash has no edge of its
+            own, it stops where it stops.</p>
+          <span class="dr-micro">--dr-wash-rgb</span>
+        </div>
       </div>
       <p class="note dr-body">
-        Weight is width and tone together — a structural line is not just thicker, it is
-        denser, which is how a pencil behaves. Nothing in this system is bold; things are
-        heavier.
+        The top swatch of each column is the medium at full strength, where the hue is
+        obvious. Everything below it is that medium at the strength it is actually used at,
+        where the hue should not be: about six points warm for ink, three points cool for
+        graphite, five points warm for a wash. That is the difference between two pencils in
+        a box, not a colour code.
+        <br><br>
+        The test is one question — name the hue of a hairline without putting it beside an
+        object line. If you can, it has gone too far and the three triplets want moving back
+        towards each other. Which medium a mark is drawn in says what <em>kind</em> of mark
+        it is, and that is the same thing its weight already says, so the two never
+        disagree: there is no warm hairline and no cool cut anywhere in the system.
       </p>
     </section>
 
@@ -292,34 +464,46 @@
       <div class="specimen-row">
         <span class="dr-label">Stipple</span>
         <div class="specimen-swatch dr-tone--stipple"></div>
-        <span class="dr-micro">90px tile</span>
+        <span class="dr-micro">Graphite tile · 512px</span>
       </div>
       <div class="specimen-row">
         <span class="dr-label">Hatch A</span>
         <div class="specimen-swatch dr-tone--hatch-a"></div>
-        <span class="dr-micro">45° · 7px</span>
+        <span class="dr-micro">45° · 10.6px</span>
       </div>
       <div class="specimen-row">
         <span class="dr-label">Hatch B</span>
         <div class="specimen-swatch dr-tone--hatch-b"></div>
-        <span class="dr-micro">135° · 4px</span>
+        <span class="dr-micro">135° · 6.8px</span>
       </div>
       <div class="specimen-row">
         <span class="dr-label">Crosshatch</span>
         <div class="specimen-swatch dr-tone--cross"></div>
-        <span class="dr-micro">45/135° · 8px</span>
+        <span class="dr-micro">45/135° · 11.3px</span>
       </div>
       <div class="specimen-row">
         <span class="dr-label">Overlap</span>
         <div class="specimen-swatch tone-overlap"></div>
         <span class="dr-micro">Both at once</span>
       </div>
+      <div class="specimen-row">
+        <span class="dr-label">Wash</span>
+        <div class="specimen-swatch dr-tone--wash-neutral"></div>
+        <span class="dr-micro">Neutral · stain</span>
+      </div>
       <p class="note dr-body">
-        Four materials, told apart by pitch <em>and</em> angle so they stay distinct in a
+        Five materials, told apart by pitch <em>and</em> angle so they stay distinct in a
         screenshot and to a colourblind reader. Never a flat fill. Stipple is the lightest,
         which is why the band most blocks sit on gets it.
         <br><br>
-        The fifth swatch is the reason none of them is a fill: where working and domestic
+        The tone comes from the <em>pitch</em>, not from faint strokes: every hatch stroke
+        here is near-solid graphite and the spacing carries the value, which is what the
+        masonry in <span class="dr-micro">design-references/02</span> does — a mid-grey
+        wall made of black lines. Faint strokes at a tight pitch give the same average and
+        read as a screen tint. Stipple is the one tone that is genuinely sparse rather than
+        widely spaced, and it is the one that is a raster.
+        <br><br>
+        The overlap swatch is the reason none of them is a fill: where working and domestic
         hours cover the same time, both tones survive and the eye reads both materials at
         once. Give either band an opaque background and that stops being true — which is
         exactly why it does not happen on the neumorphic schedule, where the working band
@@ -760,14 +944,14 @@
       </div>
       <div class="tex-grid">
         <div class="tex-cell">
-          <span class="dr-micro">Paper tooth — exaggerated</span>
+          <span class="dr-micro">Paper tooth — exaggerated · vendored tile</span>
           <div class="specimen-swatch tex-blank"></div>
           <div class="specimen-swatch tex-grain"></div>
         </div>
         <div class="tex-cell">
-          <span class="dr-micro">Stipple</span>
+          <span class="dr-micro">Stipple — dot grid · graphite tile</span>
           <div class="specimen-swatch" style="background-image: var(--dr-stipple-smooth); background-size: var(--dr-stipple-pitch-smooth);"></div>
-          <div class="specimen-swatch" style="background-image: var(--dr-stipple-rough); background-size: 90px 90px;"></div>
+          <div class="specimen-swatch" style="background-image: var(--dr-stipple-rough); background-size: var(--dr-stipple-pitch-rough);"></div>
         </div>
         <div class="tex-cell">
           <span class="dr-micro">Hatch A</span>
@@ -785,12 +969,17 @@
           <div class="specimen-swatch" style="background-image: var(--dr-hatch-cross-rough);"></div>
         </div>
         <div class="tex-cell">
-          <span class="dr-micro">Cool wash</span>
+          <span class="dr-micro">Cool wash — flat · stained</span>
           <div class="specimen-swatch" style="background-color: var(--dr-cool-wash-flat);"></div>
-          <div class="specimen-swatch" style="background-image: var(--dr-wash-rough); background-size: 100% 100%;"></div>
+          <div class="specimen-swatch tex-wash"></div>
         </div>
         <div class="tex-cell">
-          <span class="dr-micro">Pencil line</span>
+          <span class="dr-micro">Hairline — alpha · density</span>
+          <div class="specimen-swatch tex-lines tex-lines--smooth"></div>
+          <div class="specimen-swatch tex-lines tex-lines--rough"></div>
+        </div>
+        <div class="tex-cell">
+          <span class="dr-micro">Setting out — alpha · density</span>
           <div class="specimen-swatch" style="background-image: var(--dr-pencil-quarter-smooth); background-size: auto 15px;"></div>
           <div class="specimen-swatch" style="background-image: var(--dr-pencil-quarter); background-size: auto 15px;"></div>
         </div>
@@ -801,13 +990,27 @@
         </div>
       </div>
       <p class="note dr-body">
-        Ruled on the left, drawn on the right. The tooth is stitched fractal noise, so it
-        tiles with no seam and no asset; the hatches vary in density rather than in
-        geometry, because a displaced stroke will not meet its own continuation across a
-        tile edge and a seam every 60px is worse than a straight hairline. The same reasoning
-        governs the pencil line: displacing a hairline smears it across three device pixels and
-        reads as blur and as extra width, so the setting-out holds its position exactly and
-        varies in density instead.
+        Ruled on the left, drawn on the right — and the right-hand column is what
+        <span class="dr-micro">Texture</span> in the title block turns off, so every pair
+        here is the same switch shown one primitive at a time. Nothing on this sheet may
+        stop being readable when the left column is what the surface renders.
+        <br><br>
+        Three of these are now vendored 512px rasters rather than procedural noise: the
+        paper tooth, the graphite stipple and the wash. Turbulence is band-limited Perlin,
+        so its features are round and its histogram symmetric, and paper is neither — a
+        sheet has directional cellulose fibre, a slow cloudiness from how the pulp settled,
+        and a heavy tail of dark flecks. None of those is a sum of Perlin octaves, which is
+        most of why the procedural sheet read as noise laid over a UI. The tiles are
+        seamless by construction (an inverse FFT of a periodic spectrum is periodic), total
+        160 KB, and are generated rather than scanned — see
+        <span class="dr-micro">static/vendor/textures/README.md</span>.
+        <br><br>
+        Turbulence keeps the jobs it is better at. Every <em>line</em> in the system is
+        still an SVG data URI, because a line needs exact ruled geometry at retina
+        resolution and a raster cannot give it — so the hatches vary in density rather than
+        in geometry, and the setting-out holds its position exactly while a mask eats into
+        its alpha. Displacing a hairline smears it across three device pixels and reads as
+        blur <em>and</em> as extra width, which is the one failure worse than flat.
         <br><br>
         The last pair is the one that decided the architecture — two hatches crossing, laid
         over each other normally and then multiplied. They are near enough identical, because
