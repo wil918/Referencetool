@@ -17,6 +17,7 @@
 import { installAuthFetch, getToken, setToken, probeAccess } from "./api-auth.js";
 import { installOfflineQueue, requestPersistence, flush, onSyncState } from "./offline-queue.js";
 import { refreshDay } from "./day.js";
+import { mountPhotoCapture } from "./photo-capture.js";
 
 installAuthFetch();
 // Order matters: the offline queue wraps window.fetch AFTER the auth wrapper,
@@ -46,6 +47,8 @@ function startDay() {
   dayRoot.hidden = false;
   showDate();
   refreshDay();
+  // Idempotent: harmless if the token screen was re-entered and we're back.
+  mountPhotoCapture(document.getElementById("photo-capture"));
   flush(); // we just confirmed the Mac is reachable -- drain anything queued
   dayRunning = true;
 }

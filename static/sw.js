@@ -39,6 +39,7 @@ const SHELL = [
   "/schedule/api-auth.js",
   "/schedule/offline-queue.js",
   "/schedule/day.js",
+  "/schedule/photo-capture.js",
   "/schedule/calendar.js",
   "/schedule/task-panel.js",
   "/schedule/commitment-panel.js",
