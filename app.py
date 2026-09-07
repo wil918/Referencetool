@@ -44,6 +44,10 @@ app = Flask(__name__, static_folder="static", static_url_path="")
 # (a preview server, a worktree) can run alongside the one the user keeps open.
 # Client code still never names a port -- see hard rule 3.
 PORT = int(os.environ.get("PORT") or 5050)
+# Not in the stdlib table on every platform, and the static handler guesses the
+# type from this. Without it the PWA manifest is served as octet-stream and
+# some browsers refuse to parse it.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 PDF_THUMB_DPI = 72
 # More than enough thumbnails to fill one row of the project preview bar on
 # any reasonable screen width; the bar's CSS (nowrap + overflow hidden) clips
@@ -122,6 +126,41 @@ def _api_preflight(_subpath):
     return ("", 204)
 
 
+# --- Off-machine access ---------------------------------------------------
+#
+# Normally the server binds 127.0.0.1 and the only thing that can call the API
+# is already on this machine, so nothing here runs. When ARCHIVE_HOST is set to
+# a non-loopback address (to reach the schedule from a phone -- see the README's
+# Tailscale note), the machine boundary no longer protects the API, so every
+# /api/ call from a client that isn't this machine has to carry the bearer
+# token. This is the SAME check the capture API already uses (_capture_auth_ok),
+# just applied to the whole API surface rather than only /api/captures.
+
+
+def _client_is_loopback():
+    """True if this request came from a process on this machine.
+
+    There is no reverse proxy in front of this app, so request.remote_addr is
+    the real peer address and safe to trust. A loopback client is treated
+    exactly as before -- no token -- so exposing the server for a phone never
+    changes anything about using it on the Mac itself.
+    """
+    addr = request.remote_addr or ""
+    return addr == "::1" or addr.startswith("127.")
+
+
+@app.before_request
+def _guard_api_when_exposed():
+    if not config.LAN_EXPOSED or _client_is_loopback():
+        return
+    if not request.path.startswith("/api/") or request.method == "OPTIONS":
+        return  # static assets (the day-view shell, calendar.js) aren't sensitive
+    if request.path == "/api/health":
+        return  # stays open so a client can tell "server up" from "wrong token"
+    if not _capture_auth_ok():
+        return jsonify({"error": "unauthorized"}), 401
+
+
 def _resolve_ref_path(ref):
     return REFERENCES_DIR / ref["filepath"]
 
@@ -172,6 +211,16 @@ def index():
     # (static serving already exposes every file under static/ at its own
     # path, so /index.html and /graph.html work with no extra route).
     return send_from_directory(app.static_folder, "schedule.html")
+
+
+@app.get("/day")
+def mobile_day():
+    """The phone day view -- today's tasks, the day's calendar and completion,
+    built for one thumb. Its own route (not a tab of schedule.html) so Add to
+    Home Screen lands straight here; the PWA manifest names this as start_url.
+    static serving already exposes /day.html too, but the clean path is what
+    the manifest and any pasted link use."""
+    return send_from_directory(app.static_folder, "day.html")
 
 
 @app.get("/api/references")
@@ -3103,6 +3152,14 @@ def bootstrap():
     """Shared startup for every entry point: init the db, resume any
     in-flight capture queue, and start the capture worker. Called by both
     `python app.py` and desktop.py so the two never drift apart."""
+    if config.LAN_EXPOSED and not ARCHIVE_API_TOKEN:
+        raise SystemExit(
+            f"ARCHIVE_HOST is set to {config.ARCHIVE_HOST!r}, which exposes the "
+            "server beyond this machine. That is only allowed with "
+            "ARCHIVE_API_TOKEN also set in .env -- an open schedule API on a "
+            "shared network is not acceptable. Set a token, or unset "
+            "ARCHIVE_HOST to go back to localhost-only."
+        )
     db.init_db()
     # Pick up anything a previous run left mid-flight before serving.
     resumed, lost = capture.resume_pending()
@@ -3113,7 +3170,16 @@ def bootstrap():
 
 if __name__ == "__main__":
     bootstrap()
-    url = f"http://127.0.0.1:{PORT}"
-    print(f"Fashion reference library running at {url}")
-    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
-    app.run(port=PORT, debug=False)
+    local_url = f"http://127.0.0.1:{PORT}"
+    print(f"Fashion reference library running at {local_url}")
+    if config.LAN_EXPOSED:
+        # The phone opens the day view; the token is entered once on that
+        # screen (see static/day.html). A sleeping Mac is unreachable.
+        print(
+            f"Also listening on {config.ARCHIVE_HOST}:{PORT} -- reach the day "
+            f"view from a phone at http://<this-mac>:{PORT}/day"
+        )
+    # Only pop a browser when serving ourselves locally; nobody is sitting at
+    # the machine when it is bound wide for a phone.
+    threading.Timer(1.0, lambda: webbrowser.open(local_url)).start()
+    app.run(host=config.ARCHIVE_HOST, port=PORT, debug=False)
