@@ -154,6 +154,95 @@
 .dr-day-mobile .dr-block,
 .dr-day-mobile .dr-band { touch-action: pan-y; }
 
+/* --- Add a photo -----------------------------------------------------------
+   Take or pick a photo and send it into the archive. Composes drafting.css's
+   own tokens only -- letterspaced micro labels, bottom-ruled fields, the accent
+   used strictly as annotation on a failed row. No colour, weight or fill of its
+   own. */
+
+.dr-day-mobile .dr-photo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin-top: 1.6rem;
+  padding-top: 1.3rem;
+  border-top: var(--dr-rule-hair);
+}
+
+.dr-day-mobile .dr-photo-actions { display: flex; gap: 0.5rem; }
+.dr-day-mobile .dr-photo-actions .btn { flex: 1; justify-content: center; }
+
+.dr-day-mobile .dr-photo-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.dr-day-mobile .dr-photo-note,
+.dr-day-mobile .dr-photo-project {
+  min-height: 2.75rem;
+  border: 0;
+  border-bottom: var(--dr-rule-line);
+  background: transparent;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-body);
+  color: var(--dr-ink);
+  padding: 0.2rem 0.1rem;
+}
+
+/* --- The recent-attempts list ------------------------------------------------
+   One row per photo: a small proof thumbnail, the stage it's at, and a detail
+   line (size while uploading, then the archive title once tagged). */
+
+.dr-day-mobile .dr-photo-list { display: flex; flex-direction: column; }
+.dr-day-mobile .dr-photo-list:empty { display: none; }
+
+.dr-day-mobile .dr-photo-row {
+  display: grid;
+  grid-template-columns: 2.6rem 1fr;
+  gap: 0.7rem;
+  align-items: center;
+  padding: 0.55rem 0;
+  border-bottom: var(--dr-rule-hair);
+}
+
+.dr-day-mobile .dr-photo-thumb {
+  width: 2.6rem;
+  height: 2.6rem;
+  background-color: var(--dr-paper-2);
+  background-size: cover;
+  background-position: center;
+  border: var(--dr-rule-hair);
+}
+
+.dr-day-mobile .dr-photo-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.dr-day-mobile .dr-photo-state {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-label);
+  letter-spacing: var(--dr-track-label);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+}
+
+.dr-day-mobile .dr-photo-detail {
+  font-size: var(--dr-t-body);
+  color: var(--dr-ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Done reads in full ink; a failure is the one place the accent appears. */
+.dr-day-mobile .dr-photo-row[data-state="done"] .dr-photo-state,
+.dr-day-mobile .dr-photo-row[data-state="duplicate"] .dr-photo-state { color: var(--dr-ink); }
+.dr-day-mobile .dr-photo-row[data-state="failed"] .dr-photo-state { color: var(--dr-red); }
+
 /* --- Token screen --------------------------------------------------------- */
 
 /* .dr-token sets its own display, so -- as everywhere in this codebase -- the

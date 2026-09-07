@@ -46,6 +46,15 @@ const QUEUEABLE = [
 // else only needs `client_ts`, kept for ordering and audit.
 const TIMESTAMPED = /^\/api\/tasks\/[^/]+\/(complete|partial)$/;
 
+// The one non-task mutation that rides this queue: a photo taken on the phone,
+// posted to capture.py's existing pipeline (POST /api/captures) as multipart.
+// It is a mutation the Mac has not seen yet, exactly like a queued completion,
+// so it belongs in the same transit buffer -- it differs only in that the body
+// is an image Blob, not JSON, so its entries carry `kind: "capture"` and
+// `sendEntry` / `flush` branch on that. Reached through queueCapture(), never
+// the fetch wrapper (a FormData body has nothing to serialise as an envelope).
+const CAPTURE_PATH = "/api/captures";
+
 // --- IndexedDB -------------------------------------------------------------
 
 let dbPromise = null;
@@ -200,6 +209,25 @@ async function refreshCounts() {
 let installed = false;
 let passthrough = null; // window.fetch as it was when we wrapped it
 
+// Send one queue entry over the wire. Task mutations go as JSON; a capture
+// entry is rebuilt into the multipart form capture.py expects. `passthrough`
+// is the auth-wrapped fetch (installed before us in day-mobile.js), so a
+// replayed capture still carries the bearer token.
+function sendEntry(entry) {
+  if (!passthrough) throw new Error("offline queue not installed");
+  if (entry.kind === "capture") {
+    const form = new FormData();
+    form.append("capture", JSON.stringify(entry.envelope));
+    form.append("file", entry.blob, entry.filename || "photo.jpg");
+    return passthrough(entry.url, { method: "POST", body: form });
+  }
+  return passthrough(entry.url, {
+    method: entry.method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(entry.body),
+  });
+}
+
 function classify(input, init) {
   const method = (
     (init && init.method) ||
@@ -286,15 +314,17 @@ export async function flush() {
     for (const entry of await readAll()) {
       let res;
       try {
-        res = await passthrough(entry.url, {
-          method: entry.method,
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(entry.body),
-        });
+        res = await sendEntry(entry);
       } catch {
         return; // offline again -- keep everything, try next time
       }
       if (res.ok || (res.status >= 400 && res.status < 500)) {
+        if (entry.kind === "capture" && res.ok) {
+          // Hand the server's capture row back so the phone can start polling
+          // GET /api/captures/<id> for a photo that only uploaded just now.
+          const summary = await res.clone().json().catch(() => null);
+          if (summary) announceCapture(entry.client_id, summary);
+        }
         await remove(entry.seq);
       } else {
         return; // transient server trouble -- leave this and the rest queued
@@ -306,6 +336,81 @@ export async function flush() {
     syncing = false;
     emit();
   }
+}
+
+// --- photo captures ----------------------------------------------------
+
+const captureListeners = new Set();
+
+function announceCapture(clientId, summary) {
+  captureListeners.forEach((fn) => {
+    try {
+      fn(clientId, summary);
+    } catch {
+      /* a broken listener must not stop the others */
+    }
+  });
+}
+
+/** Notified when a QUEUED photo (one that couldn't upload when taken) finally
+ *  reaches the Mac: `(clientId, summary)`, where summary is capture.py's row
+ *  (capture_id, status, ...). The phone UI uses this to start polling
+ *  GET /api/captures/<id> for a photo that uploaded later. A photo that
+ *  uploads immediately never comes through here -- queueCapture returns its
+ *  summary directly. Returns an unsubscribe function. */
+export function onCaptureUploaded(fn) {
+  captureListeners.add(fn);
+  return () => captureListeners.delete(fn);
+}
+
+/** Push a photo (an already-encoded JPEG Blob) through capture.py's pipeline,
+ *  queueing it for later if the Mac can't be reached right now.
+ *
+ *  Resolves to `{ uploaded, clientId, summary? }`: when `uploaded` is true the
+ *  Mac accepted it and `summary` is its capture row, ready to poll; when false
+ *  the photo is safe in IndexedDB and `onCaptureUploaded` will fire with the
+ *  summary once a flush gets it through. Rejects only if the Mac was reached
+ *  and refused the photo outright (a 4xx) -- that won't improve on a resend. */
+export async function queueCapture(blob, filename, envelope) {
+  const clientId = uuid();
+  const entry = {
+    client_id: clientId,
+    kind: "capture",
+    method: "POST",
+    path: CAPTURE_PATH,
+    url: CAPTURE_PATH,
+    blob,
+    filename,
+    envelope,
+    queued_at: localISO(),
+  };
+
+  if (navigator.onLine) {
+    let res = null;
+    try {
+      res = await sendEntry(entry);
+    } catch {
+      res = null; // network fell over -- queue it below
+    }
+    if (res) {
+      if (res.ok) {
+        const summary = await res.json().catch(() => null);
+        flush(); // drain anything queued earlier while we're clearly online
+        return { uploaded: true, clientId, summary };
+      }
+      if (res.status >= 400 && res.status < 500) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `The Mac refused this photo (${res.status}).`);
+      }
+      // 5xx -- fall through and queue for a retry
+    }
+  }
+
+  await add(entry);
+  await refreshCounts();
+  emit();
+  flush(); // in case connectivity is only flickering
+  return { uploaded: false, clientId };
 }
 
 /** Ask the browser to exempt our storage from routine eviction, so a queued
