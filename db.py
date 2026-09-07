@@ -826,6 +826,26 @@ CREATE TABLE IF NOT EXISTS daily_capacity (
 );
 """
 
+# The idempotency ledger for mutations replayed off the phone's offline queue
+# (static/schedule/offline-queue.js). A flaky connection often leaves the phone
+# unable to tell a request that never landed from a response it never got, so
+# it resends; every queued action carries a client-generated id, and the first
+# time this server applies one it records the id here with the exact JSON body
+# it returned. A resend of the same id then replays that stored response
+# instead of running the handler a second time -- which is what makes
+# completing, editing or creating a task safe to send twice (see app.py's
+# `idempotent`). This is NOT the queue: the queue lives on the phone and is a
+# transit buffer only (SCHEDULE_SCOPE.md's "offline queue"). This table is just
+# a short memory of what has already been done, on the authoritative side.
+CLIENT_OPERATIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS client_operations (
+    client_id TEXT PRIMARY KEY,
+    response_json TEXT NOT NULL,
+    status_code INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+"""
+
 # A single row of global preferences behind the suggested-bedtime marker (see
 # scheduling.suggested_bedtime) -- sleep_target_minutes and
 # morning_routine_minutes are the two terms subtracted from tomorrow's first
@@ -950,6 +970,7 @@ def init_db():
         conn.execute(DOMESTIC_HOURS_SCHEMA)
         conn.execute(HOURS_OVERRIDES_SCHEMA)
         conn.execute(DAILY_CAPACITY_SCHEMA)
+        conn.execute(CLIENT_OPERATIONS_SCHEMA)
         conn.execute(SCHEDULE_SETTINGS_SCHEMA)
         # Runs before SCHEDULE_INDEXES below: it rebuilds scheduled_blocks
         # wholesale on an old database, which drops any index that already
@@ -3000,6 +3021,38 @@ def get_task_actual(task_id):
         return dict(row) if row else None
 
 
+# --- Schedule: idempotent replay of queued phone mutations ------------------
+#
+# See CLIENT_OPERATIONS_SCHEMA. These two functions are the whole mechanism:
+# app.py's `idempotent` decorator asks get_client_operation whether an incoming
+# client_id has been seen, replays the stored response if so, and otherwise
+# calls save_client_operation once the handler has run and returned a 2xx.
+
+
+def get_client_operation(client_id):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM client_operations WHERE client_id = ?", (client_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def save_client_operation(client_id, response_json, status_code):
+    """Record that a client-id'd mutation has been applied, with the exact JSON
+    it returned. Insert-only (ON CONFLICT DO NOTHING): if two replays of one
+    action race, the first to land wins and its stored response is the one
+    every later replay gets -- a second write can't move the goalposts."""
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO client_operations
+                   (client_id, response_json, status_code, created_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(client_id) DO NOTHING""",
+            (client_id, response_json, status_code,
+             datetime.now(timezone.utc).isoformat()),
+        )
+
+
 # --- Schedule: scheduled blocks ----------------------------------------------
 
 
@@ -4182,6 +4235,9 @@ SCHEDULE_DATA_TABLES = (
     "recurrence_rules",
     "daily_capacity",
     "hours_overrides",
+    # The phone-queue idempotency ledger: keyed on client ids for tasks that a
+    # reset has just deleted, so it is only ever noise afterwards.
+    "client_operations",
 )
 
 # Configuration the user enters once and rarely wants gone -- each group is

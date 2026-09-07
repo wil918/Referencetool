@@ -13,10 +13,15 @@
 // outcomes is one tap, and the ledger answers "am I still on track" with no
 // tap at all. Completeness is the week view's job.
 
-import { createCalendar, effectiveBandWindow } from "./calendar.js";
+import {
+  createCalendar, effectiveBandWindow, loadCalendarData, loadCalendarToday,
+} from "./calendar.js";
 import { openTaskPanel } from "./task-panel.js";
 import { openCommitmentPanel } from "./commitment-panel.js";
 import { makeKey } from "./key.js";
+// The phone shell (day-mobile.js) installs the offline queue; on the desktop
+// Today tab it is never installed and queuedTaskIds() is simply always empty.
+import { queuedTaskIds } from "./offline-queue.js";
 
 const checkinEl = document.getElementById("day-checkin");
 const ledgerEl = document.getElementById("day-ledger");
@@ -73,6 +78,14 @@ function isResolved(task) {
   return task && (task.status === "done" || task.status === "partial");
 }
 
+// A block counts as settled for the ledger and the checklist if the server
+// says its task is done/partial OR the phone has an outcome for it waiting in
+// the offline queue (offline-queue.js). The queued case is a read-forward for
+// the UI only -- the moment the queue flushes, the server's status takes over.
+function isSettled(taskId, task) {
+  return isResolved(task) || queuedTaskIds().has(taskId);
+}
+
 // --- The energy check-in ---------------------------------------------------
 //
 // A five-station graduated scale. The scheduler already infers a value for
@@ -83,7 +96,12 @@ function isResolved(task) {
 
 async function renderCheckin() {
   const date = todayStr();
-  const cap = await fetch(`/api/capacity/${date}`).then((r) => (r.ok ? r.json() : null));
+  // Tolerate no connection: the check-in then shows the inferred default and
+  // the gauge still works once the queue/flush path is reached again. (Energy
+  // is not itself queued -- see setEnergy -- it is an online-only control.)
+  const cap = await fetch(`/api/capacity/${date}`)
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
   const inferred = cap?.inferred_energy ?? 3;
   const manual = cap?.manual_energy ?? null;
   const shown = manual ?? inferred;
@@ -123,16 +141,23 @@ async function renderCheckin() {
 }
 
 async function setEnergy(date, value) {
-  await fetch(`/api/capacity/${date}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ manual_energy: value }),
-  });
+  try {
+    await fetch(`/api/capacity/${date}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ manual_energy: value }),
+    });
+  } catch {
+    // Offline: energy isn't a queued mutation (it's a planning input, not an
+    // outcome the estimator learns from), so a change made with no connection
+    // is simply not saved. Re-render so the gauge snaps back to the truth.
+    return renderCheckin();
+  }
   // Energy gates the difficulty the scheduler will place (see
   // scheduling.ENERGY_MAX_DIFFICULTY), so a change to it is a planning input
   // exactly like a change to working hours -- replan, then redraw. Same
   // contract as calendar.js's band-resize gesture.
-  await fetch("/api/schedule/plan", { method: "POST" });
+  await fetch("/api/schedule/plan", { method: "POST" }).catch(() => {});
   await renderCheckin();
   calendar?.reload();
 }
@@ -141,8 +166,8 @@ async function setEnergy(date, value) {
 
 function renderLedger(data) {
   const blocks = todayTaskBlocks(data);
-  const done = blocks.filter((b) => isResolved(data.tasksById[b.task_id]));
-  const remaining = blocks.filter((b) => !isResolved(data.tasksById[b.task_id]));
+  const done = blocks.filter((b) => isSettled(b.task_id, data.tasksById[b.task_id]));
+  const remaining = blocks.filter((b) => !isSettled(b.task_id, data.tasksById[b.task_id]));
   const remainingMin = remaining.reduce(
     (sum, b) => sum + (new Date(b.end) - new Date(b.start)) / 60000,
     0,
@@ -232,6 +257,15 @@ function renderChecklist(blocks, data) {
       const mark = document.createElement("span");
       mark.className = "dr-checklist-mark";
       mark.textContent = task.status === "partial" ? "Part" : "Done";
+      row.appendChild(mark);
+    } else if (queuedTaskIds().has(block.task_id)) {
+      // An outcome tapped with no connection: shown as settled, marked so it
+      // reads as provisional, and no buttons (tapping again would just queue a
+      // second entry for the same block).
+      row.classList.add("is-done", "is-queued");
+      const mark = document.createElement("span");
+      mark.className = "dr-checklist-mark";
+      mark.textContent = "Queued";
       row.appendChild(mark);
     } else if (task && task.status !== "abandoned") {
       row.appendChild(makeOutcomes(task, block));
@@ -334,6 +368,17 @@ export function refreshDay(dateStr) {
     // A single-day view showing Monday when it is Thursday would be
     // nonsense -- this is the option that exists for exactly this case.
     snapToWeek: false,
+    // Today's data in one request (GET /api/schedule/today), which the phone's
+    // service worker can cache for offline. Only when the day on screen IS
+    // today: the month view reuses this same track to inspect an arbitrary
+    // past date, and that still needs the full fan-out.
+    loadData: async (start, end) => {
+      if (start === todayStr() && end === todayStr()) {
+        const bundle = await loadCalendarToday();
+        if (bundle) return bundle;
+      }
+      return loadCalendarData(start, end);
+    },
     // Defaults to today; set only when the month view opened us on a date.
     startDate: dateStr || undefined,
     onOpenTask: openTask,

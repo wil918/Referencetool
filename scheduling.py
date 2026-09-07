@@ -1146,9 +1146,16 @@ def resolve_partial(task_id, actual_minutes, est_minutes, actual_difficulty=None
     if not task:
         raise ValueError(f"no such task: {task_id}")
 
+    # `now`, when given, is when the work actually stopped -- an explicit anchor
+    # from a test, or the phone's own timestamp on a completion queued offline
+    # and replayed later (SCHEDULE_SCOPE.md's "offline queue"). Record the
+    # segment against that moment, not against whenever this request happened to
+    # arrive, so the estimator trains on real durations. Mirrors resolve_completed.
+    segment_finished_at = _anchor(now)
     db.save_task_actual(task_id, actual_minutes=actual_minutes,
                         actual_difficulty=actual_difficulty,
-                        actual_importance=actual_importance, notes=notes)
+                        actual_importance=actual_importance, notes=notes,
+                        completed_at=segment_finished_at.isoformat() if now is not None else None)
     db.update_task(task_id, status="partial")
     _drop_future_blocks(task_id, now)
 

@@ -9,6 +9,7 @@ Run with:
     python app.py
 then open the printed URL in a browser.
 """
+import functools
 import json
 import mimetypes
 import os
@@ -16,12 +17,14 @@ import tempfile
 import threading
 import uuid
 import webbrowser
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 
 import fitz  # PyMuPDF
-from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+from flask import (
+    Flask, abort, jsonify, make_response, request, send_file, send_from_directory,
+)
 
 import analyze
 import briefs
@@ -159,6 +162,60 @@ def _guard_api_when_exposed():
         return  # stays open so a client can tell "server up" from "wrong token"
     if not _capture_auth_ok():
         return jsonify({"error": "unauthorized"}), 401
+
+
+# --- Idempotent mutations for the phone's offline queue ------------------
+#
+# The phone queues completions, edits and new tasks made with no connection
+# (static/schedule/offline-queue.js) and replays them when the Mac is reachable.
+# A flaky connection routinely leaves it unsure whether a request landed, so it
+# resends. Every queued action carries a `client_id`; this decorator records
+# the response the first application produced against that id and, on any
+# resend, replays it verbatim instead of running the handler again. So a
+# completion counts once, a partial spawns one remainder, a "missed" bumps the
+# slip count once, however many times the queue flushes it. See
+# db.get_client_operation / db.save_client_operation.
+
+
+def idempotent(view):
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        body = request.get_json(force=True, silent=True)
+        client_id = body.get("client_id") if isinstance(body, dict) else None
+        if client_id:
+            prior = db.get_client_operation(client_id)
+            if prior is not None:
+                return app.response_class(
+                    prior["response_json"],
+                    status=prior["status_code"],
+                    mimetype="application/json",
+                )
+        response = make_response(view(*args, **kwargs))
+        if client_id and 200 <= response.status_code < 300:
+            db.save_client_operation(
+                client_id, response.get_data(as_text=True), response.status_code
+            )
+        return response
+
+    return wrapped
+
+
+def _phone_completed_at():
+    """The phone's own completion moment from the request body, validated, or
+    None. A completion queued offline at 09:00 and flushed at 18:00 must record
+    09:00 -- the estimator trains on how long work took, and every actual
+    stamped with laptop-open time would be noise (SCHEDULE_SCOPE.md's "offline
+    queue"). Returns (value, error_response): the caller returns the error if
+    one is set, otherwise passes value through as the outcome's `now`."""
+    body = request.get_json(force=True, silent=True) or {}
+    value = body.get("completed_at")
+    if value is None:
+        return None, None
+    try:
+        datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None, (jsonify({"error": "completed_at must be an ISO datetime"}), 400)
+    return value, None
 
 
 def _resolve_ref_path(ref):
@@ -1542,6 +1599,7 @@ def api_list_tasks():
 
 
 @app.post("/api/tasks")
+@idempotent
 def api_create_task():
     body = request.get_json(force=True, silent=True) or {}
     title = (body.get("title") or "").strip()
@@ -1592,6 +1650,7 @@ def api_get_task(task_id):
 
 
 @app.put("/api/tasks/<task_id>")
+@idempotent
 def api_update_task(task_id):
     if not db.get_task(task_id):
         abort(404)
@@ -1733,6 +1792,7 @@ def api_get_task_blocks(task_id):
 
 
 @app.post("/api/tasks/<task_id>/complete")
+@idempotent
 def api_complete_task(task_id):
     """One-tap completion -- the COMPLETED outcome (see
     scheduling.resolve_completed). With no body at all, every actual defaults
@@ -1761,17 +1821,26 @@ def api_complete_task(task_id):
     actual_importance = resolve("actual_importance", task["importance"])
     notes = body.get("notes", existing["notes"] if existing else None)
 
+    completed_at, error = _phone_completed_at()
+    if error:
+        return error
+
     result = scheduling.resolve_completed(
         task_id,
         actual_minutes=actual_minutes,
         actual_difficulty=actual_difficulty,
         actual_importance=actual_importance,
         notes=notes,
+        # None on the ordinary online tap -- db then stamps the actual "now".
+        # Set when the phone replays an offline completion: its own timestamp,
+        # so a late flush still records when the work actually finished.
+        now=completed_at,
     )
     return jsonify(result)
 
 
 @app.post("/api/tasks/<task_id>/partial")
+@idempotent
 def api_partial_task(task_id):
     """The PARTIALLY COMPLETED outcome (see scheduling.resolve_partial): the
     original is closed with the time actually spent, and a remainder task is
@@ -1798,6 +1867,10 @@ def api_partial_task(task_id):
         k: v for k, v in body.items() if k in scheduling.REMAINDER_INHERITED_COLUMNS
     }
 
+    completed_at, error = _phone_completed_at()
+    if error:
+        return error
+
     result = scheduling.resolve_partial(
         task_id,
         actual_minutes=actual_minutes,
@@ -1805,17 +1878,20 @@ def api_partial_task(task_id):
         actual_difficulty=body.get("actual_difficulty", task["difficulty"]),
         actual_importance=body.get("actual_importance", task["importance"]),
         notes=body.get("notes"),
+        now=completed_at,
         **overrides,
     )
     return jsonify(result)
 
 
 @app.post("/api/tasks/<task_id>/not-completed")
+@idempotent
 def api_not_completed_task(task_id):
     """The NOT COMPLETED outcome (see scheduling.resolve_not_completed): the
     task returns to the pool unchanged, slip_count goes up by one, and no
     actual is recorded -- never starting a task says nothing about how long
-    it takes."""
+    it takes. @idempotent so a queued "missed" replayed twice bumps slip_count
+    once, not once per flush."""
     if not db.get_task(task_id):
         abort(404)
     return jsonify(scheduling.resolve_not_completed(task_id))
@@ -2883,10 +2959,17 @@ def api_get_schedule():
             return jsonify({"error": "start and end must be YYYY-MM-DD"}), 400
 
     try:
-        result = scheduling.plan()
+        return jsonify(_schedule_range_payload(start, end))
     except scheduling.DependencyCycleError as e:
         return jsonify({"error": str(e), "task_ids": e.task_ids}), 400
 
+
+def _schedule_range_payload(start=None, end=None):
+    """The body of GET /api/schedule -- the committed blocks in [start, end]
+    plus the freshly-computed at-risk list. Factored out so /api/schedule/today
+    can hand back the same block/at-risk shape inside its one-request bundle.
+    Raises scheduling.DependencyCycleError, which the callers translate to 400."""
+    result = scheduling.plan()
     range_start = start or result["today"]
     range_end = end or result["horizon_end"]
     # end is inclusive, and db's range is half-open, so the query runs to the
@@ -2905,7 +2988,7 @@ def api_get_schedule():
         if range_start <= g["start"][:10] <= range_end
     ]
 
-    return jsonify({
+    return {
         "start": range_start,
         "end": range_end,
         "blocks": blocks,
@@ -2920,6 +3003,69 @@ def api_get_schedule():
         # reservation directly on the grid; the week and day views don't need
         # it, so it rode along unused until now.
         "finishing_buffer_minutes": result["finishing_buffer_minutes"],
+    }
+
+
+@app.get("/api/schedule/today")
+def api_schedule_today():
+    """Everything the phone day view needs, in ONE request.
+
+    calendar.js's loadCalendarData assembles today's picture from about a dozen
+    calls -- the schedule, both hour bands and their overrides, commitments,
+    tasks, locations, deliverables, recurrence rules, the suggested bedtime and
+    today's energy. On a phone on a bad connection one round trip beats a
+    dozen, and it gives the service worker (static/sw.js) a single response to
+    cache so the app opens to today's plan with no connection at all.
+
+    Read-only and derived -- it invents nothing, it just gathers. The blocks
+    and at-risk list are exactly what /api/schedule?start=today&end=tomorrow
+    returns (the extra day is calendar.js's convention: the small hours of
+    tomorrow render at the foot of today's column)."""
+    today = date.today().isoformat()
+    fetch_end = (date.today() + timedelta(days=1)).isoformat()
+    try:
+        schedule = _schedule_range_payload(today, fetch_end)
+    except scheduling.DependencyCycleError as e:
+        return jsonify({"error": str(e), "task_ids": e.task_ids}), 400
+
+    start_of_day = f"{today}T00:00:00"
+    stop = f"{fetch_end}T23:59:59"
+    commitments = [
+        c for c in db.list_commitments()
+        if c["start"] < stop and c["end"] > start_of_day
+    ]
+
+    tasks = db.list_tasks()
+    project_ids = {
+        t["project_id"] for t in tasks
+        if t.get("deliverable_id") and t.get("project_id")
+    }
+    deliverables = []
+    for pid in project_ids:
+        deliverables.extend(db.list_deliverables(pid))
+
+    capacity = scheduling.compute_daily_capacity(today)
+    capacity["energy"] = scheduling.effective_energy(capacity)
+    bedtime = scheduling.suggested_bedtime(today)
+
+    return jsonify({
+        "date": today,
+        "schedule": schedule,
+        "commitments": commitments,
+        "working_hours": db.get_working_hours(),
+        "domestic_hours": db.get_domestic_hours(),
+        "working_overrides": db.list_hours_overrides("working"),
+        "domestic_overrides": db.list_hours_overrides("domestic"),
+        "bedtimes": [bedtime] if bedtime else [],
+        "tasks": tasks,
+        "locations": db.list_locations(),
+        "recurrence_rules": db.list_recurrence_rules(),
+        "deliverables": deliverables,
+        "energy": capacity,
+        # When this server assembled the payload -- the phone shows it as
+        # "last synced" and the service worker serves this same body (stale)
+        # when the Mac is unreachable.
+        "synced_at": datetime.now(timezone.utc).isoformat(),
     })
 
 

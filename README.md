@@ -205,6 +205,17 @@ The server refuses to start otherwise. The phone asks for that token once, on a
 connect screen, and stores it on the device; requests from the Mac itself are
 unaffected and never need it.
 
+**Offline.** A completion, a task edit or a new task made with no connection is
+queued on the phone (in IndexedDB) and flushed the next time the app opens with
+the Mac awake — each queued action carries the phone's own timestamp, so work
+done at 09:00 is still recorded as 09:00 even if the queue doesn't drain until
+that evening. The day view shows how many actions are waiting and when it last
+synced. Opening the app fully offline shows the last plan it saw rather than an
+error, but that shell/data cache is a service worker and service workers need a
+secure context: it works over HTTPS (`tailscale serve` gives the Mac an
+`https://…ts.net` name with a real cert) or on `localhost`, not over plain
+`http://…:5050`. The sync queue itself works either way.
+
 ## Project layout
 
 ```
