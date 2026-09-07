@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<!-- viewport-fit=cover so the sheet runs under the notch in standalone mode;
+     zoom is left enabled on purpose (accessibility). -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Today</title>
+
+<!-- Add to Home Screen -> a standalone, chrome-less app. -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Today">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<!-- The paper ground, so the OS frame around a standalone launch matches. -->
+<meta name="theme-color" content="#fcfcfa">
+<meta name="theme-color" content="#fcfcfa" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14181c" media="(prefers-color-scheme: dark)">
+
+<script src="/theme.js"></script>
+<link rel="stylesheet" href="/style.css">
+<!-- The drafting language, exactly as schedule.html loads it (CLAUDE.md hard
+     rule 6's schedule exception). -->
+<link rel="stylesheet" href="/drafting.css">
+<!-- The phone viewport around that drawing: layout, tap-target sizing and the
+     root scale only. No colour, weight or tone of its own -- those all stay in
+     drafting.css. -->
+<link rel="stylesheet" href="/schedule/day-mobile.css">
+</head>
+<body class="drafting dr-day-mobile">
+  <div class="dr-grain" aria-hidden="true"></div>
+
+  <!-- Token entry: one screen, shown when the server is exposed to the network
+       and wants a bearer token we don't have (or ours was refused). -->
+  <section id="token-screen" class="dr-token" hidden>
+    <div class="dr-titleblock">
+      <div class="dr-titleblock-field">
+        <span class="dr-micro">Fashion reference tool</span>
+        <h1 class="dr-title">Connect</h1>
+      </div>
+    </div>
+    <p class="dr-token-note">
+      This day view talks to the schedule running on your Mac. When that Mac is
+      reachable from outside its own network it asks for the access token from
+      your <code>.env</code> (<code>ARCHIVE_API_TOKEN</code>). Paste it once —
+      it stays on this device.
+    </p>
+    <label class="dr-token-label" for="token-input">Access token</label>
+    <input id="token-input" class="dr-token-input" type="text" inputmode="text"
+           autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false"
+           placeholder="paste the token">
+    <div class="dr-token-actions">
+      <button id="token-save" type="button" class="btn primary">Save &amp; connect</button>
+      <button id="token-clear" type="button" class="btn">Clear stored token</button>
+    </div>
+    <p id="token-status" class="dr-token-status muted" role="status"></p>
+  </section>
+
+  <!-- The day view itself. schedule/day.js mounts the shared calendar
+       component into #day-calendar and draws the check-in and the ledger
+       around it, exactly as the Today tab of schedule.html does. -->
+  <main id="day-root" hidden>
+    <div class="dr-day-topbar">
+      <div class="dr-titleblock">
+        <div class="dr-titleblock-field">
+          <span class="dr-micro" id="day-date"></span>
+          <h1 class="dr-title">Today</h1>
+        </div>
+      </div>
+      <div class="dr-day-topbar-actions">
+        <button id="day-refresh" type="button" class="btn" aria-label="Refresh">Refresh</button>
+        <button id="token-reopen" type="button" class="btn" aria-label="Connection settings">Key</button>
+      </div>
+    </div>
+
+    <div class="day-view">
+      <div id="day-checkin"></div>
+      <div id="day-ledger" class="day-ledger"></div>
+      <div id="day-calendar"></div>
+    </div>
+  </main>
+
+  <script type="module" src="/schedule/day-mobile.js"></script>
+  <script src="/ui-effects.js"></script>
+</body>
+</html>

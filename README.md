@@ -178,6 +178,33 @@ brief and classifying an imported timetable.
   next few scheduled work sessions), and **Brief** (the imported brief rendered
   readably).
 
+### Away from home
+
+The schedule can be checked from a phone — today's tasks, the day's calendar,
+and completion (Completed / Partial / Missed) in one thumb. It lives at its own
+route, **`/day`**, and is built to be added to the home screen: on iOS, Share →
+*Add to Home Screen* gives a full-screen app with no Safari chrome (a web app
+manifest and icons ship under `static/`).
+
+The phone talks to the same Flask server on your Mac — there is no cloud
+component and nothing syncs — so **the Mac has to be reachable and awake**:
+
+- **On the same Wi-Fi**, set `ARCHIVE_HOST=0.0.0.0` in `.env` and open
+  `http://<your-mac's-name>.local:5050/day` on the phone.
+- **Anywhere else**, use [Tailscale](https://tailscale.com/) (or any equivalent
+  WireGuard / VPN mesh) so the phone and the Mac share a private network, then
+  use the Mac's Tailscale address. This is the intended way to use it from a
+  studio or on the move.
+- **A sleeping Mac is unreachable.** There is no server in between to answer
+  while it's asleep — the day view will say it can't connect until the Mac is
+  awake again. (`caffeinate` while you're out, or wake it before you leave.)
+
+Binding beyond `127.0.0.1` puts the whole API on whatever network you're on, so
+it is **only allowed with `ARCHIVE_API_TOKEN` also set** — a long random string.
+The server refuses to start otherwise. The phone asks for that token once, on a
+connect screen, and stores it on the device; requests from the Mac itself are
+unaffected and never need it.
+
 ## Project layout
 
 ```

@@ -1,0 +1,16 @@
+{
+  "name": "Studio Schedule — Today",
+  "short_name": "Today",
+  "description": "Today's tasks, the day's calendar and one-tap completion, from the studio floor.",
+  "start_url": "/day",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#fcfcfa",
+  "theme_color": "#fcfcfa",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

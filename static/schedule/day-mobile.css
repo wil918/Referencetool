@@ -1,0 +1,180 @@
+/* The phone viewport around the day view (static/day.html).
+ *
+ * CLAUDE.md hard rule 6 keeps every value of the drafting LANGUAGE -- line
+ * weights, tones, the two accents, the type scale -- defined once at the top of
+ * drafting.css. This file does not touch any of that: it is the layout, the
+ * tap-target sizing and the safe-area handling for one small screen, and it
+ * introduces no colour, weight or tone. It composes drafting.css's own
+ * --dr-* tokens throughout, exactly as section 14 (the desktop day view) does.
+ *
+ * Loaded only by day.html, after style.css and drafting.css.
+ */
+
+/* --- The shell ---------------------------------------------------------- */
+
+.dr-day-mobile {
+  /* Standalone launch runs under the notch (viewport-fit=cover); keep content
+     clear of it without a header bar. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+           env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+.dr-day-mobile main#day-root {
+  padding: 0.9rem 0.9rem 3rem;
+  max-width: 40rem;
+  margin: 0 auto;
+}
+
+.dr-day-mobile .day-view { gap: 1.6rem; }
+
+/* Top bar: the date and two utility buttons, no navigation. The drawing is
+   identified by its title block, as everywhere else. */
+.dr-day-topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 1.1rem;
+}
+
+.dr-day-topbar-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+
+/* --- Touch targets ----------------------------------------------------------
+   Everything tappable gets a comfortable minimum for a thumb used standing up.
+   These are ergonomics (a minimum size, generous hit padding), not a redraw of
+   the primitive -- the borders, ink and tone are still section 8/11/14's. */
+
+.dr-day-mobile .btn {
+  min-height: 2.75rem;
+  padding-inline: 0.9rem;
+  display: inline-flex;
+  align-items: center;
+}
+
+.dr-day-mobile .dr-gauge-station {
+  min-height: 3rem;
+  width: 3.1rem;
+  font-size: var(--dr-t-figure);
+}
+
+.dr-day-mobile .dr-checkin { gap: 1.1rem; }
+
+/* The completion list: on a narrow screen the three outcomes cannot sit beside
+   the title, so the row becomes two lines and the outcomes span the width as
+   full-size buttons. Completion is the primary action here -- it should be the
+   easiest thing to hit. */
+.dr-day-mobile .dr-checklist-row {
+  grid-template-columns: 3.4rem 1fr;
+  row-gap: 0.55rem;
+  padding: 0.7rem 0;
+}
+
+.dr-day-mobile .dr-checklist-title {
+  min-height: 2.75rem;
+  display: flex;
+  align-items: center;
+  font-size: var(--dr-t-lead);
+}
+
+.dr-day-mobile .dr-checklist-mark { grid-column: 2; justify-self: start; }
+
+.dr-day-mobile .dr-outcomes {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.dr-day-mobile .dr-outcomes.is-editing {
+  grid-template-columns: 1fr 1fr;
+  align-items: stretch;
+}
+
+.dr-day-mobile .dr-outcome {
+  min-height: 2.75rem;
+  padding: 0.4rem 0.3rem;
+  text-align: center;
+  justify-content: center;
+}
+
+.dr-day-mobile .dr-outcomes input {
+  min-height: 2.75rem;
+  width: 100%;
+  font-size: var(--dr-t-lead);
+}
+
+.dr-day-mobile .dr-outcomes.is-editing .dr-outcome.is-done { grid-column: 1 / -1; }
+
+/* --- The calendar on a phone ------------------------------------------------
+   One column already (numDays: 1). Trim the chrome that only makes sense with a
+   mouse and a wide sheet, and let the track own most of the viewport. */
+
+.dr-day-mobile .schedule-toggles { display: none; }
+
+.dr-day-mobile .schedule-calendar-toolbar {
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.7rem;
+}
+
+.dr-day-mobile .schedule-calendar-body {
+  max-height: 68vh;
+}
+
+/* Band edges are resized by dragging -- a desktop affordance, and a hazard next
+   to touch scrolling. Hours are edited on the full schedule page instead. */
+.dr-day-mobile .dr-band-handle { display: none; }
+
+/* Let the browser treat a vertical drag as a scroll, so a swipe that starts on
+   a task block scrolls the day instead of being captured as a block move. A
+   tap (no movement) still opens the task; the block drag stays a
+   desktop-only nicety. */
+.dr-day-mobile .schedule-calendar-body,
+.dr-day-mobile .schedule-day-track,
+.dr-day-mobile .dr-block,
+.dr-day-mobile .dr-band { touch-action: pan-y; }
+
+/* --- Token screen --------------------------------------------------------- */
+
+/* .dr-token sets its own display, so -- as everywhere in this codebase -- the
+   hidden attribute has to be re-asserted over it. */
+.dr-token[hidden] { display: none; }
+
+.dr-token {
+  max-width: 30rem;
+  margin: 0 auto;
+  padding: 2.4rem 1.2rem 3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.dr-token-note { font-size: var(--dr-t-body); color: var(--dr-ink-2); line-height: 1.5; }
+.dr-token-note code {
+  font-family: var(--dr-face);
+  background: var(--dr-paper-2);
+  padding: 0 0.25em;
+}
+
+.dr-token-label {
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-label);
+  letter-spacing: var(--dr-track-label);
+  text-transform: uppercase;
+  color: var(--dr-ink);
+}
+
+.dr-token-input {
+  min-height: 3rem;
+  border: 0;
+  border-bottom: var(--dr-rule-line);
+  background: transparent;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-figure);
+  color: var(--dr-ink);
+  padding: 0.3rem 0.1rem;
+}
+
+.dr-token-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.4rem; }
+.dr-token-actions .btn { min-height: 2.75rem; padding-inline: 1rem; display: inline-flex; align-items: center; }
+.dr-token-status:empty { display: none; }

@@ -27,6 +27,26 @@ CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5")
 # if you ever expose the app beyond localhost.
 ARCHIVE_API_TOKEN = os.getenv("ARCHIVE_API_TOKEN") or None
 
+# Which interface the server binds to. Default 127.0.0.1: nothing off this
+# machine can reach it, and the machine boundary is the trust boundary -- the
+# API needs no token because only local processes can call it. Set
+# ARCHIVE_HOST=0.0.0.0 (or a specific address) in .env to reach the schedule
+# from a phone on the same network / over Tailscale. Doing so is only allowed
+# with ARCHIVE_API_TOKEN also set: app.py refuses to start otherwise, and every
+# /api/ call from a non-loopback client is then checked against that token.
+ARCHIVE_HOST = os.getenv("ARCHIVE_HOST") or "127.0.0.1"
+
+
+def host_is_loopback(host):
+    """True if binding `host` exposes the server to this machine only."""
+    return host in ("127.0.0.1", "::1", "localhost", "")
+
+
+# Whether the current bind reaches beyond this machine. When true the schedule
+# API is only as private as ARCHIVE_API_TOKEN makes it, so the token stops
+# being optional -- see app.py's startup check and _guard_api_when_exposed.
+LAN_EXPOSED = not host_is_loopback(ARCHIVE_HOST)
+
 
 def _detect_local_timezone():
     """The IANA zone this machine runs in, e.g. "Europe/London".
