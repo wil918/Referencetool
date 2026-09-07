@@ -138,8 +138,15 @@ export function effectiveBandWindow(dateStr, weeklyRows, overrides) {
 // --- Data loading ------------------------------------------------------------
 
 async function getJSON(url) {
-  const res = await fetch(url);
-  return res.ok ? res.json() : null;
+  try {
+    const res = await fetch(url);
+    return res.ok ? res.json() : null;
+  } catch {
+    // Offline with no service-worker cache for this URL: a null the callers
+    // already handle (every use is `?? []` / `|| {}`), not an exception that
+    // takes the whole reload down.
+    return null;
+  }
 }
 
 /** Everything one visible range needs, in one pass. Exported so a future
@@ -204,6 +211,41 @@ export async function loadCalendarData(startDate, endDate) {
     recurrenceRulesById: Object.fromEntries((recurrenceRules || []).map((r) => [r.id, r])),
     projects: projects || [],
     locationsById,
+  };
+}
+
+/** The single-request path for a day view showing *today*.
+ *
+ * GET /api/schedule/today returns, in one payload, what loadCalendarData
+ * assembles from about a dozen calls -- so a phone on a bad connection makes
+ * one round trip, and the service worker (static/sw.js) has one response to
+ * cache for offline. Returns the EXACT same shape loadCalendarData does, or
+ * null if the endpoint is unreachable and nothing was cached (the caller then
+ * falls back to loadCalendarData, or shows its offline state).
+ *
+ * Kept adjacent to loadCalendarData on purpose: the two must return identical
+ * shapes, and a change to one is a change to both. */
+export async function loadCalendarToday() {
+  const p = await getJSON("/api/schedule/today");
+  if (!p) return null;
+  const schedule = p.schedule || {
+    blocks: [], at_risk: [], at_risk_by_deliverable: [], chronically_slipping: [],
+  };
+  return {
+    schedule,
+    recurrenceGhosts: schedule.recurrence_ghosts || [],
+    finishingBufferMinutes: schedule.finishing_buffer_minutes ?? 24 * 60,
+    commitments: p.commitments || [],
+    workingHours: p.working_hours || [],
+    domesticHours: p.domestic_hours || [],
+    workingOverrides: p.working_overrides || [],
+    domesticOverrides: p.domestic_overrides || [],
+    bedtimes: p.bedtimes || [],
+    tasksById: Object.fromEntries((p.tasks || []).map((t) => [t.id, t])),
+    deliverablesById: Object.fromEntries((p.deliverables || []).map((d) => [d.id, d])),
+    recurrenceRulesById: Object.fromEntries((p.recurrence_rules || []).map((r) => [r.id, r])),
+    projects: [],
+    locationsById: Object.fromEntries((p.locations || []).map((l) => [l.id, l])),
   };
 }
 
@@ -329,6 +371,10 @@ export function createCalendar(container, options = {}) {
   const onOpenTask = options.onOpenTask || (() => {});
   const onOpenCommitment = options.onOpenCommitment || (() => {});
   const onDataLoaded = options.onDataLoaded || (() => {});
+  // How a reload fetches its data. Defaults to the dozen-call fan-out; the
+  // phone day view passes a loader that tries GET /api/schedule/today first
+  // (one round trip, service-worker-cacheable) and falls back to this.
+  const loadData = options.loadData || loadCalendarData;
   // Only the week view (numDays: 7) should open on Monday regardless of what
   // day it is today -- the day view (numDays: 1) mounts this same component
   // and must show exactly the date it's asked for, so it defaults off there.
@@ -1175,7 +1221,7 @@ export function createCalendar(container, options = {}) {
 
   async function reload() {
     const dates = visibleDates();
-    data = await loadCalendarData(dates[0], dates[dates.length - 1]);
+    data = await loadData(dates[0], dates[dates.length - 1]);
     render();
     scrollToNow();
     onDataLoaded(data);

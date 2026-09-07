@@ -39,6 +39,26 @@
 
 .dr-day-topbar-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
 
+/* Sync state: one letterspaced micro line under the top bar, the same
+   annotation register as .dr-micro. Ink-3 at rest ("Synced 4 min ago"), the
+   accent when something is waiting -- the accent is only ever an annotation
+   here, never a fill (drafting.css section 8). */
+.dr-day-mobile .dr-sync {
+  margin: -0.4rem 0 1rem;
+  font-family: var(--dr-face);
+  font-size: var(--dr-t-label);
+  letter-spacing: var(--dr-track-label);
+  text-transform: uppercase;
+  color: var(--dr-ink-3);
+}
+.dr-day-mobile .dr-sync.is-pending { color: var(--dr-red); }
+.dr-day-mobile .dr-sync[hidden] { display: none; }
+
+/* A queued outcome: settled, but pending confirmation from the Mac. Reuses the
+   done row's dimming; the "Queued" mark is drawn in the accent so it reads as
+   provisional next to a solid "Done". */
+.dr-day-mobile .dr-checklist-row.is-queued .dr-checklist-mark { color: var(--dr-red); }
+
 /* --- Touch targets ----------------------------------------------------------
    Everything tappable gets a comfortable minimum for a thumb used standing up.
    These are ergonomics (a minimum size, generous hit padding), not a redraw of
