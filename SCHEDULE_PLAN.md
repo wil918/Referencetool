@@ -2,6 +2,8 @@
 
 Nineteen sessions. Scope, data model and reasoning live in `SCHEDULE_SCOPE.md`; read that first if anything here seems arbitrary. Conventions come from `CLAUDE.md`, which Claude Code loads automatically.
 
+**Outstanding follow-up:** session 13 shipped recurrence with no UI — the rules, table and spawning logic all work, but there is no way to create a recurring task. Run the follow-up prompt before relying on it.
+
 **Status: sessions 1–9 complete, plus 6b. Next up: 9a (timetable detail) → 9b (schedule shell) → 9c (drafting language) → session 10.**
 
 The working-hours gap noted after session 4 is closed — `static/schedule/hours-editor.js` and the draggable bands in `calendar.js` both landed in session 9. Keep the distinction in mind regardless: `location_hours` is when a *place* is open, `working_hours` is when *you* are willing to work, and a later session will try to merge them.
@@ -22,14 +24,14 @@ Two different levers. **Thinking level buys care** — working through edge case
 
 | Model | Sessions | Why |
 |---|---|---|
-| Opus | 5, 6, 9c, 9d | The scheduler and its constraints, and the visual language. Several dimensions interacting at once, where a structural mistake is expensive downstream and a spec cannot fully pre-empt a bad interaction. |
+| Opus | 5, 6, 9c, 9d, 11b | The scheduler and its constraints, and the visual work. Several dimensions interacting at once, where a structural mistake is expensive downstream and a spec cannot fully pre-empt a bad interaction. |
 | Sonnet | everything else | Shape already fixed by the prompt; the level does the work. |
 
 | Level | Sessions |
 |---|---|
 | `medium` | 3, 10, 11, 12, 13, 14, 19 |
 | `high` | 1, 2, 4, 6b, 7, 8, 9, 9a, 9b, 15, 16, 16b, 17, 18 |
-| `max` | 5, 6, 9c, 9d |
+| `max` | 5, 6, 9c, 9d, 9e, 11b |
 | `ultracode` | none — reserve for a debugging emergency |
 
 **Opus earns its cost more on debugging than on building.** Against a detailed prompt, Sonnet builds well. When a session's output misbehaves in a way you cannot immediately explain — the scheduler placing things oddly, a replan that is not idempotent, a constraint firing when it should not — that is when to switch models and re-open the problem. Reaching for it by default spends budget on work the prompt has already de-risked.
@@ -1165,6 +1167,100 @@ or merely busier? If busier, reduce.
 
 ---
 
+### Session 9e — Real media: density over alpha, and scanned texture
+
+**Delivers:** an ink system that varies by density rather than opacity, more than one drawing medium, scanned paper and graphite, and the textures already defined actually deployed.
+
+**Model:** Opus 5, `max` · 4–5 h · 350–500k tokens · 1–1.5 windows
+
+````
+Look at design-references/ again -- 02 and 04 especially, closely, at full size.
+Then read static/drafting.css in full and static/schedule/specimen.html.
+
+The system is correct and still reads as generated. Two measured causes:
+
+  ONE INK AT EIGHT OPACITIES. --dr-ink-rgb is a single colour (33, 32, 30) and
+  the entire hierarchy is that colour at different alphas: cut 0.88, line 0.58,
+  hair 0.32, construction 0.20, setting-out 0.11, plus ink-2/3/4 at 0.74/0.52/
+  0.34. The widths are properly distinct; the colour never is.
+
+  TEXTURE DEFINED BUT NOT DEPLOYED. --dr-hatch-a is used twice, --dr-wash
+  twice, --dr-grain once, across 3,213 lines. The vocabulary exists and almost
+  nothing speaks it.
+
+1. DENSITY, NOT ALPHA. Graphite does not get lighter, it gets SPARSER. A faint
+   pencil line is black particles with gaps, catching only the peaks of the
+   paper tooth; it is not grey. Uniform alpha is the single thing most
+   responsible for this reading as rendered rather than drawn.
+
+   Rebuild the faint end of the scale as masked density: full-strength ink
+   masked by high-frequency noise, so the line breaks up rather than fading.
+   The strong end -- cut and line -- stays solid, because a firm line IS solid.
+   The transition from solid to broken is where the drawing comes alive.
+
+   CONSTRAINT THAT STILL HOLDS: masks are as expensive as filters, and
+   CLAUDE.md already forbids a task block from carrying a filter, blend or mask.
+   Density-masked ink is for STATIC elements only -- rules, bands, axis, the
+   construction layer. Blocks keep ruled edges. Check a drag still feels
+   immediate.
+
+2. MORE THAN ONE MEDIUM. The references are not one pencil. They are graphite,
+   ink, and wash, and they differ in hue as well as darkness -- graphite is
+   cool and slightly reflective, ink is denser and warmer or bluer, wash is
+   transparent and pools.
+
+   Give each its own base RGB rather than deriving everything from one:
+     graphite   the setting-out, construction, hatching
+     ink        object lines, cut lines, type
+     wash       tone and bands only, never a line
+   Keep the difference small -- this is not colour-coding, it is the difference
+   between two pencils. If a viewer notices the hues as colours, it has gone
+   too far.
+
+3. VENDOR SCANNED TEXTURE. Procedural noise got the system this far and cannot
+   get it further: real paper tooth is irregular in a way feTurbulence is not.
+
+   Vendor seamless tiles under static/vendor/textures/ with provenance and
+   licence beside them, as the fonts already are:
+     paper tooth, graphite grain, and a wash/bleed tile
+
+   Best source is your own scanner -- scan a sheet of cartridge paper and a
+   graphite swatch at 600dpi, tile them seamlessly. That is more authentic than
+   anything stock and has no licensing question at all. Otherwise use a CC0
+   source and record it.
+
+   Size discipline: seamless tiles around 512px, JPEG where there is no alpha,
+   and keep the total well under a megabyte. Four 2MB PNGs would be a worse
+   sin than flat colour.
+
+4. DEPLOY WHAT ALREADY EXISTS. Hatch, stipple and wash are defined and unused.
+   Every band, every unavailable region, every disabled or ghosted state,
+   every tonal area should carry one. Tone in this language is hatching, never
+   a flat fill at reduced opacity -- that rule is already written and is being
+   honoured in two places out of many.
+
+5. DARK MODE IS STILL A DIFFERENT MATERIAL. A scanned paper tile inverted is a
+   photographic negative. Either scan a dark ground -- a plate, a blueprint, a
+   toned sheet -- or drive dark mode from the graphite tile alone with the
+   ground as flat tone. Design it; do not invert it.
+
+6. Everything stays behind .dr-no-texture, and the system must still read
+   correctly with it on. If the drawing only works with texture, the texture is
+   doing work the ruled system should be doing.
+
+Update the specimen sheet: the ink scale shown as a strip from solid to broken,
+each medium beside the others, each texture on and off. Change a value in
+drafting.css and check it there first.
+
+Verify: put the specimen beside design-references/02 and 04 at full size --
+closer, or merely busier? Drag a block across a week and confirm no frame
+drops. Both themes. Then turn texture off and confirm the drawing still stands.
+````
+
+**Exit criteria:** faint lines break up rather than fading, three media are distinguishable without reading as colours, scanned tiles are vendored with provenance, tone is hatched everywhere it appears, and drags stay immediate.
+
+---
+
 ### Session 10 — Day view
 
 **Model:** Sonnet 5, `medium` · 2–3 h · 150–250k tokens · ~0.75 window
@@ -1240,6 +1336,112 @@ information. A month you cannot read at a glance has failed however well drawn.
 
 ---
 
+### Session 11b — The isometric month
+
+**Delivers:** a second month visualisation — an axonometric sheet with the month grid on the base plane and each day's work rising from it, over a plan view of the same month, drawn as one drawing.
+
+**Visual before functional.** The plain month view stays reachable and keeps the analytical job. This one is allowed to be beautiful first.
+
+**Model:** Opus 5, `max` · 4–5 h · 350–500k tokens · 1–1.5 windows
+**Why Opus:** projection geometry, draw order and visual judgement at once, with no spec that can fully pre-empt how it looks.
+
+````
+LOOK AT THE ATTACHED IMAGE FIRST, and at design-references/04, which is the
+same drawing. Everything below assumes you have.
+
+Then read static/drafting.css in full, static/schedule/specimen.html,
+static/schedule/calendar.js (its month mode), and CLAUDE.md's hard rule 6
+schedule exception.
+
+Build a second month visualisation on the month page: an AXONOMETRIC sheet,
+with the existing month view kept and switchable. This is the drawing in the
+reference image applied to a calendar.
+
+1. THE GEOMETRY. The month grid lies on the base plane, on the two horizontal
+   axes: weekday along one, week along the other. The VERTICAL axis carries
+   that day's work, stacked in the order it happens -- morning at the base,
+   evening at the top. Height is therefore load, and that is the whole idea: a
+   heavy day is a tower, an empty day is flat ground, and a deadline week reads
+   as a ridge before you have read a single word.
+
+   Use a true isometric projection, axes at 30 degrees:
+     sx = (col - row) * cos(30) * cellW
+     sy = (col + row) * sin(30) * cellH - z * unitH
+   with col = weekday, row = week index. Put the projection in one function and
+   derive every position from it; nothing may be positioned by eye.
+
+   DRAW BACK TO FRONT, sorted by (row + col) ascending, or towers will overlap
+   wrongly and no amount of styling will fix it. This is the single most common
+   way an isometric drawing goes wrong.
+
+2. WHAT MAPS TO WHAT.
+     a day             a cell on the base plane
+     a task            a block in that day's stack, at its scheduled position
+     a commitment      the same, distinguished as the existing block vocabulary
+                       distinguishes them -- hatch against rule, not colour
+     travel            the thin connective element it already is
+     a deadline        struck as a circle on the base plane, which in
+                       projection becomes an ellipse. Strike it WHOLE with its
+                       centre marked, as the reference does -- an arc is only
+                       the part that got inked.
+     today             marked on the base plane, not by colouring its tower
+
+3. STYLE COMES ENTIRELY FROM drafting.css. Line weights, pencil setting-out,
+   tones, hatches, the two accents, the type. Introduce no value of its own; if
+   something is missing, add it to the system.
+
+   Carry the reference's qualities deliberately:
+     - construction lines projected from the base grid up the vertical axis,
+       overrunning as --dr-overrun already specifies
+     - the setting-out visible under the object lines, thinner and lighter
+     - small studies clustered at the sheet's edges -- a legend, a key, the
+       month's totals drawn as marginal figures rather than a data panel
+     - the whole sheet reading as one drawing, not as a chart with decoration
+
+   The construction layer remains texture, never information, and
+   .dr-no-construction must still strip it cleanly.
+
+4. THE PLAN BELOW. Under the axonometric, on the same sheet and aligned to the
+   same vertical centre line, draw the month in plan -- the ordinary calendar
+   grid, in the same hand. One horizontal rule divides them, exactly as the
+   reference divides its two halves. They are one drawing, not two panels
+   stacked: the plan's columns must line up with the base plane's axes so the
+   eye reads them as the same month seen twice.
+
+5. THE SWITCH. The existing month view stays, reachable in one control on the
+   month page. Remember which was last used. The plain view keeps the
+   analytical job -- deadline collisions, overloaded weeks -- and this one is
+   not required to do that job as well.
+
+6. SVG, NOT THREE.JS. This is a drawing, not a scene: it wants exact hairlines,
+   the existing pencil textures and no lighting. A WebGL renderer would fight
+   every part of the drafting language and pull in scene-host.js for something
+   that never moves. CLAUDE.md's fourth-caller rule is about 3D views of the
+   archive; this is not one.
+
+7. PERFORMANCE. A busy month is several hundred blocks, each with setting-out.
+   Draw the construction layer once for the sheet rather than per block, reuse
+   pencil textures as background images rather than per-element filters -- the
+   rule drafting.css already holds -- and keep the whole sheet static. If it
+   cannot stay smooth, reduce what is drawn at low zoom rather than accepting
+   lag.
+
+8. INTERACTION IS MINIMAL, deliberately. Hover identifies a block; clicking a
+   day opens the day view. No dragging, no editing, no rotation in this
+   session. Adding orientation control later is easy once the projection lives
+   in one function; adding it now would cost the drawing.
+
+Verify: a month with a heavy week and an empty week reads as ridge and flat at
+a glance; towers never overlap wrongly; the plan below aligns with the base
+plane above; the switch persists; .dr-no-construction and .dr-no-texture both
+still strip cleanly; then put it beside the reference image -- closer, or
+merely busier?
+````
+
+**Exit criteria:** load is legible as height, the projection is correct back-to-front, plan and axonometric read as one sheet, and the plain month view is still one control away.
+
+---
+
 ### Session 12 — Deliverables UI
 
 **Model:** Sonnet 5, `medium` · 2–3 h · 150–250k tokens · ~0.6 window
@@ -1267,6 +1469,8 @@ expecting fixed keys, and degrade gracefully when a key is missing.
 ---
 
 ### Session 13 — Recurrence
+
+> **Shipped without a UI** (`c371247`). The prompt below specifies the rules, the table and the spawning logic but never says to build a way to create a recurring task — the same omission as the working-hours gap after session 4. `/api/recurrence-rules` exists and `scheduling.spawn_recurrence_successor` works; nothing in `static/` references recurrence, so it is unreachable. A follow-up prompt closes it; see the note under Status.
 
 **Model:** Sonnet 5, `medium` · 2–3 h · 150–250k tokens · ~0.6 window
 
@@ -1335,7 +1539,41 @@ route), the deliverables routes, and SCHEDULE_SCOPE.md's brief section first.
      - deliverables, with page counts, required items and weightings
      - a task skeleton for each deliverable
      - mandatory activities that imply location-bound tasks -- shop visits,
-       archive and museum visits, workshops with required attendance
+       archive and museum visits, studio sampling
+
+   RECONCILE AGAINST THE TIMETABLE BEFORE PROPOSING ANYTHING. A brief names
+   things already in the imported feed -- inductions, reviews, presentations,
+   the briefing itself. Turning those into tasks states the same obligation
+   twice: a commitment you attend, and a task telling you to attend it.
+   ATTENDANCE IS NEVER A TASK. It is already a commitment.
+
+   For every candidate, decide which of three it is:
+
+     ALREADY COVERED -- a commitment exists for it. Propose nothing, but say so
+     in the review list with the commitment it matched, so the omission reads
+     as a decision rather than a miss.
+
+     IMPLIES PREPARATION -- a commitment exists, but attending it requires work
+     beforehand. "Bring your concept statement, primary research and first
+     samples pinned up" is a real task; "attend the interim review" is not.
+     Propose the preparation, with its deadline set to the commitment's start.
+     This is the case most worth getting right -- it is where a brief's
+     checkpoints become work you would otherwise do the night before.
+
+     GENUINELY UNSCHEDULED -- fabric sourcing, archive visits, sampling,
+     drawing. These become tasks as normal.
+
+   MATCH ON DATE FIRST, NOT TITLE. This feed's titles are the module code and
+   name and nothing else -- every Surface session reads "5FADE002W/1 Surface",
+   so an induction is indistinguishable from a studio day by title alone. A
+   brief naming "Wednesday 23 September" against a commitment that day is a
+   match; keyword agreement raises confidence but cannot be required. Where
+   session 9a's meta is populated, delivery_type and details are better signals
+   and should be preferred when present.
+
+   Be conservative in both directions: propose a task on a weak match and let
+   the user delete it, rather than suppressing one. A missing task is
+   invisible; a duplicate is merely annoying.
 
    NOTHING ENTERS THE SCHEDULE UNAPPROVED. Present everything as a reviewable
    list where each item can be edited, accepted or discarded. A misread brief
@@ -1350,20 +1588,238 @@ route), the deliverables routes, and SCHEDULE_SCOPE.md's brief section first.
    Store the extraction in briefs.extracted so a re-import can be compared
    against what was accepted before.
 
-2. CONCEPT ANALYSIS. Given the brief and the user's own initial notes or
+2. CONCEPT ANALYSIS. Given the brief and the user's own initial notes and
    references, produce a critique: where the connection to the brief is strong,
    where it is asserted rather than demonstrated, and what research directions
    would strengthen it.
 
-   Extend analyze.py rather than adding a second Claude path -- it already
-   builds multi-reference prompts and manages a conversation. The output should
-   be savable to the project canvas or homepage as a note.
+   THE INPUT SET COMES FROM THE CANVAS MARQUEE. The infinite canvas already has
+   box-selection -- middle-drag or modifier-drag selects several nodes at once
+   -- and that is exactly the gesture for "these are the things I am thinking
+   with". Do not build a second picker.
+
+   Lasso a mix of references and text notes, then run the analysis on the
+   selection. Both kinds matter and they carry different weight: reference
+   nodes are the visual research, text nodes are the user's own thinking about
+   it, and the critique is largely about whether the second is actually
+   supported by the first. Pass them as distinct inputs, not as one flat list.
+
+   INCLUDE BY WHAT A NODE CONTAINS, NOT BY ITS KIND. The line is whether it
+   holds the user's own words:
+
+     include   kind='text' (Simple text, plain, in content)
+               kind='widget' with config.type='notepad' -- Notepad is a WIDGET
+               by implementation but it is the user writing, and on a real
+               canvas half the widget nodes are notepads. Excluding it by kind
+               silently drops most of the thinking.
+     exclude   colourspace, similarity, colour-palette, title, grid-button --
+               views of data or navigation, not ideas.
+
+   THE TEXT IS IN TWO DIFFERENT PLACES. A text node keeps plain text in
+   canvas_nodes.content; a notepad keeps HTML in config.widget.content, written
+   by rich-text.js as inline-styled spans. Read both, and strip the notepad's
+   markup before it reaches the prompt -- raw, it is mostly style attributes.
+
+   Strip rather than flatten: rich-text.js encodes hierarchy in size and
+   weight, so a large bold run is a heading and should survive as one. Losing
+   that turns structured notes into a wall of sentences.
+
+   An `analysis` widget holds a previous critique. Include it if selected, but
+   label it as earlier AI output rather than the user's own position -- a model
+   shown its own prior conclusions as though they were the user's will agree
+   with itself.
+
+   Two things need extending, both narrowly:
+
+     - canvas/nodes.js keeps selectedNodeIds internally but its returned object
+       exposes only setData, addNode, removeNode, bounds, count and destroy.
+       Add a selection accessor returning the selected nodes with their kind,
+       reference_id and content. Do not change how selection itself works.
+
+     - analyze.py's start_conversation(ref_ids, mode) takes reference ids only.
+       Concept analysis also needs the brief and free text. Add an entry point
+       beside it rather than overloading that signature -- the existing
+       Analyze action must behave exactly as it does now.
+
+   Fall back sensibly: an empty selection analyses the project's references
+   against the brief, which is still useful and means the feature works before
+   anyone has put anything on a canvas.
 
    Be useful rather than flattering. A critique that says everything is fine is
-   worthless; the value is in naming the weak link.
+   worthless; the value is in naming the weak link -- the reference that is
+   there because it looks good rather than because it argues for anything.
+
+   Output saves back to the canvas as a text node, so the critique lands beside
+   the work it is about and can itself be selected into the next round.
 ````
 
 **Exit criteria:** the 2026 Construction brief produces a sensible reviewable skeleton, nothing enters unapproved, and a concept critique reads as genuinely critical.
+
+---
+
+### Session 15b — Timetable groups, and classification as a fallback
+
+**Delivers:** the group setting that resolves half the missing rooms, filtering of sessions that are not yours, and a cached Claude pass for whatever the deterministic parser cannot classify.
+
+**Model:** Sonnet 5, `high` · 3–4 h · 250–350k tokens · ~1 window
+
+````
+Read ics_import.py, the meta parsing from session 9a, db.py's COLOUR_ANALYSIS
+schema (the versioned-cache pattern this reuses), and tagging.py first.
+
+Measured against the real feed before writing this: 99 commitments, delivery_type
+parsing cleanly into nine values including Induction, room missing on 49,
+details missing on 27, and 8 events belonging to one group only. The parser is
+not the main problem. Do not replace it.
+
+1. WHICH GROUP AM I IN. Westminster splits this cohort into gp3 and gp4, and the
+   feed encodes it on a trailing line: "gp3; gp4" for a session running both
+   groups in parallel rooms, "gp4" for one group only.
+
+   Add a group setting to the schedule's settings. Then:
+
+     - ROOM RESOLUTION. When a session lists several rooms and several groups,
+       the orders correspond -- "A4-07 - FD L5 Studio; A4-05 - FD L5 Studio"
+       against "gp4; gp3" means gp4 is in A4-07. Pick the room matching the
+       user's group. This alone resolves most of the 49 missing rooms, with no
+       model involved.
+
+     - SESSIONS THAT ARE NOT YOURS. 8 events name only gp4. If the user is gp3
+       those are not their sessions and are blocking hours that are free. Do
+       not delete them -- the feed is the source of truth and a re-sync would
+       bring them back. Mark them as not-mine and exclude them from capacity,
+       with a way to see and override the exclusion. Getting this wrong in
+       either direction is costly: a missed class, or a fortnight of phantom
+       commitments.
+
+   Handle the group line being absent (63 events have none) as "applies to
+   everyone", which it does.
+
+2. CLASSIFICATION AS A FALLBACK, NEVER THE HAPPY PATH. After the deterministic
+   parser and the group logic have run, some events will still have gaps, and
+   next year's export will change shape. For those only, batch the raw
+   descriptions to Claude and ask for the same meta fields.
+
+   Four constraints, each of which matters more than the feature:
+
+     - BATCH BY DISTINCT DESCRIPTION SHAPE, not per event. Ninety-nine events
+       reduce to a handful of layouts; normalise, group, classify the groups,
+       apply to members. One call, not ninety-nine.
+
+     - CACHE IT LIKE colour_analysis. Its own table, keyed by a hash of the raw
+       description with an algorithm version alongside -- the exact pattern
+       COLOUR_ANALYSIS_SCHEMA already uses. A re-sync must not re-pay for a
+       description it has already classified, and re-syncs are frequent.
+
+     - NEVER REQUIRED. No API key, no network, or a failed call means import
+       still completes with whatever the parser got. This app is local-first
+       and a timetable import that hard-fails offline is a worse bug than a
+       missing room.
+
+     - NEVER OVERWRITE A CONFIDENT PARSE. The deterministic result wins where
+       it exists. The model fills gaps; it does not get a second opinion on
+       fields that already parsed.
+
+   Show which fields came from the model, so a wrong classification is
+   attributable rather than mysterious.
+
+3. USE delivery_type NOW THAT IT IS RELIABLE. It parses cleanly and nothing
+   consumes it. At minimum: Induction and Workshop should default to
+   support_level 'priority' on import rather than 'none', since those are
+   precisely the sessions where a tutor is present and you have their
+   attention. Optional Event should not consume capacity by default.
+
+   This is the session 4 bulk-reclassify problem solving itself from data that
+   was already there.
+
+Tests: a gp3 user gets A4-05 where the feed lists both rooms; a gp4-only event
+is excluded from a gp3 user's capacity and restorable by hand; a re-sync does
+not re-issue a classification call for an unchanged description; import
+succeeds with the Anthropic key removed; a confidently parsed field is never
+replaced by a model value.
+````
+
+**Exit criteria:** rooms resolve from the group setting, sessions that are not yours stop consuming capacity, and the model runs only on what the parser could not do — never twice for the same description.
+
+---
+
+### Session 15c — Brief provenance: re-import as a diff, and a scoped reset
+
+**Delivers:** a link from every brief-created row back to its brief, re-import that updates instead of duplicating, and a reset that removes what a brief made without touching your work.
+
+**Model:** Sonnet 5, `high` · 3–4 h · 250–350k tokens · ~1 window
+
+````
+Read app.py's api_apply_brief and api_delete_brief, db.py's DELIVERABLES and
+TASKS schema plus delete_brief, and db.py's reset_schedule (the scoped-reset
+pattern this narrows) first.
+
+Two bugs with one cause: nothing records which brief created a row.
+api_apply_brief inserts deliverables and tasks with no back-reference, so a
+second import has nothing to match against and inserts a duplicate set, and
+delete_brief removes only the brief row while everything it created stays.
+
+1. PROVENANCE. Add to both deliverables and tasks:
+     brief_id    TEXT, nullable -- which brief created this row
+     source_key  TEXT, nullable -- a stable identifier for the thing in the
+                 brief that produced it
+   Null on both means hand-made, which is the common case and must keep
+   behaving exactly as it does now.
+
+   THE KEY MUST BE STABLE ACROSS RE-IMPORTS, and that rules out the obvious
+   choice. Do not derive it from the title the model produced -- "Part 1 -
+   Research and Design Development Portfolio" may come back phrased slightly
+   differently next run, and then every deliverable looks new. Derive it from
+   the brief's own text: the part number, the heading as printed. If the source
+   document is unchanged, the key must be identical.
+
+2. RE-IMPORT IS A DIFF, NOT A REPLACE. Match extracted items against existing
+   rows by (brief_id, source_key) and present four groups:
+
+     unchanged  matched, no field differs -- listed, no action
+     changed    matched, something differs (a moved date, a revised page count)
+                -- show old against new, per field, and let the user accept
+                each
+     new        no match -- propose as session 15 already does
+     gone       exists locally but absent from the re-import -- propose
+                removal, never remove silently
+
+   A brief reissued with one date moved is the case this exists for, and it
+   must not cost you your task breakdown to absorb.
+
+3. SCOPED RESET, IN TWO STRENGTHS.
+
+     Remove what this brief created -- deliverables and tasks carrying its
+     brief_id.
+
+     Delete the brief and everything it created -- the same, plus the brief row
+     and its stored PDF. api_delete_brief should offer this rather than
+     orphaning rows as it does now.
+
+   PRESERVE WORK BY DEFAULT. A brief-created task that has been completed, is
+   partially complete, or has a row in task_actuals is no longer just an
+   import artefact -- it is a record of what you did. Default to keeping those
+   and clearing only untouched ones, and say plainly how many were kept and
+   why. Removing everything must be a separate, explicit choice.
+
+   Getting this wrong is the expensive direction: someone clearing a bad import
+   should not lose a fortnight of recorded actuals, which are also the
+   estimator's training data.
+
+   Report counts per table, as reset_schedule already does.
+
+4. Tasks whose deliverable is removed keep existing with deliverable_id nulled,
+   matching the cascade session 1 already defines. Do not delete a task because
+   its deliverable went.
+
+Tests: importing the same brief twice produces one set of deliverables, not
+two; a changed due date appears as changed rather than new; a hand-made
+deliverable is never touched by a brief reset; a completed brief-created task
+survives the default reset and is removed by the explicit one; deleting a brief
+leaves no orphans.
+````
+
+**Exit criteria:** re-importing is idempotent, a reissued brief diffs cleanly, and no reset can silently destroy recorded work.
 
 ---
 
@@ -1606,12 +2062,16 @@ solves the size problem at the same time.
 | 9b | Schedule shell and front door | Sonnet `high` | 3–4 | 280–380k | 1 |
 | 9c | The drafting language | **Opus** `max` | 4–5 | 350–500k | 1–1.5 |
 | 9d | Physical texture | **Opus** `max` | 3–4 | 300–420k | 1 |
+| 9e | Real media: density, scanned texture | **Opus** `max` | 4–5 | 350–500k | 1–1.5 |
 | 10 | Day view | Sonnet `medium` | 2–3 | 150–250k | 0.75 |
 | 11 | Month view | Sonnet `medium` | 2–3 | 150–250k | 0.6 |
+| 11b | The isometric month | **Opus** `max` | 4–5 | 350–500k | 1–1.5 |
 | 12 | Deliverables UI | Sonnet `medium` | 2–3 | 150–250k | 0.6 |
 | 13 | Recurrence | Sonnet `medium` | 2–3 | 150–250k | 0.6 |
 | 14 | Resource archive | Sonnet `medium` | 2–3 | 150–250k | 0.6 |
 | 15 | Brief import, concept analysis | Sonnet `high` | 3–4 | 250–350k | 1 |
+| 15b | Timetable groups, classification fallback | Sonnet `high` | 3–4 | 250–350k | 1 |
+| 15c | Brief provenance, diff re-import, reset | Sonnet `high` | 3–4 | 250–350k | 1 |
 | 16 | Project integration, hardening | Sonnet `high` | 2.5–3.5 | 200–300k | 0.75 |
 | 16b | Migrate archive to drafting language | Sonnet `high` | 3–4 | 280–380k | 1 |
 | 17 | Remote access, phone day view | Sonnet `high` | 3–4 | 250–350k | 1 |
