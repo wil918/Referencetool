@@ -6,6 +6,7 @@ tests of the pass/parse/cache logic, so they deliberately don't take the
 """
 import json
 import types
+from datetime import date
 
 import pytest
 
@@ -118,3 +119,89 @@ def test_a_retry_after_one_pass_fails_does_not_repeat_the_others(monkeypatch):
     assert calls == ["detail", "detail"]
     assert out["deliverables"][0]["spec"] == {"pages": 20}
     assert out["deliverables"][1]["source_key"] == "part-2"
+
+
+# --- date context and validation (fault: the year is guessed when it should
+# be known) ------------------------------------------------------------------
+
+
+def test_academic_year_range_spans_september_to_august():
+    assert briefs.academic_year_range(date(2026, 9, 21)) == ("2026-09-01", "2027-08-31")
+    # Before September, still inside the academic year that started last autumn.
+    assert briefs.academic_year_range(date(2027, 3, 1)) == ("2026-09-01", "2027-08-31")
+
+
+def test_date_context_prefers_real_commitments_over_the_academic_year():
+    ctx = briefs.date_context(("2026-09-21", "2026-10-27"))
+    assert ctx == {"start": "2026-09-21", "end": "2026-10-27", "source": "commitments"}
+
+
+def test_date_context_falls_back_to_academic_year_with_nothing_imported():
+    ctx = briefs.date_context(None, today=date(2026, 9, 21))
+    assert ctx == {"start": "2026-09-01", "end": "2027-08-31", "source": "academic_year"}
+    ctx = briefs.date_context((None, None), today=date(2026, 9, 21))
+    assert ctx["source"] == "academic_year"
+
+
+def test_a_bare_date_resolves_against_the_projects_own_commitment_year(monkeypatch):
+    # The exact scenario the fault describes: a project whose imported
+    # timetable runs 21 Sept - 27 Oct 2026. The overview prompt must carry
+    # that range so a bare "Monday 26th October" resolves to 2026, not 2025.
+    ctx = briefs.date_context(("2026-09-21", "2026-10-27"))
+    seen = {}
+
+    def create(client, prompt, max_tokens):
+        if _is_overview(prompt):
+            seen["prompt"] = prompt
+            return FakeResp(OVERVIEW)
+        return FakeResp(DETAIL)
+
+    monkeypatch.setattr(briefs, "_create", create)
+    out = briefs.analyse("a brief", date_context=ctx)
+
+    assert "2026-09-21 to 2026-10-27" in seen["prompt"]
+    assert "resolve its year from that" in seen["prompt"]
+    assert out["date_context"] == ctx
+
+
+def test_a_date_outside_the_range_is_flagged_not_corrected(monkeypatch):
+    monkeypatch.setattr(briefs, "_create", _fake_create())
+    # OVERVIEW's hand-in is 2027-05-07 and Part 1 is due 2027-03-05 -- both
+    # miles outside a 2026 project timetable, exactly the transposed-year bug.
+    ctx = briefs.date_context(("2026-09-21", "2026-10-27"))
+
+    out = briefs.analyse("a brief", date_context=ctx)
+
+    hand_in = next(k for k in out["key_dates"] if k["label"] == "Hand-in")
+    briefing = next(k for k in out["key_dates"] if k["label"] == "Briefing")
+    part_1 = out["deliverables"][0]
+    # Flagged, with the exact range it was checked against -- and the date
+    # itself is untouched, never silently corrected.
+    assert hand_in["date"] == "2027-05-07"
+    assert hand_in["date_suspect"] == {"checked_against": ["2026-09-21", "2026-10-27"]}
+    assert part_1["due_date"] == "2027-03-05"
+    assert part_1["date_suspect"] == {"checked_against": ["2026-09-21", "2026-10-27"]}
+    # 2027-01-11 is also outside the range, but by less than the tolerance
+    # matters not here -- it's still way over a month out, so it's flagged too.
+    assert briefing.get("date_suspect")
+
+
+def test_a_date_inside_the_range_is_not_flagged(monkeypatch):
+    monkeypatch.setattr(briefs, "_create", _fake_create())
+    # A range wide enough to cover every date OVERVIEW actually uses.
+    ctx = briefs.date_context(("2026-09-01", "2027-08-31"))
+
+    out = briefs.analyse("a brief", date_context=ctx)
+
+    assert all("date_suspect" not in k for k in out["key_dates"])
+    assert "date_suspect" not in out["deliverables"][0]
+
+
+def test_analyse_without_date_context_never_flags_anything(monkeypatch):
+    # Callers that don't pass a context (or a project with truly nothing to
+    # anchor against, before this landed) get the old behaviour: no validation
+    # pass at all, rather than flagging against a context that doesn't exist.
+    monkeypatch.setattr(briefs, "_create", _fake_create())
+    out = briefs.analyse("a brief")
+    assert out["date_context"] is None
+    assert all("date_suspect" not in k for k in out["key_dates"])

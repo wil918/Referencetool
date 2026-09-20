@@ -421,6 +421,15 @@ CREATE TABLE IF NOT EXISTS deliverables (
 # came from. Both NULL for a hand-made task. A brief-created task that has since
 # been worked (done, partial, or carrying a task_actuals row) is no longer a
 # mere import artefact and a brief reset keeps it -- see reset_brief.
+#
+# sequence_position is the SOFT ordering a brief's task skeleton carries: its
+# 1-based position among the tasks a deliverable extraction returned, i.e. the
+# order they actually happen in (research, then develop, then select, then
+# mount). NULL for a hand-made task or one with no known place in a sequence.
+# This is deliberately not a hard constraint -- see task_dependencies for
+# that -- it only biases scheduling._earliest_start_bias so a late-sequence
+# task isn't placed in the project's first week merely because nothing
+# formally blocks it.
 TASKS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
@@ -446,7 +455,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     difficulty_source TEXT,
     created_at TEXT NOT NULL,
     brief_id TEXT,
-    source_key TEXT
+    source_key TEXT,
+    sequence_position INTEGER
 );
 """
 
@@ -1001,6 +1011,7 @@ def init_db():
             "ALTER TABLE deliverables ADD COLUMN source_key TEXT",
             "ALTER TABLE tasks ADD COLUMN brief_id TEXT",
             "ALTER TABLE tasks ADD COLUMN source_key TEXT",
+            "ALTER TABLE tasks ADD COLUMN sequence_position INTEGER",
         ):
             try:
                 conn.execute(ddl)
@@ -2697,7 +2708,7 @@ def create_task(task_id, title, project_id=None, deliverable_id=None, descriptio
                 difficulty=None, is_finishing=False, is_domestic=False, status="pending",
                 recurrence_id=None, continues_task_id=None,
                 est_minutes_source=None, importance_source=None, difficulty_source=None,
-                brief_id=None, source_key=None):
+                brief_id=None, source_key=None, sequence_position=None):
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO tasks
@@ -2705,8 +2716,8 @@ def create_task(task_id, title, project_id=None, deliverable_id=None, descriptio
                     deadline, required_location_id, support_level, est_minutes, importance,
                     difficulty, is_finishing, is_domestic, status, recurrence_id,
                     continues_task_id, slip_count, est_minutes_source, importance_source,
-                    difficulty_source, created_at, brief_id, source_key)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)""",
+                    difficulty_source, created_at, brief_id, source_key, sequence_position)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 task_id,
                 project_id,
@@ -2731,6 +2742,7 @@ def create_task(task_id, title, project_id=None, deliverable_id=None, descriptio
                 datetime.now(timezone.utc).isoformat(),
                 brief_id,
                 source_key,
+                sequence_position,
             ),
         )
 
@@ -2801,7 +2813,7 @@ TASK_PATCH_COLUMNS = (
     "deadline", "required_location_id", "support_level", "est_minutes",
     "importance", "difficulty", "is_finishing", "is_domestic", "status", "recurrence_id",
     "continues_task_id", "slip_count", "est_minutes_source", "importance_source",
-    "difficulty_source",
+    "difficulty_source", "sequence_position",
 )
 
 
@@ -3250,6 +3262,24 @@ def list_commitments():
     with get_conn() as conn:
         rows = conn.execute("SELECT * FROM commitments ORDER BY start").fetchall()
         return [_commitment_to_dict(r) for r in rows]
+
+
+def commitments_date_range():
+    """(earliest start, latest end) across every commitment, as YYYY-MM-DD
+    strings, or (None, None) if none are imported yet.
+
+    Commitments carry no project_id (see COMMITMENTS_SCHEMA) -- this is one
+    shared calendar, not a per-project one. That's exactly what makes this
+    useful as "the project's timetable": briefs.date_context reads it to
+    resolve a bare date's year against something real instead of guessing
+    from nothing, and every project drawing from the same imported term
+    shares the same range.
+    """
+    with get_conn() as conn:
+        row = conn.execute("SELECT MIN(start) AS lo, MAX(end) AS hi FROM commitments").fetchone()
+    lo = row["lo"][:10] if row and row["lo"] else None
+    hi = row["hi"][:10] if row and row["hi"] else None
+    return (lo, hi)
 
 
 def get_commitment(commitment_id):

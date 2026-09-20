@@ -2006,7 +2006,13 @@ def api_import_brief(project_id):
         if not text:
             _restore_or_remove(pdf_path, prior_pdf)
             return jsonify({"error": "couldn't read any text out of that PDF"}), 400
-        extraction = briefs.assign_source_keys(briefs.analyse(text))
+        # This project's own timetable, if any has been imported, anchors a
+        # bare date's year -- see briefs.date_context. Commitments carry no
+        # project_id (one shared calendar), so this is every commitment's
+        # span; a project with nothing imported yet falls back to the current
+        # academic year rather than to nothing.
+        ctx = briefs.date_context(db.commitments_date_range())
+        extraction = briefs.assign_source_keys(briefs.analyse(text, date_context=ctx))
     except briefs.BriefExtractionError as e:
         # A parse failure is a failure, not an empty result -- say so, say why,
         # and let the user retry. The raw reply is logged for inspection, never
@@ -2198,9 +2204,21 @@ def api_apply_brief(brief_id):
         deliverable_ids.append(did)
         created["deliverables"].append({"id": did, "title": title})
 
-        for i, t in enumerate(d.get("tasks") or []):
+        # task_ids is index-aligned with d["tasks"] (None where a blank title
+        # skipped creation) so depends_on_index -- a HARD dependency the
+        # extraction names by position in the SAME array -- can be resolved
+        # into a real edge once every task in the skeleton actually exists.
+        # sequence_position is the SOFT signal: 1-based order-of-happening
+        # within this deliverable, which scheduling._earliest_start_bias reads
+        # to keep a late-sequence task (e.g. "mount the final piece") from
+        # being placed in the project's first week just because nothing
+        # formally blocks it -- see CLAUDE.md-adjacent brief session notes.
+        task_ids = []
+        raw_tasks = d.get("tasks") or []
+        for i, t in enumerate(raw_tasks):
             t_title = (t.get("title") or "").strip()
             if not t_title:
+                task_ids.append(None)
                 continue
             tid = str(uuid.uuid4())
             est = t.get("est_minutes")
@@ -2214,8 +2232,26 @@ def api_apply_brief(brief_id):
                 est_minutes_source="generated" if est else None,
                 brief_id=brief_id,
                 source_key=f"{source_key}#t{i}" if source_key else None,
+                sequence_position=i + 1,
             )
+            task_ids.append(tid)
             created["tasks"].append({"id": tid, "title": t_title})
+
+        for i, t in enumerate(raw_tasks):
+            tid = task_ids[i]
+            dep_idx = t.get("depends_on_index")
+            if tid is None or not isinstance(dep_idx, int) or dep_idx == i:
+                continue
+            if not (0 <= dep_idx < len(task_ids)) or task_ids[dep_idx] is None:
+                continue
+            depends_on = task_ids[dep_idx]
+            # These are all fresh tasks from the same skeleton, so a cycle
+            # here would mean the model's own depends_on_index values pointed
+            # at each other -- caught the same way the interactive dependency
+            # route catches a bad hand-added edge (db.add_task_dependency
+            # trusts its caller to have checked first).
+            if db.task_dependency_cycle(tid, depends_on) is None:
+                db.add_task_dependency(tid, depends_on)
 
     # Key dates: a date tied to a deliverable sets that deliverable's due date;
     # any other becomes a plain commitment on the calendar.

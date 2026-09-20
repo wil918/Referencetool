@@ -1900,3 +1900,105 @@ def test_a_break_follows_a_domestic_task_placed_outside_working_hours(archive):
     assert [b["kind"] for b in blocks] == ["task", "break"]
     assert blocks[1]["start"] == f"{MONDAY}T20:30:00"
     assert blocks[1]["end"] == f"{MONDAY}T21:00:00"
+
+
+# --- Soft earliest start from a brief's task sequence -----------------------
+#
+# A brief-import task skeleton carries tasks.sequence_position (its 1-based
+# order within its deliverable) but no hard dependency graph -- see
+# briefs.py's DEPENDENCIES rules. _earliest_start/_readiness turn "late in the
+# sequence" into a soft scoring discount, never a placement gate, so a task
+# like "create the hero look page -- highlight the strongest outcome" isn't
+# swept up on day one just because nothing formally blocks it.
+
+def far_deliverable(due_days=84, project_id="p-terminal"):
+    db.create_project(project_id, "Portfolio")
+    due = (date.fromisoformat(MONDAY) + timedelta(days=due_days)).isoformat()
+    db.create_deliverable("d-terminal", project_id, "Final chapter", due_at=due)
+    return project_id
+
+
+def test_earliest_start_is_none_without_a_full_sequence():
+    deliverables = {"d1": {"due_at": "2026-06-01"}}
+    anchor = datetime(2026, 3, 2, 9, 0)
+    # No position at all.
+    assert scheduling._earliest_start(
+        {"deliverable_id": "d1"}, deliverables, {"d1": 3}, anchor
+    ) is None
+    # The only task in its sequence -- nothing to spread across.
+    assert scheduling._earliest_start(
+        {"deliverable_id": "d1", "sequence_position": 1}, deliverables, {"d1": 1}, anchor
+    ) is None
+    # The deliverable itself has no due date to spread across.
+    assert scheduling._earliest_start(
+        {"deliverable_id": "d2", "sequence_position": 3}, {"d2": {"due_at": None}}, {"d2": 3}, anchor
+    ) is None
+
+
+def test_earliest_start_spreads_between_anchor_and_the_deliverables_due_date():
+    anchor = datetime(2026, 3, 2, 9, 0)
+    deliverables = {"d1": {"due_at": "2026-03-30"}}  # end-of-day, 28 days out
+    totals = {"d1": 5}
+
+    first = scheduling._earliest_start({"deliverable_id": "d1", "sequence_position": 1}, deliverables, totals, anchor)
+    middle = scheduling._earliest_start({"deliverable_id": "d1", "sequence_position": 3}, deliverables, totals, anchor)
+    last = scheduling._earliest_start({"deliverable_id": "d1", "sequence_position": 5}, deliverables, totals, anchor)
+
+    assert first is None  # position 1 of N -> no bias at all
+    assert anchor < middle < last
+    assert last == scheduling._own_deadline({"deliverable_id": "d1"}, deliverables)
+
+
+def test_readiness_is_full_strength_once_reached_and_never_zero_before_it():
+    anchor = datetime(2026, 3, 2, 9, 0)
+    assert scheduling._readiness(None, anchor) == 1.0
+    assert scheduling._readiness(anchor - timedelta(days=1), anchor) == 1.0  # already arrived
+    far = scheduling._readiness(anchor + timedelta(days=60), anchor)
+    near = scheduling._readiness(anchor + timedelta(hours=1), anchor)
+    assert scheduling.EARLIEST_START_FLOOR <= far < near < 1.0
+
+
+def test_a_terminal_sequence_task_is_never_placed_in_the_projects_first_week(archive):
+    working_week()
+    project_id = far_deliverable(due_days=84)
+    # Two tasks on the one deliverable: the first thing that happens
+    # ("research") and the last ("create the hero look page"), exactly the
+    # shape of the real bug. The terminal task outranks everything on
+    # importance alone, which is precisely how it jumped the queue before.
+    task("t-research", "Research", project_id=project_id, deliverable_id="d-terminal",
+         est_minutes=120, importance=3, sequence_position=1)
+    task("t-hero", "Create hero look page", project_id=project_id, deliverable_id="d-terminal",
+         est_minutes=120, importance=5, sequence_position=2)
+    # A backlog of ordinary, unrelated work -- exactly what a real multi-week
+    # project has plenty of, and what actually keeps the first week full.
+    filler_deadline = (date.fromisoformat(MONDAY) + timedelta(days=21)).isoformat()
+    for i in range(14):
+        task(f"t-filler-{i:02d}", f"Filler {i}", est_minutes=120, importance=2, deadline=filler_deadline)
+
+    result = scheduling.plan(MONDAY)
+    blocks = placed(result)
+
+    week_one_end = (date.fromisoformat(MONDAY) + timedelta(days=7)).isoformat()
+    assert "t-hero" in blocks, "the terminal task must still be placed -- soft, not at-risk"
+    assert blocks["t-hero"]["start"] >= week_one_end
+
+
+def test_removing_the_sequence_lets_the_terminal_task_jump_the_queue(archive):
+    # The control for the test above: strip sequence_position from the exact
+    # same setup and the importance-5 task wins its way into the first week
+    # -- proving the earlier test's outcome comes from the bias, not from the
+    # backlog alone.
+    working_week()
+    project_id = far_deliverable(due_days=84)
+    task("t-research", "Research", project_id=project_id, deliverable_id="d-terminal",
+         est_minutes=120, importance=3)
+    task("t-hero", "Create hero look page", project_id=project_id, deliverable_id="d-terminal",
+         est_minutes=120, importance=5)
+    filler_deadline = (date.fromisoformat(MONDAY) + timedelta(days=21)).isoformat()
+    for i in range(14):
+        task(f"t-filler-{i:02d}", f"Filler {i}", est_minutes=120, importance=2, deadline=filler_deadline)
+
+    blocks = placed(scheduling.plan(MONDAY))
+
+    week_one_end = (date.fromisoformat(MONDAY) + timedelta(days=7)).isoformat()
+    assert blocks["t-hero"]["start"] < week_one_end
