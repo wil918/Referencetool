@@ -3,6 +3,60 @@
 // with no side effects on import -- every element and listener is created
 // only when a caller invokes one of these.
 
+const MIME_BY_EXT = {
+  ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+  ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+  ".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown",
+};
+
+// The HTML5 "DownloadURL" drag-out (dataTransfer.setData with this specific
+// type string, read by the OS drop target instead of the page) is a
+// Chromium-only convention -- there's no DOM API to feature-detect, since
+// Safari/WebKit happily accepts the setData call and then just does nothing
+// with it on drop. Confirmed working in Chrome, Edge, Brave, Opera and other
+// Chromium forks (all carry "Chrome/" or "Edg/" in the UA string); NOT
+// WebKit -- real Safari, or the WKWebView desktop.py wraps -- which is why
+// attachDownload() below always adds the plain download button but only
+// wires up dragstart when this is true. Checked once at module load, not
+// per drag.
+const supportsDownloadURLDrag = /Chrome|Chromium|Edg\//.test(navigator.userAgent);
+
+function safeDragFilename(title, ext) {
+  const cleaned = (title || "reference").replace(/[<>:"/\\|?*\x00-\x1f]/g, "").trim();
+  return `${cleaned || "reference"}${ext || ""}`;
+}
+
+/** Adds a small "download this file" control to a card, always visible on
+ *  hover, plus (where the engine supports it -- see supportsDownloadURLDrag
+ *  above) a native drag-out straight into Finder/InDesign/Photoshop. Opt-in
+ *  per grid rather than folded into makeCard itself: canvas reference nodes
+ *  also build cards via makeCard, and already have their own pointer-driven
+ *  drag for repositioning (project/canvas/nodes.js) that a native HTML5
+ *  drag would compete with. Only the Archive grid and the project grid call
+ *  this. When drag-out isn't supported, the card is left non-draggable --
+ *  the download button is the fallback, not a gesture that silently does
+ *  nothing (per CLAUDE.md session brief). */
+export function attachDownload(card, ref) {
+  const btn = document.createElement("a");
+  btn.className = "card-download-btn";
+  btn.href = `/media/${ref.id}/download`;
+  btn.title = "Download";
+  btn.setAttribute("aria-label", "Download");
+  btn.textContent = "⤓"; // downwards arrow to bar
+  btn.addEventListener("click", (e) => e.stopPropagation());
+  card.appendChild(btn);
+
+  if (!supportsDownloadURLDrag) return;
+  card.draggable = true;
+  card.addEventListener("dragstart", (e) => {
+    const mime = MIME_BY_EXT[ref.ext] || "application/octet-stream";
+    const filename = safeDragFilename(ref.title, ref.ext);
+    const url = new URL(`/media/${ref.id}/download`, window.location.href).href;
+    e.dataTransfer.setData("DownloadURL", `${mime}:${filename}:${url}`);
+    e.dataTransfer.effectAllowed = "copy";
+  });
+}
+
 /** A grid card: thumbnail (falling back to a text placeholder), title
  *  caption, own-work badge and optional match label. `onClick` is whatever
  *  the caller wants a click to do -- open the carousel, toggle selection. */

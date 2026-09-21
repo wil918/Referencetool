@@ -10,12 +10,13 @@
  * its own confirmation copy rather than this module guessing at wording.
  */
 
-import { makeCard, markSelectable } from "../../shared/cards.js";
+import { makeCard, markSelectable, attachDownload } from "../../shared/cards.js";
 import * as carousel from "../../shared/carousel.js";
 import * as folders from "../folders.js";
 import { ensureOverlays, setActiveReferences } from "./overlays.js";
 import { createAnalysisPanel } from "./analysis-panel.js";
 import { createColourPanel } from "./colour-panel.js";
+import { downloadZip } from "../../shared/export.js";
 
 /* Delete means "remove from the project" here -- and, since a folder is only
  * ever a view over its project's references (CLAUDE.md), that has to take
@@ -102,6 +103,7 @@ export function createGridPage(el, options) {
       <select class="folder-select" disabled>
         <option value="" selected>Move to folder…</option>
       </select>
+      <button type="button" class="btn export-btn" disabled>Export as ZIP</button>
       <button type="button" class="btn delete-btn" disabled></button>
       <button type="button" class="btn colour-btn" disabled>Colour Similarity</button>
       <button type="button" class="btn primary analyze-btn" disabled>Analyze</button>
@@ -180,6 +182,7 @@ export function createGridPage(el, options) {
         selectionMode ? () => toggleSelection(ref.id) : () => carousel.open(references, idx)
       );
       if (selectionMode) markSelectable(card, selectedIds.has(ref.id));
+      attachDownload(card, ref);
       gridEl.appendChild(card);
     });
   }
@@ -202,6 +205,7 @@ export function createGridPage(el, options) {
   const selectBtn = header.querySelector(".select-btn");
   const countEl = toolbar.querySelector(".selection-count");
   const folderSelect = toolbar.querySelector(".folder-select");
+  const exportBtn = toolbar.querySelector(".export-btn");
   const deleteBtn = toolbar.querySelector(".delete-btn");
   const colourBtn = toolbar.querySelector(".colour-btn");
   const analyzeBtn = toolbar.querySelector(".analyze-btn");
@@ -228,6 +232,7 @@ export function createGridPage(el, options) {
     const n = selectedIds.size;
     countEl.textContent = `${n} selected`;
     deleteBtn.disabled = n === 0;
+    exportBtn.disabled = n === 0;
     colourBtn.disabled = n === 0;
     analyzeBtn.disabled = n === 0;
     folderSelect.disabled = n === 0;
@@ -235,6 +240,14 @@ export function createGridPage(el, options) {
   }
 
   selectBtn.addEventListener("click", () => setSelectionMode(!selectionMode));
+
+  // On-screen order, not selection-click order -- see app.js's identical
+  // comment on the Archive's own Export button.
+  exportBtn.addEventListener("click", () => {
+    const ids = references.filter((r) => selectedIds.has(r.id)).map((r) => r.id);
+    if (!ids.length) return;
+    downloadZip("/api/export", ids);
+  });
 
   // --- move to folder ----------------------------------------------------
   //

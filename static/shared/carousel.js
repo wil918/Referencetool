@@ -9,8 +9,12 @@
 // and the similar-items jump all operate on that same list.
 
 import { makeCard } from "./cards.js";
+import * as desktopBridge from "./desktop-bridge.js";
 
 const IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"];
+
+const supportsClipboardImageWrite = () =>
+  typeof navigator.clipboard?.write === "function" && typeof window.ClipboardItem !== "undefined";
 
 let list = [];
 let index = -1;
@@ -43,6 +47,10 @@ function ensureInit() {
   els.projectSelect = document.getElementById("carousel-project-select");
   els.projectStatus = document.getElementById("carousel-project-status");
   els.similarGrid = document.getElementById("similar-grid");
+  els.downloadBtn = document.getElementById("carousel-download-btn");
+  els.copyBtn = document.getElementById("carousel-copy-btn");
+  els.revealBtn = document.getElementById("carousel-reveal-btn");
+  els.fileStatus = document.getElementById("carousel-file-status");
 
   document.getElementById("carousel-prev").addEventListener("click", () => {
     index = (index - 1 + list.length) % list.length;
@@ -79,6 +87,35 @@ function ensureInit() {
 
     const label = els.projectSelect.options[els.projectSelect.selectedIndex].textContent;
     addCurrentReferenceToProject(value, label);
+  });
+
+  els.copyBtn.addEventListener("click", async () => {
+    const ref = list[index];
+    if (!ref) return;
+    els.fileStatus.textContent = "Copying…";
+    try {
+      const res = await fetch(`/media/${ref.id}`);
+      const blob = await res.blob();
+      await navigator.clipboard.write([new window.ClipboardItem({ [blob.type]: blob })]);
+      els.fileStatus.textContent = "Copied to clipboard.";
+    } catch (err) {
+      els.fileStatus.textContent = `Couldn't copy: ${err.message}`;
+    }
+  });
+
+  els.revealBtn.addEventListener("click", async () => {
+    const ref = list[index];
+    if (!ref) return;
+    const ok = await desktopBridge.reveal(ref.id);
+    els.fileStatus.textContent = ok ? "" : "Reveal isn't available here.";
+  });
+
+  // pywebview injects window.pywebview asynchronously after page load, so
+  // isAvailable() can read false for a moment even inside the desktop
+  // build -- if the carousel's first open lands before that, re-check once
+  // the bridge is actually ready and reveal the button retroactively.
+  desktopBridge.ready().then((available) => {
+    if (available && list[index]) els.revealBtn.hidden = false;
   });
 }
 
@@ -171,6 +208,11 @@ async function loadItem() {
   els.title.textContent = data.title;
   els.type.textContent = `${data.type}${data.ext ? " · " + data.ext.slice(1) : ""}`;
   els.ownWork.hidden = !data.is_own_work;
+
+  els.downloadBtn.href = `/media/${data.id}/download`;
+  els.copyBtn.hidden = !(IMAGE_EXTS.includes(data.ext) && supportsClipboardImageWrite());
+  els.revealBtn.hidden = !desktopBridge.isAvailable();
+  els.fileStatus.textContent = "";
 
   els.tags.innerHTML = "";
   (data.tags || []).forEach((t) => {

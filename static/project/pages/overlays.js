@@ -46,6 +46,13 @@ function buildCarouselMarkup() {
         <p id="info-source" class="muted"></p>
         <p id="info-notes" class="muted"></p>
 
+        <div class="carousel-file-actions">
+          <a id="carousel-download-btn" class="carousel-action-btn" download>Download</a>
+          <button type="button" id="carousel-copy-btn" class="carousel-action-btn" hidden>Copy image</button>
+          <button type="button" id="carousel-reveal-btn" class="carousel-action-btn" hidden>Reveal in Finder</button>
+          <p id="carousel-file-status" class="muted"></p>
+        </div>
+
         <div class="project-add">
           <label for="carousel-project-select">Add to project</label>
           <select id="carousel-project-select">

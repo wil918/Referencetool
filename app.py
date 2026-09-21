@@ -33,6 +33,7 @@ import colour
 import config
 import db
 import embeddings
+import export
 import graph_layout
 import ics_import
 import ingest
@@ -1304,6 +1305,28 @@ def media(ref_id):
     return send_file(path, mimetype=mime or "application/octet-stream")
 
 
+@app.get("/media/<ref_id>/download")
+def media_download(ref_id):
+    """Same bytes as GET /media/<ref_id>, but as a named attachment -- a
+    browser save (or a WKWebView one; see export.py) lands as "Balenciaga
+    1967.jpg", not a UUID. This is the one download mechanism every other
+    reference-export path in the UI (drag-out, bulk zip) falls back to, so
+    it has to work everywhere on its own with no client-side help."""
+    ref = _find_reference(ref_id)
+    if not ref:
+        abort(404)
+    path = _resolve_ref_path(ref)
+    if not path.exists():
+        abort(404)
+    mime, _ = mimetypes.guess_type(str(path))
+    return send_file(
+        path,
+        mimetype=mime or "application/octet-stream",
+        as_attachment=True,
+        download_name=export.download_filename(ref),
+    )
+
+
 @app.get("/media/<ref_id>/thumb")
 def media_thumb(ref_id):
     ref = _find_reference(ref_id)
@@ -1328,6 +1351,49 @@ def media_thumb(ref_id):
             abort(404)
 
     abort(404)  # plain text references have no image thumbnail
+
+
+@app.post("/api/export")
+def api_export():
+    """Zip of the given reference ids, in the given order -- the Archive and
+    project grids' bulk "Export as ZIP" toolbar action.
+
+    Submitted as a real form POST to a hidden iframe rather than fetched with
+    JS and turned into a Blob, so the browser's own save flow handles the
+    response exactly like /media/<id>/download does -- the same mechanism
+    that works in WKWebView, just carrying a batch instead of one id. `ids`
+    therefore usually arrives as a JSON-encoded form field; a plain JSON body
+    works too; either way order is preserved exactly as given, since that's
+    what the client determined (on-screen order) and the zip's numbering
+    depends on it.
+    """
+    ids = None
+    body = request.get_json(silent=True)
+    if isinstance(body, dict):
+        ids = body.get("ids")
+    if ids is None:
+        raw = request.form.get("ids")
+        ids = json.loads(raw) if raw else None
+    if not ids:
+        return jsonify({"error": "no references selected"}), 400
+
+    refs = [ref for ref in (_find_reference(i) for i in ids) if ref]
+    if not refs:
+        return jsonify({"error": "none of the selected references were found"}), 404
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    export.write_zip(tmp_path, refs, _resolve_ref_path)
+
+    response = send_file(
+        tmp_path,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="references.zip",
+    )
+    response.call_on_close(lambda: tmp_path.unlink(missing_ok=True))
+    return response
 
 
 @app.post("/api/add-file")
