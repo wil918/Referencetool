@@ -3387,7 +3387,7 @@
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
   gap: 0.5rem 0.9rem;
 }
-.drafting .brief-field-grid--task { grid-template-columns: 3fr 1fr; }
+.drafting .brief-field-grid--task { grid-template-columns: 3fr 1fr 2fr; }
 
 .drafting .brief-field { display: flex; flex-direction: column; gap: 0.2rem; }
 .drafting .brief-field > span {
@@ -3435,12 +3435,14 @@
 
 .drafting .brief-status { margin: 0.6rem 0 0; }
 
-.drafting .deliverable-brief-banner {
+.drafting .deliverable-brief-banner,
+.drafting .supporting-doc-row {
   margin: 0 0 0.5rem;
   padding-bottom: 0.4rem;
   border-bottom: var(--dr-rule-hair);
   color: var(--dr-ink-3);
 }
+.drafting .supporting-doc-list:empty { margin: 0; }
 
 /* ==========================================================================
    19. THE AXONOMETRIC MONTH

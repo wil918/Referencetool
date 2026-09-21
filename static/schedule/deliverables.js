@@ -20,6 +20,7 @@
 
 import { makeKey } from "./key.js";
 import { initBriefImport } from "./brief-import.js";
+import { initSupportingDocImport } from "./supporting-docs.js";
 
 const projectSelect = document.getElementById("deliverable-project-select");
 const newBtn = document.getElementById("deliverable-new-btn");
@@ -31,6 +32,14 @@ const hintEl = document.getElementById("deliverable-project-hint");
 // this tab just tells it which project is selected and reloads once a brief is
 // approved into deliverables, tasks and commitments.
 const briefImport = initBriefImport({
+  getProjectId: () => selectedProjectId,
+  onApplied: () => refreshDeliverables(),
+});
+
+// Same idea, for the documents that support the brief rather than being it --
+// see supporting-docs.js. It owns its own list (#supporting-doc-list) since a
+// project can carry several, unlike the one brief.
+const supportingDocImport = initSupportingDocImport({
   getProjectId: () => selectedProjectId,
   onApplied: () => refreshDeliverables(),
 });
@@ -662,10 +671,14 @@ export async function refreshDeliverables() {
     emptyEl.textContent = "Create a project first — deliverables belong to one.";
     newBtn.disabled = true;
     briefImport.setEnabled(false);
+    supportingDocImport.setEnabled(false);
+    supportingDocImport.refresh(null);
     return;
   }
   newBtn.disabled = false;
   briefImport.setEnabled(true);
+  supportingDocImport.setEnabled(true);
+  supportingDocImport.refresh(selectedProjectId);
 
   const pid = selectedProjectId;
   const [deliverables, tasks, schedule, briefs] = await Promise.all([

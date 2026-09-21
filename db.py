@@ -773,6 +773,26 @@ CREATE TABLE IF NOT EXISTS briefs (
 );
 """
 
+# A document that isn't the brief itself but names real preparation work with
+# a hard date -- a workshop and materials list, a reading list, a technical
+# handout. A project may carry several (unlike briefs: one per project), so
+# this is its own table rather than a second row shape crammed into briefs.
+#
+# `extracted` is the same envelope shape as briefs.extracted:
+#   {"extraction": <what supporting_docs.analyse produced>, "applied": <null | summary>}
+# but there is no diff/reset machinery here -- a supporting document is not
+# re-imported as a diff (see supporting_docs.py's module docstring); apply
+# always creates fresh rows, and starting over means deleting the document.
+SUPPORTING_DOCUMENTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS supporting_documents (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    filename TEXT,
+    extracted TEXT,
+    imported_at TEXT NOT NULL
+);
+"""
+
 # The user's own regular working hours, one row per weekday (same 0=Monday
 # convention as LOCATION_HOURS_SCHEMA) -- global rather than per-location,
 # since this is when the user could work at all, before location or
@@ -976,6 +996,7 @@ def init_db():
         conn.execute(RESOURCE_ITEMS_SCHEMA)
         conn.execute(TASK_RESOURCES_SCHEMA)
         conn.execute(BRIEFS_SCHEMA)
+        conn.execute(SUPPORTING_DOCUMENTS_SCHEMA)
         conn.execute(WORKING_HOURS_SCHEMA)
         conn.execute(DOMESTIC_HOURS_SCHEMA)
         conn.execute(HOURS_OVERRIDES_SCHEMA)
@@ -1373,6 +1394,7 @@ def delete_project(project_id):
         conn.execute("DELETE FROM deliverables WHERE project_id = ?", (project_id,))
         conn.execute("UPDATE tasks SET project_id = NULL WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM briefs WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM supporting_documents WHERE project_id = ?", (project_id,))
 
 
 def count_project_references(project_id):
@@ -4090,6 +4112,81 @@ def reset_brief(brief_id, purge=False):
 
 
 def _brief_to_dict(row):
+    d = dict(row)
+    d["extracted"] = json.loads(d["extracted"]) if d["extracted"] else None
+    return d
+
+
+# --- Schedule: supporting documents -----------------------------------------
+
+
+def create_supporting_document(doc_id, project_id, filename=None, extracted=None):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO supporting_documents (id, project_id, filename, extracted, imported_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                doc_id,
+                project_id,
+                filename,
+                json.dumps(extracted) if extracted is not None else None,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def list_supporting_documents(project_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM supporting_documents WHERE project_id = ? ORDER BY imported_at DESC",
+            (project_id,),
+        ).fetchall()
+        return [_supporting_document_to_dict(r) for r in rows]
+
+
+def get_supporting_document(doc_id):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM supporting_documents WHERE id = ?", (doc_id,)
+        ).fetchone()
+        return _supporting_document_to_dict(row) if row else None
+
+
+SUPPORTING_DOCUMENT_PATCH_COLUMNS = ("filename", "extracted")
+
+
+def update_supporting_document(doc_id, **fields):
+    """Patch whichever of a supporting document's columns were sent -- used to
+    write the `applied` summary back into `extracted` once its review sheet is
+    approved, same as update_brief."""
+    sets, params = [], []
+    for column in SUPPORTING_DOCUMENT_PATCH_COLUMNS:
+        if column not in fields:
+            continue
+        value = fields[column]
+        if column == "extracted":
+            value = json.dumps(value) if value is not None else None
+        sets.append(f"{column} = ?")
+        params.append(value)
+    if not sets:
+        return
+    with get_conn() as conn:
+        conn.execute(
+            f"UPDATE supporting_documents SET {', '.join(sets)} WHERE id = ?",
+            [*params, doc_id],
+        )
+
+
+def delete_supporting_document(doc_id):
+    """Delete the document row. Unlike delete_brief/reset_brief, nothing here
+    undoes what an /apply already created -- see SUPPORTING_DOCUMENTS_SCHEMA:
+    a supporting document isn't re-imported as a diff, so there's no
+    provenance trail on its created tasks to walk back through."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM supporting_documents WHERE id = ?", (doc_id,))
+
+
+def _supporting_document_to_dict(row):
     d = dict(row)
     d["extracted"] = json.loads(d["extracted"]) if d["extracted"] else None
     return d

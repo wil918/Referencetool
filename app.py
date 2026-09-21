@@ -38,6 +38,7 @@ import ics_import
 import ingest
 import scheduling
 import style_gen
+import supporting_docs
 import task_ai
 from config import ARCHIVE_API_TOKEN, REFERENCES_DIR
 
@@ -2324,6 +2325,148 @@ def api_apply_brief(brief_id):
         "removed": removed,
         "brief": db.get_brief(brief_id),
     })
+
+
+# --- Schedule: supporting documents --------------------------------------------
+#
+# A project may carry several of these alongside its one brief -- a workshop
+# and materials list, a reading list, a technical handout. Same attach / parse
+# / propose / review / apply shape as briefs.py, but see supporting_docs.py's
+# module docstring for the two things it does differently (group-split dates,
+# deadlined preparation rather than a task skeleton) and the one thing it
+# doesn't (re-import as a diff).
+
+_SUPPORTING_DOC_EXTENSIONS = (".pdf", ".docx")
+
+
+def _supporting_doc_path(doc_id, filename):
+    suffix = Path(filename or "").suffix.lower()
+    if suffix not in _SUPPORTING_DOC_EXTENSIONS:
+        suffix = ".pdf"
+    return config.SUPPORTING_DOCS_DIR / f"{doc_id}{suffix}"
+
+
+@app.post("/api/projects/<project_id>/supporting-documents")
+def api_import_supporting_document(project_id):
+    _require_project(project_id)
+    if "file" not in request.files:
+        return jsonify({"error": "no file uploaded"}), 400
+    upload = request.files["file"]
+    filename = upload.filename or ""
+    if not filename.lower().endswith(_SUPPORTING_DOC_EXTENSIONS):
+        return jsonify({"error": "a supporting document must be a PDF or .docx"}), 400
+
+    doc_id = str(uuid.uuid4())
+    doc_path = _supporting_doc_path(doc_id, filename)
+    upload.save(doc_path)
+
+    try:
+        text = supporting_docs.extract_text(doc_path)
+        if not text:
+            doc_path.unlink(missing_ok=True)
+            return jsonify({"error": "couldn't read any text out of that document"}), 400
+        # Exactly the context briefs.py uses (see its own comment) -- computed
+        # once here and shared by both extractors so a bare date resolves the
+        # same way whichever kind of document it came from.
+        ctx = briefs.date_context(db.commitments_date_range())
+        cohort_group = db.get_schedule_settings().get("cohort_group")
+        commitment_dates = {c["start"][:10] for c in db.list_commitments()}
+        extraction = supporting_docs.analyse(
+            text, date_context=ctx, cohort_group=cohort_group, commitment_dates=commitment_dates,
+        )
+    except briefs.BriefExtractionError as e:
+        doc_path.unlink(missing_ok=True)
+        print(f"supporting document extraction failed ({e.reason}): {e.raw[:2000]!r}")
+        return jsonify({"error": str(e), "reason": e.reason, "retryable": True}), 502
+    except Exception as e:
+        doc_path.unlink(missing_ok=True)
+        return jsonify({"error": f"couldn't read the document: {e}"}), 500
+
+    db.create_supporting_document(
+        doc_id, project_id, filename=doc_path.name,
+        extracted={"extraction": extraction, "applied": None},
+    )
+    return jsonify(db.get_supporting_document(doc_id))
+
+
+@app.get("/api/projects/<project_id>/supporting-documents")
+def api_list_supporting_documents(project_id):
+    _require_project(project_id)
+    return jsonify(db.list_supporting_documents(project_id))
+
+
+@app.get("/api/supporting-documents/<doc_id>")
+def api_get_supporting_document(doc_id):
+    doc = db.get_supporting_document(doc_id)
+    if not doc:
+        abort(404)
+    return jsonify(doc)
+
+
+@app.get("/api/supporting-documents/<doc_id>/file")
+def api_supporting_document_file(doc_id):
+    doc = db.get_supporting_document(doc_id)
+    if not doc:
+        abort(404)
+    path = _supporting_doc_path(doc_id, doc["filename"])
+    if not path.exists():
+        abort(404)
+    return send_file(path)
+
+
+@app.delete("/api/supporting-documents/<doc_id>")
+def api_delete_supporting_document(doc_id):
+    doc = db.get_supporting_document(doc_id)
+    if not doc:
+        abort(404)
+    db.delete_supporting_document(doc_id)
+    _supporting_doc_path(doc_id, doc["filename"]).unlink(missing_ok=True)
+    return jsonify({"ok": True, "id": doc_id})
+
+
+@app.post("/api/supporting-documents/<doc_id>/apply")
+def api_apply_supporting_document(doc_id):
+    """Turn the reviewed, accepted preparation tasks into real tasks.
+
+    The body is what the review sheet approved:
+
+        {"preparation_tasks": [{"source_key", "title", "description",
+                                 "due_date", "deliverable_id"}]}
+
+    Sessions never create anything -- see supporting_docs.py's module
+    docstring: the session itself is already a commitment (or the brief's own
+    concern), and only what has to be gathered or done beforehand becomes a
+    task, with its deadline set to the accepted due_date.
+    """
+    doc = db.get_supporting_document(doc_id)
+    if not doc:
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    project_id = doc["project_id"]
+
+    created = {"tasks": []}
+    for t in body.get("preparation_tasks") or []:
+        title = (t.get("title") or "").strip()
+        if not title:
+            continue
+        tid = str(uuid.uuid4())
+        db.create_task(
+            tid, title, project_id=project_id,
+            deliverable_id=(t.get("deliverable_id") or None),
+            description=(t.get("description") or None),
+            deadline=(t.get("due_date") or None),
+            source_key=(t.get("source_key") or None),
+        )
+        created["tasks"].append({"id": tid, "title": title})
+
+    envelope = doc["extracted"] or {}
+    envelope["applied"] = {
+        "at": datetime.now().isoformat(timespec="seconds"),
+        "tasks": created["tasks"],
+    }
+    db.update_supporting_document(doc_id, extracted=envelope)
+
+    return jsonify({"ok": True, "created": created, "document": db.get_supporting_document(doc_id)})
 
 
 # --- Schedule: locations -------------------------------------------------------
