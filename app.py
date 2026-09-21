@@ -104,11 +104,28 @@ def _extension_origin():
 
 
 def _capture_auth_ok():
-    """True unless a token is configured and the request didn't present it."""
+    """True unless a token is configured and the request didn't present it.
+
+    A browser extension always has to prove it holds the token, even calling
+    from this same Mac -- it's a separate trust domain (any extension the
+    user has installed could otherwise write into the archive with no
+    limit), so "this machine" is deliberately not a substitute for it here,
+    which is what test_token_is_enforced_when_configured pins down. Anything
+    else that reaches these routes -- this app's own pages (the canvas's
+    file-drop, same-origin) and the phone, which is genuinely off-machine --
+    gets the same loopback rule the rest of the API already uses
+    (_guard_api_when_exposed below): loopback is trusted, and a non-loopback
+    caller needs the token, which the phone's own fetch wrapper already
+    attaches.
+    """
     if not ARCHIVE_API_TOKEN:
         return True
     header = request.headers.get("Authorization", "")
-    return header == f"Bearer {ARCHIVE_API_TOKEN}"
+    if header == f"Bearer {ARCHIVE_API_TOKEN}":
+        return True
+    if _extension_origin():
+        return False
+    return _client_is_loopback()
 
 
 @app.after_request
