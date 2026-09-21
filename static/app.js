@@ -1,6 +1,7 @@
-import { makeCard, markSelectable, makeBarThumb } from "./shared/cards.js";
+import { makeCard, markSelectable, makeBarThumb, attachDownload } from "./shared/cards.js";
 import * as carousel from "./shared/carousel.js";
 import * as folders from "./project/folders.js";
+import { downloadZip } from "./shared/export.js";
 
 const SUPPORTED_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".txt", ".md", ".pdf"];
 
@@ -303,6 +304,7 @@ function renderGrid() {
       archiveSelectionMode ? () => toggleArchiveSelection(ref.id) : () => carousel.open(currentList, idx)
     );
     if (archiveSelectionMode) markSelectable(card, archiveSelectedIds.has(ref.id));
+    attachDownload(card, ref);
     grid.appendChild(card);
   });
 }
@@ -318,6 +320,7 @@ const archiveSelectionToolbar = document.getElementById("archive-selection-toolb
 const archiveProjectSelect = document.getElementById("archive-project-select");
 const archiveSelectionStatus = document.getElementById("archive-selection-status");
 const archiveDeleteBtn = document.getElementById("archive-selection-delete-btn");
+const archiveExportBtn = document.getElementById("archive-selection-export-btn");
 let archiveSelectionMode = false;
 let archiveSelectedIds = new Set();
 let archiveFiltersActive = false;
@@ -347,12 +350,22 @@ function updateArchiveSelectionToolbar() {
   const n = archiveSelectedIds.size;
   document.getElementById("archive-selection-count").textContent = `${n} selected`;
   archiveDeleteBtn.disabled = n === 0;
+  archiveExportBtn.disabled = n === 0;
   archiveProjectSelect.disabled = n === 0;
   archiveFolderProjectSelect.disabled = n === 0;
   if (!archiveFolderSelect.hidden) archiveFolderSelect.disabled = n === 0;
 }
 
 archiveSelectBtn.addEventListener("click", () => setArchiveSelectionMode(!archiveSelectionMode));
+
+// On-screen order, not selection-click order -- currentList is already in
+// the order the grid rendered it, so filtering it down to the selection
+// keeps that order, which is what the zip's numbering prefix depends on.
+archiveExportBtn.addEventListener("click", () => {
+  const ids = currentList.filter((r) => archiveSelectedIds.has(r.id)).map((r) => r.id);
+  if (!ids.length) return;
+  downloadZip("/api/export", ids);
+});
 
 archiveProjectSelect.addEventListener("change", () => {
   const value = archiveProjectSelect.value;
