@@ -1167,6 +1167,86 @@ export function createNodes({
     }
   }
 
+  // --- pending references (file drop) ---------------------------------------
+  //
+  // A file dropped straight from Finder (file-drop.js) isn't a canvas_nodes
+  // row yet -- it has no reference_id until capture.py's worker finishes
+  // tagging and embedding it, seconds later, and canvas_nodes requires one
+  // (db.py's schema says so). So a drop draws a placeholder immediately,
+  // entirely outside `entries`: it is never selectable, draggable or
+  // connectable, which is what style.css's .canvas-node-pending switching off
+  // pointer-events is for. file-drop.js swaps it for a real, persisted node
+  // via addNode() once the capture resolves, at the same point and the same
+  // default reference size, so nothing visibly jumps. A reload mid-flight
+  // loses the placeholder, never the reference -- the capture queue survives
+  // a restart on its own, so nothing here needs to.
+
+  /** Draw a placeholder at `point` (top-left, same convention as every other
+   *  drop on this canvas) previewing `previewUrl` if there is one (an image,
+   *  via URL.createObjectURL) or `label` as a bare icon otherwise (a PDF or
+   *  text file has no useful client-side preview). Returns `remove()`, which
+   *  also revokes the object URL -- the one place that has to, since it's the
+   *  one place that created it. */
+  function addPendingReference(point, { previewUrl, label } = {}) {
+    const size = DEFAULT_SIZE.reference;
+    const el = document.createElement("div");
+    el.className = "canvas-node canvas-node-reference canvas-node-pending";
+    el.style.width = `${size.w}px`;
+    el.style.height = `${size.h}px`;
+    el.style.transform = `translate3d(${point.x}px, ${point.y}px, 0)`;
+    // Above whatever is already on the canvas, so a drop always lands on top
+    // of anything it happens to overlap rather than under it.
+    el.style.zIndex = String(topZ + 2);
+
+    const card = document.createElement("div");
+    card.className = "card";
+    if (previewUrl) {
+      const img = document.createElement("img");
+      img.src = previewUrl;
+      img.alt = "";
+      card.appendChild(img);
+    } else {
+      // Same shape textCard() draws for a PDF whose own render failed
+      // (shared/cards.js) -- reused here for the same reason: an icon and
+      // nothing else, styled by the same .text-card-placeholder rule.
+      const placeholder = document.createElement("div");
+      placeholder.className = "text-card text-card-placeholder";
+      const icon = document.createElement("span");
+      icon.className = "text-card-icon";
+      icon.textContent = label || "···";
+      placeholder.appendChild(icon);
+      card.appendChild(placeholder);
+    }
+    const caption = document.createElement("div");
+    caption.className = "card-caption";
+    caption.textContent = "Adding…";
+    card.appendChild(caption);
+
+    const body = document.createElement("div");
+    body.className = "canvas-node-body";
+    body.appendChild(card);
+    el.appendChild(body);
+    world.appendChild(el);
+
+    return {
+      remove() {
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        el.remove();
+      },
+    };
+  }
+
+  /** Make a reference this canvas didn't already know about addressable by
+   *  buildReferenceBody and the carousel -- a file dropped straight from
+   *  Finder ingests into the project but was never in the `references` list
+   *  this page loaded at boot. Idempotent: resolving a duplicate that already
+   *  belongs to the project is a no-op here, not a second entry. */
+  function registerReference(ref) {
+    if (referencesById.has(ref.id)) return;
+    referencesById.set(ref.id, ref);
+    references.push(ref);
+  }
+
   // --- keyboard ------------------------------------------------------------
 
   function isUndoChord(event) {
@@ -1239,6 +1319,8 @@ export function createNodes({
 
     addNode,
     removeNode,
+    addPendingReference,
+    registerReference,
 
     /** The current marquee/click selection, for concept analysis: the canvas
      *  is the picker, so this exposes exactly what is selected. Widget nodes

@@ -252,7 +252,13 @@ def accept(envelope, upload=None, text=None):
 
     if upload is not None:
         ext = Path(upload.filename or "").suffix.lower()
-        if ext not in ingest.IMAGE_EXTS and ext not in ingest.PDF_EXTS:
+        # Kept as-is for anything ingest actually knows how to open (images,
+        # PDFs, and -- since the canvas file-drop landed -- plain text/
+        # markdown too); anything else is assumed to be a photo with a
+        # missing or wrong extension, the one case the extension has always
+        # covered, since the browser extension's own uploads are always
+        # images.
+        if ext not in ingest.SUPPORTED_EXTS:
             ext = DEFAULT_IMAGE_EXT
         stored = PENDING_DIR / f"{capture_id}{ext}"
         upload.save(stored)

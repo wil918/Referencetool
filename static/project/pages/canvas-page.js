@@ -22,6 +22,7 @@ import { createViewport } from "../canvas/viewport.js";
 import { createStore } from "../canvas/store.js";
 import { createNodes } from "../canvas/nodes.js";
 import { createPalette } from "../canvas/palette.js";
+import { createFileDrop } from "../canvas/file-drop.js";
 import { createConceptPanel } from "./concept-panel.js";
 import { ensureOverlays, setActiveReferences } from "./overlays.js";
 
@@ -53,7 +54,7 @@ export function createCanvasPage(el, { project }) {
   const hint = document.createElement("p");
   hint.className = "muted canvas-hint";
   hint.textContent =
-    "Nothing on the canvas yet — open + to add simple text or a widget, or drag a reference in.";
+    "Nothing on the canvas yet — open + to add simple text or a widget, drag a reference in, or drop a file from Finder.";
   hint.hidden = true;
   root.appendChild(hint);
 
@@ -61,6 +62,7 @@ export function createCanvasPage(el, { project }) {
 
   let nodes = null;
   let palette = null;
+  let fileDrop = null;
   let destroyed = false;
 
   function setStatus(message) {
@@ -198,6 +200,11 @@ export function createCanvasPage(el, { project }) {
     hint.hidden = nodes.count() > 0;
 
     palette = createPalette({ container: root, viewport, references, addNode: nodes.addNode });
+    // The other way something lands on the canvas: not a drag out of this
+    // panel, but a real OS file dragged in from Finder. Separate listener,
+    // separate event family (native drag* vs. palette.js's pointer events) --
+    // see file-drop.js's own header for why the two never fight over an event.
+    fileDrop = createFileDrop({ viewport, project, nodes, onStatus: setStatus });
   }
 
   boot();
@@ -206,6 +213,7 @@ export function createCanvasPage(el, { project }) {
     destroy() {
       destroyed = true;
       concept.destroy();
+      fileDrop?.destroy();
       palette?.destroy();
       nodes?.destroy();
       viewport.destroy();
