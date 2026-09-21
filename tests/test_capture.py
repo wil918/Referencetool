@@ -84,6 +84,54 @@ def ingest_dir(ref):
     return ingest.TEXTS_DIR / name
 
 
+def test_text_file_upload_keeps_its_extension(archive):
+    """The canvas file-drop uploads .txt/.md as `upload`, not `text` -- unlike
+    the browser extension, which only ever uploads images. Losing the
+    extension here would force it through DEFAULT_IMAGE_EXT and have ingest
+    try to decode prose as a JPEG."""
+    from pathlib import Path
+
+    quote = "The garment functions as an architectural enclosure around the body."
+    row = capture.accept(envelope(type="file"), upload=FakeUpload(quote.encode("utf-8"), "notes.txt"))
+    drain()
+
+    done = db.get_capture(row["id"])
+    assert done["status"] == db.CAPTURE_DONE
+    ref = db.get_reference(done["reference_id"])
+    assert ref["type"] == "text"
+    assert Path(ref["filepath"]).suffix == ".txt"
+    assert ingest_dir(ref).read_text(encoding="utf-8") == quote
+
+
+def test_markdown_file_upload_keeps_its_extension(archive):
+    from pathlib import Path
+
+    row = capture.accept(
+        envelope(type="file"), upload=FakeUpload(b"# A heading\n\nBody text.", "brief.md")
+    )
+    drain()
+
+    ref = db.get_reference(db.get_capture(row["id"])["reference_id"])
+    assert ref["type"] == "text"
+    assert Path(ref["filepath"]).suffix == ".md"
+
+
+def test_unrecognised_upload_extension_still_falls_back_to_image(archive):
+    """An extension ingest doesn't know at all (not image, pdf, or text)
+    still gets the old fallback -- only the newly-supported text extensions
+    changed."""
+    from pathlib import Path
+
+    row = capture.accept(envelope(type="file"), upload=FakeUpload(png_bytes(), "clip.mov"))
+    drain()
+
+    done = db.get_capture(row["id"])
+    assert done["status"] == db.CAPTURE_DONE
+    ref = db.get_reference(done["reference_id"])
+    assert ref["type"] == "image"
+    assert Path(ref["filepath"]).suffix == ".jpg"
+
+
 def test_projects_are_assigned_after_ingest(archive):
     db.create_project("p1", "AW26")
     row = capture.accept(envelope(project_ids=["p1"]), upload=FakeUpload(png_bytes()))

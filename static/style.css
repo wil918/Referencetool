@@ -3351,6 +3351,24 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 .canvas-node-reference .text-card { flex: 1 1 auto; min-height: 0; aspect-ratio: auto; }
 .canvas-node-reference .card-caption { flex: 0 0 auto; }
 
+/* A file just dropped from Finder, ingesting on the worker (nodes.js's
+   addPendingReference). Same shape as the real reference node it will become
+   -- same size, same card layout -- so nothing visibly jumps when file-drop.js
+   swaps it out; the pulse is the only thing marking it "not yet real". No
+   gestures of its own: pointer-events is off so a click or drag started over
+   it falls through to whatever the canvas would do there anyway (pan, most
+   often), rather than being silently swallowed by an element with no
+   handlers attached. */
+.canvas-node-pending {
+  pointer-events: none;
+  animation: canvas-pending-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes canvas-pending-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
 /* The text node's editable area. Deliberately not named after the kind: the
    node wrapper already carries .canvas-node-text, and one class on both
    elements would put this padding on the box as well as inside it. */
