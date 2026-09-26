@@ -1726,6 +1726,7 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 
 .analyze-transcript {
   flex: 1;
+  min-height: 140px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1774,7 +1775,11 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
    the neumorphic system's own vocabulary rather than that sheet's drafting
    one (concept-panel.js lives in the project shell, not the schedule). */
 
-.concept-actions { margin-bottom: 1rem; }
+/* A fixed, capped-height strip below the transcript, never the other way
+   round -- a critique with a long NEXT ACTIONS list must not be able to push
+   the critique itself down to a sliver. The list scrolls internally instead
+   of growing the modal. */
+.concept-actions { flex: 0 0 auto; margin-bottom: 1rem; }
 
 .concept-actions-label { margin: 0 0 0.6rem; }
 
@@ -1782,6 +1787,9 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+  max-height: 190px;
+  overflow-y: auto;
+  padding-right: 0.3rem;
   margin-bottom: 0.75rem;
 }
 
