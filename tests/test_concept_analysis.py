@@ -1,12 +1,15 @@
-"""Concept analysis: critique a project's concept against its brief, from a
-canvas selection.
+"""Concept analysis: read a project's moodboard -- its measured CLIP clusters,
+named and pushed lateral -- from a canvas selection.
 
 analyze._send (the Claude call) is patched per-test to a canned writeup -- it is
 the same call the plain Analyze action uses, and nothing else stubs it.
-analyze.gather_context is patched to skip the vector store (the embedding
-lookups it does would otherwise hit real Chroma, the same isolation wart the
-estimation tests have).
+analyze.gather_context and analyze.graph_layout.build_graph are both patched to
+skip the vector store (the embedding lookups they'd otherwise do would hit
+real Chroma, the same isolation wart the estimation tests have) -- build_graph
+stubbed empty means every test here exercises the "too few references for
+meaningful clusters" fallback unless a test overrides the stub itself.
 """
+import datetime
 import itertools
 
 import pytest
@@ -17,10 +20,13 @@ import db
 import ingest
 
 CANNED = (
-    "Strong connections\nThe tailoring references carry the silhouette claim.\n\n"
-    "Asserted, not demonstrated\nThe 'movement' note has no reference behind it.\n\n"
-    "The weak link\nThe runway snapshot argues for nothing.\n\n"
-    "Research directions\nLook at 1980s pattern-cutting manuals."
+    "READ\nThe canvas is still gathering its first direction.\n\n"
+    "CLUSTERS\nCluster 0 shares a raw, unfinished surface.\n\n"
+    "LATERAL DIRECTIONS\nCluster 0\n- Look at rust bloom on old machinery.\n\n"
+    "THE WHOLE BODY\nOne cluster is carrying the whole board so far.\n\n"
+    "NEXT ACTIONS\n"
+    "- Photograph three rusted surfaces around the studio.\n"
+    "- Add a swatch of raw canvas.\n"
 )
 
 _colours = itertools.count()
@@ -49,6 +55,10 @@ def _stub_claude(monkeypatch):
 
     monkeypatch.setattr(analyze, "_send", fake_send)
     monkeypatch.setattr(analyze, "gather_context", lambda refs: {})
+    monkeypatch.setattr(
+        analyze.graph_layout, "build_graph",
+        lambda reference_ids=None: {"nodes": [], "edges": [], "planes": [], "cluster_count": 0},
+    )
     return sent
 
 
@@ -95,7 +105,7 @@ def test_empty_selection_falls_back_to_the_whole_project(client, archive, _stub_
 
     prompt = _stub_claude[0][0]["content"]
     # no brief imported -> the prompt says so rather than inventing one
-    assert "no brief" in prompt.lower()
+    assert "THE BRIEF: none imported" in prompt
     # both project references were pulled in (conftest's tag stub titles every
     # image the same, so count the formatted lines rather than the titles)
     assert prompt.count("(image)") == 2
@@ -208,6 +218,110 @@ def test_an_imported_brief_is_stated_in_the_prompt(client, archive, _stub_claude
 
 def test_concept_analysis_needs_a_real_project(client):
     assert client.post("/api/projects/nope/concept-analysis", json={}).status_code == 404
+
+
+def test_next_actions_are_pulled_out_of_the_trailing_heading(client, archive, _stub_claude):
+    pid = make_project(client)
+    add_reference(archive, client, pid, "swatch")
+
+    resp = client.post(f"/api/projects/{pid}/concept-analysis", json={})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["next_actions"] == [
+        "Photograph three rusted surfaces around the studio.",
+        "Add a swatch of raw canvas.",
+    ]
+    # the prose transcript still carries the section -- extraction reads it,
+    # it doesn't strip it back out
+    assert "NEXT ACTIONS" in data["writeup"]
+
+
+# --- measured clusters, not invented ones ---------------------------------
+
+
+def test_clusters_are_fed_in_as_measured_structure(client, archive, _stub_claude, monkeypatch):
+    """The prompt reasons over graph_layout's own CLIP clusters and the
+    strongest cross-cluster edge, not over a grouping invented from titles."""
+    pid = make_project(client)
+    # conftest's tagging stub gives every image the same suggested title, which
+    # ingest.py then prefers over an unrelated filename -- so the real titles
+    # aren't "rust"/"bark"/"wallpaper" as added, just dedupe_title()'s take on
+    # "Tagged Image" repeated three times. Read them back rather than assuming.
+    rust = add_reference(archive, client, pid, "rust")
+    bark = add_reference(archive, client, pid, "bark")
+    wallpaper = add_reference(archive, client, pid, "wallpaper")
+    rust_title = db.get_reference(rust)["title"]
+    bark_title = db.get_reference(bark)["title"]
+    wallpaper_title = db.get_reference(wallpaper)["title"]
+
+    monkeypatch.setattr(
+        analyze.graph_layout,
+        "build_graph",
+        lambda reference_ids=None: {
+            "nodes": [
+                {"id": rust, "cluster": 0, "title": rust_title, "tags": [], "type": "image"},
+                {"id": bark, "cluster": 0, "title": bark_title, "tags": [], "type": "image"},
+                {"id": wallpaper, "cluster": 1, "title": wallpaper_title, "tags": [], "type": "image"},
+            ],
+            "edges": [{"source": rust, "target": wallpaper, "score": 0.7, "cross_cluster": True}],
+            "planes": [],
+            "cluster_count": 2,
+        },
+    )
+    monkeypatch.setattr(
+        analyze.colour, "colour_map",
+        lambda include_ids=None: {"nodes": [], "radius": 0, "height": 0, "hue_ticks": []},
+    )
+
+    resp = client.post(
+        f"/api/projects/{pid}/concept-analysis",
+        json={"reference_ids": [rust, bark, wallpaper]},
+    )
+    assert resp.status_code == 200
+    prompt = _stub_claude[0][0]["content"]
+
+    assert "MEASURED CLUSTERS" in prompt
+    assert "CLUSTER 0 (2 references):" in prompt
+    assert "CLUSTER 1 (1 reference):" in prompt
+    assert prompt.count(f'"{rust_title}"') >= 1
+    assert prompt.count(f'"{wallpaper_title}"') >= 1
+    assert (
+        f'CLOSEST TWO CLUSTERS: cluster 0 and cluster 1 come nearest to touching, '
+        f'via "{rust_title}" and "{wallpaper_title}".' in prompt
+    )
+    # the weak-link framing is gone -- no reference is ever asked to justify itself
+    assert "weak link" not in prompt.lower()
+    assert "argues for" not in prompt.lower()
+
+
+# --- stage awareness -------------------------------------------------------
+
+
+def test_stage_context_reports_elapsed_remaining_and_deliverable_progress(client, archive):
+    pid = make_project(client)
+    today = datetime.date.today()
+    start = (today - datetime.timedelta(days=10)).isoformat()
+    end = (today + datetime.timedelta(days=5)).isoformat()
+    extraction = {
+        "summary": "",
+        "key_dates": [
+            {"label": "Briefing", "date": start, "kind": "briefing"},
+            {"label": "Hand-in", "date": end, "kind": "hand-in"},
+        ],
+        "deliverables": [],
+    }
+
+    db.create_deliverable("d-stage", pid, "Part 1")
+    db.create_task("t1", "Task one", project_id=pid, deliverable_id="d-stage", status="done")
+    db.create_task("t2", "Task two", project_id=pid, deliverable_id="d-stage", status="pending")
+
+    stage = analyze._project_stage_context(pid, extraction)
+    assert stage["days_elapsed"] == 10
+    assert stage["days_remaining"] == 5
+    assert stage["deliverables"] == [
+        {"title": "Part 1", "due_at": None, "task_count": 2, "tasks_resolved": 1, "is_done": False}
+    ]
+    assert isinstance(stage["at_risk"], list)
 
 
 # --- the plain Analyze action is untouched -------------------------------

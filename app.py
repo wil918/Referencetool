@@ -1120,7 +1120,7 @@ def api_concept_analysis(project_id):
     _require_project(project_id)
     body = request.get_json(force=True, silent=True) or {}
     try:
-        writeup, messages, reference_map = analyze.start_concept_analysis(
+        writeup, messages, reference_map, next_actions = analyze.start_concept_analysis(
             project_id,
             reference_ids=body.get("reference_ids") or [],
             notes=body.get("notes") or [],
@@ -1134,7 +1134,12 @@ def api_concept_analysis(project_id):
 
     analysis_id = str(uuid.uuid4())
     _analysis_sessions[analysis_id] = messages
-    return jsonify({"analysis_id": analysis_id, "writeup": writeup, "references": reference_map})
+    return jsonify({
+        "analysis_id": analysis_id,
+        "writeup": writeup,
+        "references": reference_map,
+        "next_actions": next_actions,
+    })
 
 
 def _analysis_summary(a):
