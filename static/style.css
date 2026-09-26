@@ -1799,6 +1799,39 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 
 .analyze-input-row input { flex: 1; }
 
+/* Concept analysis's "next actions" review list -- one raised row per
+   proposed task, same opt-out pattern as the brief import review sheet, in
+   the neumorphic system's own vocabulary rather than that sheet's drafting
+   one (concept-panel.js lives in the project shell, not the schedule). */
+
+.concept-actions { margin-bottom: 1rem; }
+
+.concept-actions-label { margin: 0 0 0.6rem; }
+
+.concept-actions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.concept-action-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 18px;
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+}
+
+.concept-action-title { flex: 1; }
+
+.concept-actions-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .ref-link {
   color: var(--accent);
   text-decoration: underline;
