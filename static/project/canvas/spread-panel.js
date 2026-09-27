@@ -95,7 +95,16 @@ export function createSpreadPanel({ container }) {
   countInput.className = "spread-panel-count";
   // On change, not on input: typing "3" on the way to "30" must not trim the
   // spread to three pages in between.
-  countInput.addEventListener("change", call((s) => s.setCount(countInput.value)));
+  countInput.addEventListener(
+    "change",
+    call((s) => {
+      s.setCount(countInput.value);
+      // Whatever the spread settled on -- the number typed, clamped, or the
+      // old count if removing placed images was declined. render() leaves a
+      // focused field alone, so this is the one place that can say so.
+      countInput.value = String(s.pageCount());
+    })
+  );
   const count = labelled("Pages", countInput);
 
   const gapInput = document.createElement("input");

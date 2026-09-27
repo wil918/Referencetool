@@ -603,6 +603,7 @@ export function createSpread({
         }
       }
       record();
+      for (const page of pages.slice(next)) releasePreview(page);
       pages.length = next;
       if (activeIndex !== null && activeIndex >= next) activeIndex = null;
     }

@@ -41,7 +41,7 @@ import scheduling
 import spreads
 import style_gen
 import task_ai
-from config import ARCHIVE_API_TOKEN
+from config import ARCHIVE_API_TOKEN, REFERENCES_DIR
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 
@@ -238,9 +238,7 @@ def _phone_completed_at():
 
 
 def _resolve_ref_path(ref):
-    # config's, read now rather than the name imported at startup, so a test
-    # that points config at a throwaway archive is pointing this at it too.
-    return config.REFERENCES_DIR / ref["filepath"]
+    return REFERENCES_DIR / ref["filepath"]
 
 
 def _ref_summary(ref, match_label=None):
@@ -396,7 +394,7 @@ def api_delete_reference(ref_id):
 
     path = _resolve_ref_path(ref)
     if path.exists():
-        trash_dir = config.REFERENCES_DIR.parent / DELETED_DIR_NAME
+        trash_dir = REFERENCES_DIR.parent / DELETED_DIR_NAME
         trash_dir.mkdir(parents=True, exist_ok=True)
         destination = trash_dir / path.name
         if destination.exists():
