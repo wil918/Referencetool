@@ -260,11 +260,12 @@ CREATE TABLE IF NOT EXISTS layouts (
 
 # Nodes on a project's infinite canvas.
 #
-# One table for all three kinds (reference | text | widget) rather than three,
-# because the canvas drags, locks, z-orders and connects all three identically.
-# Only what gets drawn inside the box differs: reference_id points at the
-# archive for a reference node, content holds the body of a text node, config
-# holds a widget node's settings.
+# One table for all four kinds (reference | text | widget | shape) rather than
+# four, because the canvas drags, locks, z-orders and connects all of them
+# identically. Only what gets drawn inside the box differs: reference_id
+# points at the archive for a reference node, content holds the body of a
+# text node, config holds a widget node's settings or (kind = "shape") the
+# shape's own { shape: "rect" | "ellipse", fill, stroke, strokeWidth }.
 #
 # x/y/w/h are REAL world coordinates, never screen coordinates -- a screen
 # position stops meaning anything the moment the canvas is panned or zoomed.

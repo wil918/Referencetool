@@ -60,7 +60,7 @@ const DRAG_THRESHOLD = 4;
 // (200x236), which would leave dead space under a square image.
 const REFERENCE_GHOST_WIDTH = 200;
 
-export function createPalette({ container, viewport, references = [], addNode }) {
+export function createPalette({ container, viewport, references = [], addNode, setDrawTool }) {
   let cascade = 0;
 
   const fab = document.createElement("button");
@@ -299,6 +299,59 @@ export function createPalette({ container, viewport, references = [], addNode })
   addSection.appendChild(addRow);
   panel.appendChild(addSection);
 
+  // --- shape tools -------------------------------------------------------
+  //
+  // Not another add-on-click/drag-to-place control: these arm nodes.js's own
+  // draw gesture (createNodes' setDrawTool) rather than adding anything
+  // themselves -- the shape is created by dragging directly on the canvas
+  // once armed (nodes.js's handleDrawPress), at exactly the size and place
+  // it's dragged. Sticky rather than one-shot, so several shapes can be
+  // drawn without reopening this panel each time; clicking the armed tool
+  // again, picking the other one, or Escape all put it down.
+
+  let armedTool = null;
+  const toolButtons = new Map();
+
+  function setArmed(tool) {
+    armedTool = tool;
+    for (const [type, btn] of toolButtons) btn.classList.toggle("is-armed", type === armedTool);
+    setDrawTool(armedTool);
+    // Out of the way once a tool is armed -- the whole point is to now drag
+    // on the canvas this panel is floating over.
+    if (armedTool) {
+      panel.hidden = true;
+      fab.classList.remove("is-open");
+    }
+  }
+
+  function onEscape(event) {
+    if (event.key === "Escape" && armedTool) setArmed(null);
+  }
+  window.addEventListener("keydown", onEscape);
+
+  function shapeToolButton(label, shapeType) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn canvas-dock-add canvas-dock-tool";
+    btn.textContent = label;
+    btn.addEventListener("click", () => setArmed(armedTool === shapeType ? null : shapeType));
+    toolButtons.set(shapeType, btn);
+    return btn;
+  }
+
+  const shapeSection = document.createElement("div");
+  shapeSection.className = "canvas-dock-section";
+  const shapeHeading = document.createElement("p");
+  shapeHeading.className = "muted canvas-dock-heading";
+  shapeHeading.textContent = "Draw a shape";
+  shapeSection.appendChild(shapeHeading);
+
+  const shapeRow = document.createElement("div");
+  shapeRow.className = "canvas-dock-add-row";
+  shapeRow.append(shapeToolButton("Rectangle", "rect"), shapeToolButton("Ellipse", "ellipse"));
+  shapeSection.appendChild(shapeRow);
+  panel.appendChild(shapeSection);
+
   // --- the reference picker ----------------------------------------------
 
   const refSection = document.createElement("div");
@@ -367,6 +420,7 @@ export function createPalette({ container, viewport, references = [], addNode })
 
   return {
     destroy() {
+      window.removeEventListener("keydown", onEscape);
       panel.remove();
       fab.remove();
     },
