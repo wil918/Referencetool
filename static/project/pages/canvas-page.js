@@ -197,7 +197,13 @@ export function createCanvasPage(el, { project }) {
     viewport.showBounds(nodes.bounds());
     hint.hidden = nodes.count() > 0;
 
-    palette = createPalette({ container: root, viewport, references, addNode: nodes.addNode });
+    palette = createPalette({
+      container: root,
+      viewport,
+      references,
+      addNode: nodes.addNode,
+      setDrawTool: nodes.setDrawTool,
+    });
   }
 
   boot();
