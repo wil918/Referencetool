@@ -1382,6 +1382,103 @@ def api_add_text():
         tmp_path.unlink(missing_ok=True)
 
 
+@app.post("/api/pdf-info")
+def api_pdf_info():
+    """Page count for a PDF about to be split -- lets the Add tab show it
+    before the user commits to a page range. Each page becomes a Claude
+    tagging call plus a CLIP embedding, so this is worth knowing upfront."""
+    if "file" not in request.files:
+        return jsonify({"error": "no file uploaded"}), 400
+    upload = request.files["file"]
+    if Path(upload.filename or "").suffix.lower() != ".pdf":
+        return jsonify({"error": "not a PDF"}), 400
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        upload.save(tmp.name)
+        tmp_path = Path(tmp.name)
+    try:
+        return jsonify({"pages": ingest.pdf_page_count(tmp_path)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@app.post("/api/split-pdf")
+def api_split_pdf():
+    """Split a PDF into one reference per page instead of the whole document
+    as one reference -- a lookbook, scanned magazine or catalogue is more
+    useful with each page tagged, embedded and findable on its own.
+
+    Rendering is synchronous (tens of milliseconds a page); tagging and
+    embedding are not, so each rendered page is queued through the existing
+    capture pipeline (capture.py) rather than blocking this request or adding
+    a second ingest path. The original PDF itself is never kept -- only the
+    rendered pages become references.
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "no file uploaded"}), 400
+    upload = request.files["file"]
+    original_filename = upload.filename or "document.pdf"
+    if Path(original_filename).suffix.lower() != ".pdf":
+        return jsonify({"error": "not a PDF"}), 400
+
+    title = request.form.get("title") or Path(original_filename).stem
+    notes = request.form.get("notes") or None
+    is_own_work = request.form.get("own_work") == "true"
+    range_str = request.form.get("range") or ""
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        upload.save(tmp.name)
+        tmp_path = Path(tmp.name)
+
+    rendered = []
+    try:
+        page_count = ingest.pdf_page_count(tmp_path)
+        try:
+            page_indices = ingest.parse_page_range(range_str, page_count)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        if not page_indices:
+            return jsonify({"error": "no pages selected"}), 400
+
+        rendered = ingest.render_pdf_pages(tmp_path, page_indices)
+        width = len(str(page_count))
+        capture_ids = []
+        for page_number, png_path in rendered:
+            envelope = {
+                "type": "image",
+                "is_own_work": is_own_work,
+                "metadata": {
+                    "title": f"{title} — page {page_number:0{width}d}",
+                    "source_label": original_filename,
+                },
+                "metadata_provenance": [{
+                    "field": "title",
+                    "value": f"{title} — page {page_number:0{width}d}",
+                    "source": "pdf-split",
+                }],
+                "user_note": notes,
+            }
+            row = capture.accept(envelope, file_path=png_path)
+            capture_ids.append(row["id"])
+
+        return jsonify({
+            "queued": len(capture_ids),
+            "total_pages": page_count,
+            "capture_ids": capture_ids,
+        }), 202
+    except Exception as e:
+        # Anything rendered but not yet handed to capture.accept (which moves
+        # its file into PENDING_DIR) would otherwise leak in the system temp
+        # dir -- accepted pages are already gone from `rendered`'s paths.
+        for _, png_path in rendered:
+            Path(png_path).unlink(missing_ok=True)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 # --- Colour similarity ------------------------------------------------------
 #
 # Colour is a separate search dimension from the existing CLIP embeddings,

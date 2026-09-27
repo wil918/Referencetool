@@ -163,6 +163,82 @@ def _extract_pdf_content(path):
     return full_text, extracted_paths
 
 
+# --- PDF page splitting ------------------------------------------------------
+#
+# Turns a multi-page PDF into one rendered image per page, so a lookbook or
+# scanned catalogue can be tagged, embedded and searched page by page instead
+# of living in the archive as a single opaque document.
+
+# Pages rendered as standalone references need to hold up to zooming, colour
+# analysis and printing -- a different question from app.py's PDF_THUMB_DPI,
+# which only has to look right at grid-thumbnail size, so this gets its own
+# constant rather than reusing that one.
+#
+# Duplicate detection (add_reference's content hash) only recognises a
+# re-split of the same PDF as the archive's existing pages while this stays
+# fixed -- change it and the same document will render to different bytes and
+# come in as a second set of references instead of resolving to the first.
+PDF_SPLIT_DPI = 150
+
+
+def pdf_page_count(path):
+    doc = fitz.open(path)
+    try:
+        return doc.page_count
+    finally:
+        doc.close()
+
+
+def parse_page_range(range_str, page_count):
+    """Parse a 1-based page range like "3-7" or "1,4,9-12" into a sorted list
+    of 0-based page indices. Blank or None means every page.
+
+    Comma-separated so a handful of scattered spreads can be picked without
+    typing out every number in between; each part is validated against the
+    document's own page count rather than silently clamped, so a typo doesn't
+    quietly import the wrong pages.
+    """
+    if not range_str or not range_str.strip():
+        return list(range(page_count))
+
+    indices = set()
+    for part in range_str.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            start_str, _, end_str = part.partition("-")
+        else:
+            start_str = end_str = part
+        try:
+            start_n, end_n = int(start_str.strip()), int(end_str.strip())
+        except ValueError:
+            raise ValueError(f"'{part}' is not a valid page or page range")
+        if start_n < 1 or end_n > page_count or start_n > end_n:
+            raise ValueError(f"'{part}' is out of range for a {page_count}-page document")
+        indices.update(range(start_n - 1, end_n))
+
+    return sorted(indices)
+
+
+def render_pdf_pages(path, page_indices):
+    """Render the given 0-based page indices of a PDF to standalone PNG files
+    at PDF_SPLIT_DPI. Returns [(page_number, Path), ...] in the order given --
+    page_number is 1-based, for naming. Caller owns the returned temp files.
+    """
+    doc = fitz.open(path)
+    try:
+        rendered = []
+        for i in page_indices:
+            pix = doc[i].get_pixmap(dpi=PDF_SPLIT_DPI)
+            out_path = Path(tempfile.gettempdir()) / f"pdfpage_{uuid.uuid4().hex}.png"
+            pix.save(out_path)
+            rendered.append((i + 1, out_path))
+        return rendered
+    finally:
+        doc.close()
+
+
 def add_reference(source_path, title=None, source=None, notes=None, force=False, is_own_work=False):
     source_path = Path(source_path).expanduser().resolve()
     if not source_path.exists():
