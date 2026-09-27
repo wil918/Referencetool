@@ -9,6 +9,12 @@
  * doesn't go through registry.js at all, which is also why it never shows
  * up in the project grid's Add Widget dock: it isn't a widget, it's a mark.
  *
+ * A fifth kind, "pages", is a portfolio spread (spread.js): one node that
+ * owns a document's worth of A4 pages. The pages are its contents, not nodes
+ * -- they move and scale with it, never on their own -- so everything here
+ * treats a spread exactly like any other node, and only a press that lands on
+ * one of its pages is handed to spread.js instead of starting a drag.
+ *
  * Two rules shape the whole file:
  *
  *   1. Positions are world coordinates, always. Every gesture converts the
@@ -39,6 +45,9 @@ import {
   DEFAULT_STROKE,
   DEFAULT_STROKE_WIDTH,
 } from "./shape-style-panel.js";
+import { createSpread } from "./spread.js";
+import { createSpreadPanel } from "./spread-panel.js";
+import { DEFAULT_PAGE_COUNT, defaultSpreadConfig, layoutSpread } from "./spread-layout.js";
 
 // How big a node is when nothing says otherwise. Sizes are world units, which
 // at scale 1 are CSS pixels -- so these are simply "how big it looks when you
@@ -47,6 +56,9 @@ const DEFAULT_SIZE = {
   reference: { w: 200, h: 236 }, // a square thumbnail plus its caption
   text: { w: 240, h: 120 },
   shape: { w: 160, h: 120 },
+  // Only ever used for a spread restored or added without a drawn region --
+  // drawing one is how a spread is normally made.
+  pages: { w: 720, h: 420 },
 };
 // A widget's own defaultSize is in homepage grid cells, so it needs
 // converting. These are that grid's own metrics (grid.js's ROW_HEIGHT + GAP,
@@ -191,6 +203,8 @@ export function createNodes({
   // from selectedNodeIds because the panel only ever makes sense for exactly
   // one shape at a time -- see syncShapePanel.
   let selectedShapeId = null;
+  // Likewise for the one spread whose panel is open.
+  let selectedSpreadId = null;
   const edges = createEdgeLayer(world, { onSelect: selectEdge });
   // Screen-space chrome, not world content -- mounted as a sibling of the
   // world layer (viewport.container, not viewport.el) so panning and zooming
@@ -215,9 +229,13 @@ export function createNodes({
       store.patchNode(nodeId, { config: entry.node.config });
     },
   });
+  // And for a selected spread: its layout, page count and export, plus
+  // whichever of its pages was last clicked (spread-panel.js).
+  const spreadPanel = createSpreadPanel({ container: viewport.container });
   const unsubscribeViewport = viewport.subscribe(() => {
     if (selectedEdgeId) stylePanel.reposition(edgeAnchor(selectedEdgeId));
     if (selectedShapeId) shapePanel.reposition(nodeAnchor(selectedShapeId));
+    if (selectedSpreadId) spreadPanel.reposition(spreadAnchor(selectedSpreadId));
   });
 
   const entries = new Map(); // node id -> { node, el, body, mounted, text }
@@ -235,8 +253,9 @@ export function createNodes({
   // captures the pointer.
   let gesture = null;
 
-  /* Undo: add node, delete node, connect, disconnect, and move (a single
-   * node's drag, or a marquee-selected group's). Not a resize, a lock, or a
+  /* Undo: add node, delete node, connect, disconnect, move (a single node's
+   * drag, or a marquee-selected group's), and an edit to a spread's pages
+   * (spread.js's record() says which). Not a resize, a lock, or a
    * text edit -- contenteditable already has its own native undo for text,
    * which fighting over would behave worse than doing nothing (see
    * onKeyDown below), and a resize has no equivalent group case forcing the
@@ -312,6 +331,17 @@ export function createNodes({
    *  than cached, the same reasoning as edgeAnchor above -- correct through
    *  a drag, a resize, and a pan/zoom without any of them having to remember
    *  to tell this function anything. */
+  /** The spread panel's anchor: the node's top and bottom edges on screen,
+   *  so the panel can sit under a spread whose top is off the top of the
+   *  window instead of over its first row of pages. */
+  function spreadAnchor(nodeId) {
+    const entry = entries.get(nodeId);
+    if (!entry) return null;
+    const top = viewport.worldToScreen(entry.node.x + entry.node.w / 2, entry.node.y);
+    const bottom = viewport.worldToScreen(entry.node.x, entry.node.y + entry.node.h);
+    return { x: top.x, top: top.y, bottom: bottom.y };
+  }
+
   function nodeAnchor(nodeId) {
     const entry = entries.get(nodeId);
     if (!entry) return null;
@@ -353,6 +383,30 @@ export function createNodes({
       selectedShapeId = null;
       shapePanel.hide();
     }
+    syncSpreadPanel(entry);
+  }
+
+  /** The same rule for spreads: the panel is open for exactly one selected
+   *  spread. A spread that stops being the selection also lets go of its
+   *  active page, so coming back to it starts from the spread, not from a
+   *  page clicked some time ago. */
+  function syncSpreadPanel(onlyEntry) {
+    const next = onlyEntry && onlyEntry.node.kind === "pages" ? onlyEntry : null;
+    if (selectedSpreadId && selectedSpreadId !== next?.node.id) {
+      entries.get(selectedSpreadId)?.mounted?.deselect();
+    }
+    if (next) {
+      selectedSpreadId = next.node.id;
+      spreadPanel.show(next.mounted, spreadAnchor(next.node.id));
+    } else {
+      selectedSpreadId = null;
+      spreadPanel.hide();
+    }
+  }
+
+  /** A spread's config or active page changed: its panel re-reads it. */
+  function refreshSpreadPanel(nodeId) {
+    if (nodeId === selectedSpreadId) spreadPanel.refresh(spreadAnchor(nodeId));
   }
 
   function selectNode(nodeId) {
@@ -591,6 +645,21 @@ export function createNodes({
     applyShapeStyle(entry);
   }
 
+  /* A spread fills its body with its pages and keeps them laid out; the
+   * handle it returns has the same notifyResize/destroy shape a mounted widget
+   * does, so addEntry and a resize treat the two identically. */
+  function buildPagesBody(entry, body) {
+    entry.mounted = createSpread({
+      entry,
+      body,
+      viewport,
+      store,
+      onStatus,
+      onChange: () => refreshSpreadPanel(entry.node.id),
+      onEdit: (before) => pushUndo({ type: "spread", nodeId: entry.node.id, config: before }),
+    });
+  }
+
   function buildWidgetBody(entry, body) {
     const type = entry.node.config?.type;
     const definition = definitionFor(type);
@@ -632,6 +701,7 @@ export function createNodes({
     else if (entry.node.kind === "text") buildTextBody(entry, body);
     else if (entry.node.kind === "widget") buildWidgetBody(entry, body);
     else if (entry.node.kind === "shape") buildShapeBody(entry, body);
+    else if (entry.node.kind === "pages") buildPagesBody(entry, body);
     return body;
   }
 
@@ -741,6 +811,10 @@ export function createNodes({
     if (node.locked) return false;
     if (target.closest(".canvas-node-grip")) return true;
     if (node.kind === "widget") return false;
+    // A page is the spread's contents, not a handle on it: pressing one
+    // clicks or reorders that page (spread.js). The spread itself moves by
+    // its grip or the space between its pages.
+    if (node.kind === "pages" && target.closest(".spread-page")) return false;
     if (target.closest('[contenteditable="true"]')) return false;
     return true;
   }
@@ -968,13 +1042,35 @@ export function createNodes({
   // several draws until palette.js explicitly disarms it (clicking the tool
   // again, picking the other one, or Escape below) -- the same way a real
   // drawing tool's selection persists until you put it down yourself.
+  //
+  // "pages" is the exception, and puts itself down after one spread: a
+  // document is drawn once, and a tool left armed would turn the next drag
+  // on empty canvas -- a pan, usually -- into a second thirty-page spread.
   let drawTool = null;
+  const drawToolListeners = new Set();
 
   function setDrawTool(kind) {
-    const next = kind === "rect" || kind === "ellipse" ? kind : null;
+    const next = kind === "rect" || kind === "ellipse" || kind === "pages" ? kind : null;
     if (next === drawTool) return;
     drawTool = next;
     viewport.container.classList.toggle("is-drawing-shape", Boolean(drawTool));
+    for (const fn of drawToolListeners) fn(drawTool);
+  }
+
+  /* While a spread is being drawn, the outline fills with the pages it will
+   * hold -- the same layout the spread will use, at the default page count --
+   * so the size of a page is visible before letting go rather than after. */
+  function drawPagePreview(previewEl, rect) {
+    const { pages } = layoutSpread({ width: rect.w, height: rect.h, count: DEFAULT_PAGE_COUNT });
+    const cells = previewEl.children;
+    pages.forEach((page, i) => {
+      const cell = cells[i];
+      cell.hidden = false;
+      cell.style.transform = `translate(${page.x}px, ${page.y}px)`;
+      cell.style.width = `${page.w}px`;
+      cell.style.height = `${page.h}px`;
+    });
+    for (let i = pages.length; i < cells.length; i++) cells[i].hidden = true;
   }
 
   /** viewport.js's drawHandler: first refusal on a plain press on empty
@@ -989,6 +1085,15 @@ export function createNodes({
     const previewEl = document.createElement("div");
     previewEl.className = "canvas-draw-preview";
     previewEl.style.borderRadius = drawTool === "ellipse" ? "50%" : "0";
+    if (drawTool === "pages") {
+      previewEl.classList.add("canvas-draw-preview-pages");
+      for (let i = 0; i < DEFAULT_PAGE_COUNT; i++) {
+        const cell = document.createElement("div");
+        cell.className = "canvas-draw-preview-page";
+        cell.hidden = true;
+        previewEl.appendChild(cell);
+      }
+    }
     world.appendChild(previewEl);
 
     gesture = {
@@ -1010,6 +1115,18 @@ export function createNodes({
    *  Fields mirror what addNode already accepts -- x/y/w/h here simply come
    *  from the gesture instead of DEFAULT_SIZE and a centred drop point. */
   function addShapeFromDraw({ rect, shapeType }) {
+    if (shapeType === "pages") {
+      // A spread: empty A4 slots, filling the region that was drawn.
+      setDrawTool(null);
+      return addNode({
+        kind: "pages",
+        x: rect.x,
+        y: rect.y,
+        w: Math.max(MIN_W, rect.w),
+        h: Math.max(MIN_H, rect.h),
+        config: defaultSpreadConfig(),
+      });
+    }
     return addNode({
       kind: "shape",
       x: rect.x,
@@ -1078,6 +1195,7 @@ export function createNodes({
       place(entry);
       refreshEdges(entry.node.id);
       if (entry.node.id === selectedShapeId) shapePanel.reposition(nodeAnchor(entry.node.id));
+      if (entry.node.id === selectedSpreadId) spreadPanel.reposition(spreadAnchor(entry.node.id));
     } else if (gesture.kind === "multi-drag") {
       // Every mover keeps its own offset from the pointer (captured in
       // onNodePointerDown), which is what preserves relative spacing --
@@ -1128,6 +1246,7 @@ export function createNodes({
       size(entry);
       refreshEdges(entry.node.id);
       if (entry.node.id === selectedShapeId) shapePanel.reposition(nodeAnchor(entry.node.id));
+      if (entry.node.id === selectedSpreadId) spreadPanel.reposition(spreadAnchor(entry.node.id));
       entry.mounted?.notifyResize(entry.node.w, entry.node.h);
     } else if (gesture.kind === "marquee") {
       updateMarqueeRect(event);
@@ -1151,6 +1270,7 @@ export function createNodes({
       gesture.previewEl.style.transform = `translate3d(${x}px, ${y}px, 0)`;
       gesture.previewEl.style.width = `${w}px`;
       gesture.previewEl.style.height = `${h}px`;
+      if (gesture.shapeType === "pages") drawPagePreview(gesture.previewEl, gesture.rect);
     } else {
       const { entry } = gesture;
       edges.showDraft(centreOf(entry.node), pointer);
@@ -1387,6 +1507,10 @@ export function createNodes({
       selectedShapeId = null;
       shapePanel.hide();
     }
+    if (selectedSpreadId === nodeId) {
+      selectedSpreadId = null;
+      spreadPanel.hide();
+    }
     onCountChange(entries.size);
 
     if (record) pushUndo({ type: "delete", node: snapshot, edges: removedEdges });
@@ -1433,6 +1557,11 @@ export function createNodes({
       if (entries.has(sourceId) && entries.has(targetId)) {
         await connect(sourceId, targetId, { record: false });
       }
+    } else if (action.type === "spread") {
+      // A page reordered, emptied or deleted, or the layout changed: the
+      // spread takes back the whole document as it was. A spread deleted
+      // since has nothing to take it back.
+      entries.get(action.nodeId)?.mounted?.restoreConfig(action.config);
     } else if (action.type === "move") {
       // Every node this move touched goes back to its recorded starting
       // point, one by one -- there is no bulk position route (store.js's own
@@ -1549,6 +1678,10 @@ export function createNodes({
         setDrawTool(null);
         return;
       }
+      // Inside a spread, Escape backs out a level first -- out of adjusting
+      // a crop, then off the page that was clicked -- before it lets go of
+      // the spread itself.
+      if (selectedSpreadId && entries.get(selectedSpreadId)?.mounted?.handleEscape()) return;
       // A text node's own keydown handler (buildTextBody) already blurs
       // itself on Escape without stopping propagation, so this still runs
       // afterward -- harmless, since a node mid-text-edit is never the
@@ -1573,6 +1706,10 @@ export function createNodes({
     if (selectedEdgeId) {
       event.preventDefault();
       removeEdge(selectedEdgeId);
+    } else if (selectedSpreadId && entries.get(selectedSpreadId)?.mounted?.handleDelete()) {
+      // A page of the spread was active: the key meant that page's image,
+      // not the whole spread (spread.js's handleDelete says why).
+      event.preventDefault();
     } else if (selectedNodeIds.size > 0) {
       event.preventDefault();
       // Each removal is its own undo entry (removeNode already pushes one),
@@ -1621,6 +1758,25 @@ export function createNodes({
      *  drawing tool -- called from palette.js's Rectangle/Ellipse buttons. */
     setDrawTool,
     getDrawTool: () => drawTool,
+    /** Hear about the draw tool being armed or put down from this side --
+     *  the pages tool puts itself down after one spread, and the palette's
+     *  buttons need to say so. Returns an unsubscribe. */
+    onDrawToolChange(fn) {
+      drawToolListeners.add(fn);
+      return () => drawToolListeners.delete(fn);
+    },
+
+    /** Files dropped from Finder onto one of a spread's pages fill that page
+     *  (and the empty ones after it) instead of landing loose on the canvas.
+     *  False if `pageEl` isn't a spread's page, so the drop carries on as an
+     *  ordinary one. */
+    dropFilesOnPage(pageEl, files) {
+      const nodeEl = pageEl?.closest(".canvas-node-pages");
+      const entry = nodeEl ? entries.get(nodeEl.dataset.id) : null;
+      if (!entry?.mounted) return false;
+      if (!selectedNodeIds.has(entry.node.id) || selectedNodeIds.size !== 1) selectNode(entry.node.id);
+      return entry.mounted.dropFiles(pageEl, files);
+    },
 
     /** The current marquee/click selection, for concept analysis: the canvas
      *  is the picker, so this exposes exactly what is selected. Widget nodes
@@ -1682,6 +1838,8 @@ export function createNodes({
       unsubscribeViewport();
       stylePanel.destroy();
       shapePanel.destroy();
+      spreadPanel.destroy();
+      drawToolListeners.clear();
     },
   };
 }

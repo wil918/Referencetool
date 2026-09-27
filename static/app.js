@@ -265,7 +265,10 @@ async function refreshArchive() {
   const checkedTypes = typeCheckboxes.filter((cb) => cb.checked).map((cb) => cb.value);
   const checkedMethods = searchMethodCheckboxes.filter((cb) => cb.checked).map((cb) => cb.value);
   if (q) params.set("q", q);
-  if (filterOwnWork.value !== "any") params.set("own_work", filterOwnWork.value);
+  // Left unset by default, which the API reads as "not in a search, shown
+  // when browsing" -- a portfolio spread puts thirty own-work pages into the
+  // archive at a time, and a search is looking for research.
+  if (filterOwnWork.value) params.set("own_work", filterOwnWork.value);
   if (checkedTypes.length) params.set("type", checkedTypes.join(","));
   if (checkedMethods.length) params.set("search_by", checkedMethods.join(","));
 
@@ -278,7 +281,10 @@ async function refreshArchive() {
   }
   currentList = refs;
   archiveFiltersActive =
-    Boolean(q) || filterOwnWork.value !== "any" || checkedTypes.length > 0 || Boolean(archiveFolderFilter);
+    Boolean(q) ||
+    !["", "any"].includes(filterOwnWork.value) ||
+    checkedTypes.length > 0 ||
+    Boolean(archiveFolderFilter);
   // A reference that's no longer in the list (deleted, or filtered out)
   // shouldn't stay silently selected behind the scenes.
   const visible = new Set(currentList.map((r) => r.id));

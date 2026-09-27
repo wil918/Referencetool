@@ -60,7 +60,14 @@ const DRAG_THRESHOLD = 4;
 // (200x236), which would leave dead space under a square image.
 const REFERENCE_GHOST_WIDTH = 200;
 
-export function createPalette({ container, viewport, references = [], addNode, setDrawTool }) {
+export function createPalette({
+  container,
+  viewport,
+  references = [],
+  addNode,
+  setDrawTool,
+  onDrawToolChange = () => () => {},
+}) {
   let cascade = 0;
 
   const fab = document.createElement("button");
@@ -329,6 +336,15 @@ export function createPalette({ container, viewport, references = [], addNode, s
   }
   window.addEventListener("keydown", onEscape);
 
+  // The other direction: nodes.js puts a tool down itself (the pages tool
+  // does after drawing one spread), and the button has to stop saying it's
+  // armed when it isn't.
+  const unsubscribeDrawTool = onDrawToolChange((tool) => {
+    if (tool === armedTool) return;
+    armedTool = tool;
+    for (const [type, btn] of toolButtons) btn.classList.toggle("is-armed", type === armedTool);
+  });
+
   function shapeToolButton(label, shapeType) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -351,6 +367,21 @@ export function createPalette({ container, viewport, references = [], addNode, s
   shapeRow.append(shapeToolButton("Rectangle", "rect"), shapeToolButton("Ellipse", "ellipse"));
   shapeSection.appendChild(shapeRow);
   panel.appendChild(shapeSection);
+
+  // A portfolio spread is drawn the same way -- arm, then drag out the
+  // region it fills -- so it shares the shape tools' machinery, and only
+  // differs in putting itself down after one (see nodes.js's setDrawTool).
+  const pagesSection = document.createElement("div");
+  pagesSection.className = "canvas-dock-section";
+  const pagesHeading = document.createElement("p");
+  pagesHeading.className = "muted canvas-dock-heading";
+  pagesHeading.textContent = "Draw a region and it fills with A4 pages";
+  pagesSection.appendChild(pagesHeading);
+  const pagesRow = document.createElement("div");
+  pagesRow.className = "canvas-dock-add-row";
+  pagesRow.append(shapeToolButton("Pages", "pages"));
+  pagesSection.appendChild(pagesRow);
+  panel.appendChild(pagesSection);
 
   // --- the reference picker ----------------------------------------------
 
@@ -421,6 +452,7 @@ export function createPalette({ container, viewport, references = [], addNode, s
   return {
     destroy() {
       window.removeEventListener("keydown", onEscape);
+      unsubscribeDrawTool();
       panel.remove();
       fab.remove();
     },
