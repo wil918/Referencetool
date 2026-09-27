@@ -20,20 +20,13 @@
  * pick a clearer message, never to open or walk the thing.
  */
 
+import { postCapture, pollCapture } from "./captures.js";
 import { classifyDrop, PREVIEWABLE_EXTS } from "./file-types.js";
 
 // Same step and wrap palette.js's own cascade uses for a repeated click-to-add
 // -- a multi-file drop reads as the same "fan out, don't stack" gesture.
 const CASCADE_STEP = 26;
 const CASCADE_WRAP = 6;
-
-const POLL_INTERVAL_MS = 1200;
-// 3 minutes: Claude tagging plus a CLIP embed, worst case behind a cold model
-// load. Generous on purpose -- the placeholder already tells the user
-// something is happening, so waiting costs nothing but patience.
-const POLL_ATTEMPTS = 150;
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function refusalMessage(file, isFolder) {
   if (isFolder) {
@@ -47,27 +40,6 @@ function cascadePoint(base, index) {
   return { x: base.x + offset, y: base.y + offset };
 }
 
-async function pollCapture(captureId) {
-  for (let i = 0; i < POLL_ATTEMPTS; i++) {
-    await sleep(POLL_INTERVAL_MS);
-    let summary;
-    try {
-      const res = await fetch(`/api/captures/${captureId}`);
-      if (!res.ok) continue;
-      summary = await res.json();
-    } catch {
-      continue; // a network hiccup mid-poll -- try again next tick
-    }
-    if (summary.status === "done" || summary.status === "duplicate") {
-      return { ok: true, referenceId: summary.reference_id };
-    }
-    if (summary.status === "failed") {
-      return { ok: false, error: summary.error || "ingestion failed" };
-    }
-  }
-  return { ok: false, error: "timed out waiting for the archive" };
-}
-
 /** One dropped file, start to finish: placeholder, upload, poll, swap-in.
  *  Runs to completion on its own -- callers fire-and-forget one of these per
  *  file in a multi-drop, so a slow or failing item never blocks the rest. */
@@ -78,17 +50,11 @@ async function ingestOne({ file, ext, point, project, nodes, onStatus }) {
 
   let summary;
   try {
-    const form = new FormData();
     // No page metadata to send -- this is a local file, not a captured
     // page -- so the envelope is just enough for capture.py to route it:
     // project_ids is what lands the reference in the project it was dropped
     // into, the same field the browser extension already sends.
-    form.append("capture", JSON.stringify({ type: "file", project_ids: [project.id] }));
-    form.append("file", file, file.name);
-    const res = await fetch("/api/captures", { method: "POST", body: form });
-    const body = await res.json().catch(() => null);
-    if (!res.ok) throw new Error(body?.error || "the archive refused this file");
-    summary = body;
+    summary = await postCapture(file, { type: "file", project_ids: [project.id] });
   } catch (err) {
     pending.remove();
     onStatus(`Couldn't add "${file.name}" — ${err.message}.`);
@@ -132,6 +98,18 @@ export function createFileDrop({ viewport, project, nodes, onStatus }) {
   const isFileDrag = (event) =>
     Array.from(event.dataTransfer?.types || []).includes("Files");
 
+  // A spread's page under the drag, if any: a file dropped there fills that
+  // page (spread.js) rather than landing loose on the canvas beside it.
+  let pageTarget = null;
+  function setPageTarget(el) {
+    if (el === pageTarget) return;
+    pageTarget?.classList.remove("is-file-target");
+    pageTarget = el;
+    pageTarget?.classList.add("is-file-target");
+  }
+  const pageUnder = (event) =>
+    event.target instanceof Element ? event.target.closest(".spread-page") : null;
+
   function onDragEnter(event) {
     if (!isFileDrag(event)) return;
     event.preventDefault();
@@ -145,12 +123,16 @@ export function createFileDrop({ viewport, project, nodes, onStatus }) {
     // between called preventDefault -- its default action is "refuse".
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
+    setPageTarget(pageUnder(event));
   }
 
   function onDragLeave(event) {
     if (!isFileDrag(event)) return;
     depth = Math.max(0, depth - 1);
-    if (depth === 0) container.classList.remove("is-drop-target");
+    if (depth === 0) {
+      container.classList.remove("is-drop-target");
+      setPageTarget(null);
+    }
   }
 
   function onDrop(event) {
@@ -159,8 +141,11 @@ export function createFileDrop({ viewport, project, nodes, onStatus }) {
     depth = 0;
     container.classList.remove("is-drop-target");
 
+    setPageTarget(null);
+
     const files = [...event.dataTransfer.files];
     if (!files.length) return;
+    if (nodes.dropFilesOnPage(pageUnder(event), files)) return;
     const base = viewport.screenToWorld(event.clientX, event.clientY);
 
     let placed = 0;

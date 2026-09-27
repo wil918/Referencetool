@@ -3717,6 +3717,257 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 
 .shape-style-none.is-active { box-shadow: var(--press-sm); color: var(--accent); }
 
+/* --- portfolio spreads ---
+   A spread (canvas/spread.js) is a canvas node whose box is only the region
+   it was drawn as: no fill, no depth of its own at rest, like a project
+   widget -- the pages are the structure, the container is invisible. Selected,
+   it shows the same accent ring every node does, without the raised card that
+   would otherwise appear under thirty pages at once. */
+.canvas-node-pages {
+  background: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.canvas-node-pages.is-selected,
+.canvas-node-pages.is-active { box-shadow: 0 0 0 2px var(--accent-soft); }
+.canvas-node-pages.is-locked { box-shadow: none; }
+.canvas-node-pages.is-locked.is-selected { box-shadow: 0 0 0 2px var(--accent-soft); }
+
+/* Not clipped: a page lifted to be reordered, and the faint overhang of an
+   image whose crop is being chosen, both reach past the page they belong to. */
+.canvas-node-pages .canvas-node-body.spread-body {
+  position: relative;
+  overflow: visible;
+  border-radius: 0;
+}
+
+/* A page: absolutely placed by spread.js from the layout, and sized in world
+   units, so everything inside it scales off --spread-page-w (the page width)
+   and stays in proportion at every zoom and every spread size. Square
+   corners, because it's paper. */
+.spread-page {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 1;
+  border-radius: 1px;
+  overflow: hidden;
+  touch-action: none;
+  transition: box-shadow 0.22s ease, opacity 0.18s ease;
+}
+
+/* Empty is the normal state of a portfolio in progress, so it's drawn as a
+   slot waiting to be filled -- pressed into the page, the same inversion that
+   means "waiting" everywhere else here -- not as a missing thing. */
+.spread-page.is-empty,
+.spread-page.is-missing { box-shadow: var(--press-sm); cursor: copy; }
+
+/* A filled page is a sheet lying on the canvas: the page colour, raised. The
+   letterbox around a contained image is that sheet showing through. */
+.spread-page.is-filled {
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-sm);
+  cursor: grab;
+}
+
+.spread-page.is-pending { animation: canvas-pending-pulse 1.6s ease-in-out infinite; }
+
+.spread-page.is-active { box-shadow: var(--raise-sm), 0 0 0 2px var(--accent-soft); }
+.spread-page.is-empty.is-active { box-shadow: var(--press-sm), 0 0 0 2px var(--accent-soft); }
+.spread-page.is-drop-target,
+.spread-page.is-file-target { box-shadow: var(--press-sm), 0 0 0 2px var(--accent); }
+.spread-page.is-lifted { opacity: 0.3; }
+.spread-page.is-cropping { z-index: 2; cursor: move; }
+
+.spread-page-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  user-select: none;
+}
+
+.spread-page-img[hidden] { display: none; }
+
+/* The folio: in the outer corner of each page of a booklet pair, centred on
+   a sequential page. Always on an empty slot, where it's how the pagination
+   is read; on a filled page only while the spread is selected, so a spread
+   at rest shows the work and nothing over it. */
+.spread-page-number {
+  position: absolute;
+  bottom: calc(var(--spread-page-w, 100px) * 0.04);
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-family: var(--sans);
+  font-size: calc(var(--spread-page-w, 100px) * 0.075);
+  line-height: 1;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.spread-page.is-left .spread-page-number { text-align: left; padding-left: calc(var(--spread-page-w, 100px) * 0.06); }
+.spread-page.is-right .spread-page-number { text-align: right; padding-right: calc(var(--spread-page-w, 100px) * 0.06); }
+.spread-page.is-filled .spread-page-number { display: none; }
+.canvas-node-pages.is-selected .spread-page.is-filled .spread-page-number {
+  display: block;
+  color: var(--project-ink, var(--ink));
+  text-shadow: 0 0 3px var(--project-bg, var(--bg)), 0 0 6px var(--project-bg, var(--bg));
+}
+
+/* What a page will look like in print, said on the page: cropped or
+   letterboxed when the image isn't A4, and the dpi when it's too low. The
+   own-work badge's pill, in its own two colours -- a page's mismatch is
+   information, its resolution a warning. */
+.spread-page-flags {
+  position: absolute;
+  top: calc(var(--spread-page-w, 100px) * 0.04);
+  left: calc(var(--spread-page-w, 100px) * 0.04);
+  right: calc(var(--spread-page-w, 100px) * 0.04);
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--spread-page-w, 100px) * 0.025);
+  pointer-events: none;
+}
+
+.spread-page-flag {
+  font-family: var(--sans);
+  font-size: calc(var(--spread-page-w, 100px) * 0.055);
+  line-height: 1;
+  letter-spacing: 0.04em;
+  padding: 0.3em 0.6em;
+  border-radius: 999px;
+  background: var(--slate);
+  color: #f4f7fb;
+  white-space: nowrap;
+}
+
+.spread-page-flag-dpi { background: var(--warn); }
+
+/* The page being reordered, following the pointer above everything else in
+   the spread. */
+.spread-page-ghost {
+  z-index: 4;
+  opacity: 0.85;
+  box-shadow: var(--raise-lg);
+  pointer-events: none;
+}
+
+/* The whole image behind a page whose crop is being chosen, faint, so what
+   the page cuts off is visible while choosing. Sized by spread.js to the
+   image's own proportions, so filling that box never distorts it. */
+.spread-crop-ghost {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+  opacity: 0.28;
+  pointer-events: none;
+  user-select: none;
+}
+
+.spread-crop-ghost[hidden] { display: none; }
+
+/* Drawing a spread: the outline fills with the pages it will hold. */
+.canvas-draw-preview-page {
+  position: absolute;
+  left: 0;
+  top: 0;
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.canvas-draw-preview-page[hidden] { display: none; }
+
+/* --- the spread editor ---
+   The edge/shape panel's raised surface, stacked in rows: the spread's own
+   settings, then the clicked page's. Wraps rather than growing past the
+   window on a narrow canvas. */
+.spread-panel {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.45rem;
+  /* Its own width, not whatever room is left between its left edge and the
+     window's: otherwise moving it changes how it wraps, and so its height,
+     after that height has been used to keep it on screen. */
+  width: max-content;
+  max-width: min(52rem, calc(100vw - 2rem));
+  /* Placed by its top-left corner (spread-panel.js works out above or below
+     the spread), so only the horizontal centring is left to the transform. */
+  transform: translateX(-50%);
+  padding: 0.5rem 0.7rem;
+  border-radius: 18px;
+}
+
+.spread-panel-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.7rem;
+}
+
+.spread-panel-row[hidden] { display: none; }
+
+.spread-panel-page {
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--edge);
+}
+
+.spread-panel-seg { display: flex; gap: 0.1rem; }
+.spread-panel-seg.is-disabled { opacity: 0.35; pointer-events: none; }
+
+.spread-panel-btn {
+  padding: 0.3rem 0.65rem;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--project-ink, var(--ink));
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: var(--press);
+}
+
+.spread-panel-btn:hover { color: var(--ink-strong); }
+.spread-panel-btn.is-active { box-shadow: var(--press-sm); color: var(--accent); }
+.spread-panel-btn:disabled { opacity: 0.35; cursor: default; }
+.spread-panel-export { box-shadow: var(--raise-sm); }
+.spread-panel-export:active { box-shadow: var(--press-sm); }
+.spread-panel-danger { color: var(--accent); }
+
+.spread-panel-field {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.spread-panel-field.is-disabled { opacity: 0.35; }
+
+.spread-panel-label,
+.spread-panel-page-label {
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.spread-panel-page-label { color: var(--project-ink, var(--ink)); }
+
+/* Beats the global input[type="number"] padding, which leaves no room for
+   two digits beside the spinner. */
+.spread-panel .spread-panel-count { width: 4.4rem; padding: 0.3rem 0.35rem 0.3rem 0.7rem; }
+.spread-panel-gap { width: 6rem; }
+
+.spread-panel-note {
+  flex-basis: 100%;
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.spread-panel-note.is-warning { color: var(--warn); }
+
 /* --- canvas chrome: status, hint, zoom cluster, add dock --- */
 
 .canvas-status {

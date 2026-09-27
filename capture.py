@@ -345,6 +345,10 @@ def process(capture_id):
             title=envelope_title(envelope),
             source=envelope_source(envelope),
             notes=envelope_notes(envelope),
+            # A page uploaded onto a portfolio spread is output, not research
+            # (static/project/canvas/spread.js sends this). The extension never
+            # does, so everything it captures stays research as before.
+            is_own_work=bool(envelope.get("is_own_work")),
         )
         reference_id = result["id"]
         status = db.CAPTURE_DONE
@@ -363,7 +367,10 @@ def process(capture_id):
     except ingest.DuplicateReferenceError as e:
         # Not a failure: the archive already holds these exact bytes. Point the
         # capture at the reference that already exists so the extension can
-        # offer to open it or add it to a project.
+        # offer to open it or add it to a project. An is_own_work flag on the
+        # envelope is deliberately not applied to it: the reference was saved
+        # as research or as own work by whoever saved it first, and placing it
+        # on a page doesn't overrule that.
         reference_id = e.existing["id"]
         status = db.CAPTURE_DUPLICATE
         error = None

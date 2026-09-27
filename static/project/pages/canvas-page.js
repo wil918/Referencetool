@@ -54,7 +54,7 @@ export function createCanvasPage(el, { project }) {
   const hint = document.createElement("p");
   hint.className = "muted canvas-hint";
   hint.textContent =
-    "Nothing on the canvas yet — open + to add simple text or a widget, drag a reference in, or drop a file from Finder.";
+    "Nothing on the canvas yet — open + to add simple text or a widget, draw a spread of pages, drag a reference in, or drop a file from Finder.";
   hint.hidden = true;
   root.appendChild(hint);
 
@@ -205,6 +205,7 @@ export function createCanvasPage(el, { project }) {
       references,
       addNode: nodes.addNode,
       setDrawTool: nodes.setDrawTool,
+      onDrawToolChange: nodes.onDrawToolChange,
     });
     // The other way something lands on the canvas: not a drag out of this
     // panel, but a real OS file dragged in from Finder. Separate listener,
