@@ -46,6 +46,20 @@
           <input type="checkbox" id="file-own-work">
           This is my own work
         </label>
+        <div id="pdf-split-controls" class="pdf-split-controls" hidden>
+          <span id="pdf-page-count-info" class="muted"></span>
+          <label class="checkbox-label">
+            <input type="checkbox" id="file-split-pages">
+            Split into individual pages
+          </label>
+          <div id="pdf-split-range-row" class="pdf-split-range-row" hidden>
+            <label>
+              Pages
+              <input type="text" id="pdf-page-range" placeholder="all pages, or e.g. 1-10">
+            </label>
+          </div>
+          <button id="pdf-split-confirm" type="button" class="btn primary">Add</button>
+        </div>
       </div>
       <div id="upload-log" class="upload-log"></div>
 

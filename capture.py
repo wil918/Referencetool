@@ -71,7 +71,11 @@ def envelope_title(envelope):
 
 # Metadata sources that represent an explicit, machine-readable claim by the
 # publisher, as opposed to something guessed from surrounding page text.
-AUTHORITATIVE_SOURCES = {"json-ld", "opengraph", "dublin-core", "schema.org"}
+# "pdf-split" is this app's own claim, not a publisher's -- the page-numbered
+# title app.py's split-PDF import assigns is exactly as authoritative as one,
+# since Claude's per-page tagging call has no way to know the document title
+# or page order and would otherwise stomp on both (see app.py's /api/split-pdf).
+AUTHORITATIVE_SOURCES = {"json-ld", "opengraph", "dublin-core", "schema.org", "pdf-split"}
 
 
 def authoritative_title(envelope):
@@ -126,6 +130,14 @@ def envelope_source(envelope):
     """
     source = envelope.get("source") or {}
     meta = envelope.get("metadata") or {}
+
+    # A caller that already has an exact, human-ready source string -- the
+    # split-PDF import wants the original filename verbatim -- can skip the
+    # domain/credit heuristics below entirely rather than being coerced to
+    # look like a web capture.
+    label = (meta.get("source_label") or "").strip()
+    if label:
+        return label[:200]
 
     domain = _clean_domain(source.get("domain")) or _domain_of(
         source.get("url") or source.get("canonical_url") or ""
@@ -239,12 +251,14 @@ def check_duplicate(envelope, file_path=None):
 # --- Accepting a capture ---------------------------------------------------
 
 
-def accept(envelope, upload=None, text=None):
+def accept(envelope, upload=None, text=None, file_path=None):
     """Persist a capture and queue it. Returns the capture row.
 
-    Exactly one of `upload` (a werkzeug FileStorage) or `text` is expected.
-    Returns as soon as the bytes are safely on disk and the row is written --
-    all the slow work happens on the worker.
+    Exactly one of `upload` (a werkzeug FileStorage), `text`, or `file_path`
+    (an image already rendered to a temp file -- e.g. one page of a split PDF,
+    see app.py's /api/split-pdf) is expected. Returns as soon as the bytes are
+    safely on disk and the row is written -- all the slow work happens on the
+    worker.
     """
     kind = envelope.get("type") or ("text" if text is not None else "image")
     capture_id = str(uuid.uuid4())
@@ -262,6 +276,11 @@ def accept(envelope, upload=None, text=None):
             ext = DEFAULT_IMAGE_EXT
         stored = PENDING_DIR / f"{capture_id}{ext}"
         upload.save(stored)
+    elif file_path is not None:
+        file_path = Path(file_path)
+        ext = file_path.suffix.lower() or DEFAULT_IMAGE_EXT
+        stored = PENDING_DIR / f"{capture_id}{ext}"
+        shutil.move(str(file_path), stored)
     elif text is not None:
         if not text.strip():
             raise CaptureError("no text provided")

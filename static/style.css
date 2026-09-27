@@ -416,6 +416,24 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
   color: var(--muted);
 }
 
+.pdf-split-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.pdf-split-controls[hidden] { display: none; }
+
+.pdf-split-range-row {
+  display: flex;
+  align-items: center;
+}
+
+.pdf-split-range-row[hidden] { display: none; }
+
+.pdf-split-range-row input[type="text"] { width: 160px; }
+
 .upload-log {
   margin-top: 1rem;
   display: flex;
