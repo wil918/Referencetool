@@ -260,12 +260,21 @@ CREATE TABLE IF NOT EXISTS layouts (
 
 # Nodes on a project's infinite canvas.
 #
-# One table for all four kinds (reference | text | widget | shape) rather than
-# four, because the canvas drags, locks, z-orders and connects all of them
-# identically. Only what gets drawn inside the box differs: reference_id
-# points at the archive for a reference node, content holds the body of a
-# text node, config holds a widget node's settings or (kind = "shape") the
-# shape's own { shape: "rect" | "ellipse", fill, stroke, strokeWidth }.
+# One table for all five kinds (reference | text | widget | shape | pages)
+# rather than five, because the canvas drags, locks, z-orders and connects all
+# of them identically. Only what gets drawn inside the box differs:
+# reference_id points at the archive for a reference node, content holds the
+# body of a text node, config holds a widget node's settings or (kind =
+# "shape") the shape's own { shape: "rect" | "ellipse", fill, stroke,
+# strokeWidth }.
+#
+# kind = "pages" is a portfolio spread: one node that owns its pages, so
+# moving or resizing it carries every page with it. Its config holds the
+# layout and the page order -- { layout, orientation, cover, gap, pages: [
+# { reference_id, fit, crop?, capture_id? } ] } -- and a page is never a node
+# of its own. reference_id stays NULL on the node itself; the references are
+# inside config, one per page, and null there is an empty slot. See
+# spreads.py.
 #
 # x/y/w/h are REAL world coordinates, never screen coordinates -- a screen
 # position stops meaning anything the moment the canvas is panned or zoomed.
@@ -1286,6 +1295,32 @@ def delete_reference(ref_id):
             (ref_id, ref_id),
         )
         conn.execute("DELETE FROM canvas_nodes WHERE reference_id = ?", (ref_id,))
+        # A page on a spread is different: the slot stays, empty, because the
+        # spread's pagination is the document. Removing the page would quietly
+        # renumber everything after it.
+        _empty_spread_pages(conn, ref_id)
+
+
+def _empty_spread_pages(conn, ref_id):
+    rows = conn.execute(
+        "SELECT id, config FROM canvas_nodes WHERE kind = 'pages' AND config LIKE ?",
+        (f"%{ref_id}%",),
+    ).fetchall()
+    for row in rows:
+        try:
+            config = json.loads(row["config"])
+        except (TypeError, ValueError):
+            continue
+        changed = False
+        for page in (config or {}).get("pages") or []:
+            if isinstance(page, dict) and page.get("reference_id") == ref_id:
+                page["reference_id"] = None
+                page.pop("crop", None)
+                changed = True
+        if changed:
+            conn.execute(
+                "UPDATE canvas_nodes SET config = ? WHERE id = ?", (json.dumps(config), row["id"])
+            )
 
 
 def _row_to_dict(row):

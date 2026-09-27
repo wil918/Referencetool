@@ -20,10 +20,11 @@ import webbrowser
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import quote
 
 import fitz  # PyMuPDF
 from flask import (
-    Flask, abort, jsonify, make_response, request, send_file, send_from_directory,
+    Flask, Response, abort, jsonify, make_response, request, send_file, send_from_directory,
 )
 
 import analyze
@@ -37,9 +38,10 @@ import graph_layout
 import ics_import
 import ingest
 import scheduling
+import spreads
 import style_gen
 import task_ai
-from config import ARCHIVE_API_TOKEN, REFERENCES_DIR
+from config import ARCHIVE_API_TOKEN
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 
@@ -72,9 +74,9 @@ CONTAINER_WIDGET_TYPES = {"sidebar"}
 # 400 tells the UI its Add Widget list is out of step, where a 200 would leave
 # a phantom deletion on screen until the next reload.
 PERMANENT_WIDGET_TYPES = {"settings", "exit", "canvas"}
-# What a canvas node can be. See db.CANVAS_NODES_SCHEMA for why all four
+# What a canvas node can be. See db.CANVAS_NODES_SCHEMA for why all five
 # share one table.
-CANVAS_NODE_KINDS = {"reference", "text", "widget", "shape"}
+CANVAS_NODE_KINDS = {"reference", "text", "widget", "shape", "pages"}
 
 # In-memory only -- an analysis conversation is a live chat with Claude, not
 # library data, so it doesn't belong in SQLite and doesn't need to survive a
@@ -236,7 +238,9 @@ def _phone_completed_at():
 
 
 def _resolve_ref_path(ref):
-    return REFERENCES_DIR / ref["filepath"]
+    # config's, read now rather than the name imported at startup, so a test
+    # that points config at a throwaway archive is pointing this at it too.
+    return config.REFERENCES_DIR / ref["filepath"]
 
 
 def _ref_summary(ref, match_label=None):
@@ -308,9 +312,16 @@ def api_list_references():
     reference is included if ANY selected signal matches (OR), but results
     stay ordered by semantic relevance throughout, since that ranking is
     computed for the whole library regardless of which signals are active.
+
+    Own work is left out of a search unless asked for (`own_work=any` or
+    `only`): a search is looking for research, and a portfolio spread puts
+    thirty of the user's own pages into the archive at a time. Browsing with
+    no query still shows everything, so something just added never seems to
+    have vanished.
     """
     query = (request.args.get("q") or "").strip()
-    own_work = request.args.get("own_work", "any")  # any | only | exclude
+    # any | only | exclude
+    own_work = request.args.get("own_work") or ("exclude" if query else "any")
     # Comma-separated, e.g. "image,pdf" -- checking multiple type boxes is an OR filter.
     file_types = {t for t in request.args.get("type", "").split(",") if t}
     search_by = {s for s in request.args.get("search_by", "distance").split(",") if s}
@@ -385,7 +396,7 @@ def api_delete_reference(ref_id):
 
     path = _resolve_ref_path(ref)
     if path.exists():
-        trash_dir = REFERENCES_DIR.parent / DELETED_DIR_NAME
+        trash_dir = config.REFERENCES_DIR.parent / DELETED_DIR_NAME
         trash_dir.mkdir(parents=True, exist_ok=True)
         destination = trash_dir / path.name
         if destination.exists():
@@ -978,6 +989,10 @@ def api_replace_canvas(project_id):
     for node in nodes:
         if node.get("kind") not in CANVAS_NODE_KINDS:
             return jsonify({"error": f"unknown node kind: {node.get('kind')!r}"}), 400
+        if node["kind"] == "pages":
+            error = spreads.validate_config(node.get("config"))
+            if error:
+                return jsonify({"error": error}), 400
 
     node_ids = {n["id"] for n in nodes}
     edges = [{**e, "id": e.get("id") or str(uuid.uuid4())} for e in edges]
@@ -1004,6 +1019,12 @@ def api_create_canvas_node(project_id):
         if not ref:
             return jsonify({"error": "reference not found"}), 404
         reference_id = ref["id"]
+    elif kind == "pages":
+        error = spreads.validate_config(body.get("config"))
+        if error:
+            return jsonify({"error": error}), 400
+        # A spread's references live per page, inside config.
+        reference_id = None
 
     node_id = str(uuid.uuid4())
     db.create_canvas_node(
@@ -1027,12 +1048,17 @@ def api_create_canvas_node(project_id):
 def api_update_canvas_node(node_id):
     """Update only the fields that were sent -- most calls are a drag, and
     carry nothing but x and y."""
-    if not db.get_canvas_node(node_id):
+    node = db.get_canvas_node(node_id)
+    if not node:
         abort(404)
     body = request.get_json(force=True, silent=True) or {}
     fields = {k: v for k, v in body.items() if k in db.CANVAS_NODE_PATCH_COLUMNS}
     if "kind" in fields and fields["kind"] not in CANVAS_NODE_KINDS:
         return jsonify({"error": f"unknown node kind: {fields['kind']!r}"}), 400
+    if fields.get("kind", node["kind"]) == "pages" and ("config" in fields or "kind" in fields):
+        error = spreads.validate_config(fields.get("config", node["config"]))
+        if error:
+            return jsonify({"error": error}), 400
     db.update_canvas_node(node_id, **fields)
     return jsonify(db.get_canvas_node(node_id))
 
@@ -1043,6 +1069,50 @@ def api_delete_canvas_node(node_id):
         abort(404)
     db.delete_canvas_node(node_id)
     return jsonify({"ok": True, "id": node_id})
+
+
+@app.get("/api/canvas/nodes/<node_id>/export.pdf")
+def api_export_spread(node_id):
+    """A portfolio spread as a print-ready PDF: true A4 pages, in the spread's
+    order, streamed as it's built (spreads.export_pdf says how). An empty slot
+    -- or an upload that hasn't finished ingesting, or an image since deleted
+    from the archive -- is a blank page, never a skipped one."""
+    node = db.get_canvas_node(node_id)
+    if not node:
+        abort(404)
+    if node["kind"] != "pages":
+        return jsonify({"error": "only a spread of pages can be exported as a PDF"}), 400
+    config_ = node["config"] or {}
+    entries = config_.get("pages") or []
+    if not entries:
+        return jsonify({"error": "this spread has no pages"}), 400
+
+    # Resolved up front, while the request is live: the generator below runs
+    # after this view has returned.
+    pages = []
+    for entry in entries:
+        ref = db.get_reference(entry.get("reference_id")) if entry.get("reference_id") else None
+        path = _resolve_ref_path(ref) if ref else None
+        if path is not None and (path.suffix.lower() not in ingest.IMAGE_EXTS or not path.exists()):
+            path = None
+        pages.append({"path": path, "fit": entry.get("fit"), "crop": entry.get("crop")})
+
+    project = db.get_project(node["project_id"])
+    title = project["title"] if project else "Portfolio"
+    orientation = config_.get("orientation", "portrait")
+    return Response(
+        spreads.export_pdf(pages, orientation=orientation, title=title),
+        mimetype="application/pdf",
+        headers={"Content-Disposition": _attachment_header(f"{title} - pages.pdf")},
+    )
+
+
+def _attachment_header(filename):
+    """Content-Disposition for a download whose name may not be ASCII -- a
+    project called "Été" still downloads as Été - pages.pdf, with a plain
+    fallback for anything that can't read the encoded form."""
+    fallback = "".join(c if c.isascii() and c not in '"\\' else "_" for c in filename)
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename)}"
 
 
 @app.post("/api/projects/<project_id>/canvas/edges")
@@ -3251,7 +3321,15 @@ def api_create_capture():
     try:
         if "file" in request.files:
             envelope = _parse_envelope(request.form.get("capture"))
-            payload, code = _accept_one(envelope, upload=request.files["file"])
+            upload = request.files["file"]
+            # A page going onto a portfolio spread asks how it will print, so
+            # a low-resolution or oddly-proportioned page is flagged the moment
+            # it's uploaded rather than when the PDF comes back soft. Opt-in:
+            # the extension never sends `print`, and its response is unchanged.
+            check = spreads.inspect_upload(upload, envelope["print"]) if envelope.get("print") else None
+            payload, code = _accept_one(envelope, upload=upload)
+            if check:
+                payload["print"] = check
         else:
             body = request.get_json(force=True, silent=True) or {}
             envelope = _parse_envelope(body.get("capture", body))
