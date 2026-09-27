@@ -199,7 +199,13 @@ export function createCanvasPage(el, { project }) {
     viewport.showBounds(nodes.bounds());
     hint.hidden = nodes.count() > 0;
 
-    palette = createPalette({ container: root, viewport, references, addNode: nodes.addNode });
+    palette = createPalette({
+      container: root,
+      viewport,
+      references,
+      addNode: nodes.addNode,
+      setDrawTool: nodes.setDrawTool,
+    });
     // The other way something lands on the canvas: not a drag out of this
     // panel, but a real OS file dragged in from Finder. Separate listener,
     // separate event family (native drag* vs. palette.js's pointer events) --

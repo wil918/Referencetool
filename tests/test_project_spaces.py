@@ -605,7 +605,7 @@ def test_canvas_starts_empty(client):
     assert client.get(f"/api/projects/{project_id}/canvas").get_json() == {"nodes": [], "edges": []}
 
 
-def test_canvas_nodes_of_all_three_kinds_persist(client, archive):
+def test_canvas_nodes_of_all_four_kinds_persist(client, archive):
     project_id = make_project(client)
     ref_id = add_reference(archive, "swatch")
 
@@ -621,14 +621,74 @@ def test_canvas_nodes_of_all_three_kinds_persist(client, archive):
         f"/api/projects/{project_id}/canvas/nodes",
         json={"kind": "widget", "config": {"type": "colourspace"}},
     ).get_json()
+    shape_node = client.post(
+        f"/api/projects/{project_id}/canvas/nodes",
+        json={
+            "kind": "shape",
+            "config": {"shape": "ellipse", "fill": "#c9c2b4", "stroke": None, "strokeWidth": 2},
+        },
+    ).get_json()
 
     nodes = {n["id"]: n for n in client.get(f"/api/projects/{project_id}/canvas").get_json()["nodes"]}
-    assert len(nodes) == 3
+    assert len(nodes) == 4
     # World coordinates are stored as given, fractional values included.
     assert (nodes[reference_node["id"]]["x"], nodes[reference_node["id"]]["y"]) == (120.5, -40.25)
     assert nodes[reference_node["id"]]["reference_id"] == ref_id
     assert nodes[text_node["id"]]["content"] == "a note to self"
     assert nodes[widget_node["id"]]["config"] == {"type": "colourspace"}
+    assert nodes[shape_node["id"]]["config"] == {
+        "shape": "ellipse",
+        "fill": "#c9c2b4",
+        "stroke": None,
+        "strokeWidth": 2,
+    }
+
+
+def test_a_shapes_fill_stroke_and_width_survive_a_reload(client):
+    """An outline-only shape (fill: none) and a fill-only shape (stroke: none)
+    are both ordinary requests -- config round-trips exactly as sent,
+    including the null fields that mean "no colour"."""
+    project_id = make_project(client)
+    shape = client.post(
+        f"/api/projects/{project_id}/canvas/nodes",
+        json={"kind": "shape", "config": {"shape": "rect", "fill": None, "stroke": "#2a2a28", "strokeWidth": 4}},
+    ).get_json()
+
+    reloaded = client.get(f"/api/projects/{project_id}/canvas").get_json()["nodes"][0]
+    assert reloaded["id"] == shape["id"]
+    assert reloaded["config"] == {"shape": "rect", "fill": None, "stroke": "#2a2a28", "strokeWidth": 4}
+
+
+def test_sending_a_shape_to_back_survives_a_reload(client):
+    project_id = make_project(client)
+    front = client.post(
+        f"/api/projects/{project_id}/canvas/nodes", json={"kind": "shape", "config": {"shape": "rect"}, "z_index": 1}
+    ).get_json()
+    back = client.post(
+        f"/api/projects/{project_id}/canvas/nodes", json={"kind": "shape", "config": {"shape": "rect"}, "z_index": 1}
+    ).get_json()
+
+    # What the frontend's sendToBack does: patch the shape one below the
+    # current minimum z_index on the canvas.
+    client.patch(f"/api/canvas/nodes/{back['id']}", json={"z_index": 0})
+
+    nodes = {n["id"]: n for n in client.get(f"/api/projects/{project_id}/canvas").get_json()["nodes"]}
+    assert nodes[back["id"]]["z_index"] < nodes[front["id"]]["z_index"]
+
+
+def test_an_edge_can_attach_to_a_shape(client):
+    project_id = make_project(client)
+    ground = client.post(
+        f"/api/projects/{project_id}/canvas/nodes", json={"kind": "shape", "config": {"shape": "rect"}}
+    ).get_json()
+    note = client.post(f"/api/projects/{project_id}/canvas/nodes", json={"kind": "text"}).get_json()
+
+    edge = client.post(
+        f"/api/projects/{project_id}/canvas/edges",
+        json={"source_node_id": ground["id"], "target_node_id": note["id"]},
+    )
+    assert edge.status_code == 200
+    assert edge.get_json()["source_node_id"] == ground["id"]
 
 
 def test_an_unknown_node_kind_is_rejected(client):

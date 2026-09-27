@@ -3306,6 +3306,20 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   50% { opacity: 0.55; }
 }
 
+/* A shape node has no rest-state depth of its own. Its fill, stroke and
+   corner radius are painted inline, per node, from the user's own colour
+   choice (canvas/nodes.js's applyShapeStyle) -- a raised card shadow under a
+   flat rectangle, or showing through an outline-only shape's own
+   --project-bg fill, would read as a card, not a mark. box-sizing: border-box
+   keeps an inline stroke width inside the node's own stored w/h rather than
+   growing past it. Selection, drag and lock feedback still show: those are
+   two-class rules (.canvas-node.is-selected and friends) and outrank this
+   one-class reset on specificity alone, regardless of source order. */
+.canvas-node-shape {
+  box-shadow: none;
+  box-sizing: border-box;
+}
+
 /* The text node's editable area. Deliberately not named after the kind: the
    node wrapper already carries .canvas-node-text, and one class on both
    elements would put this padding on the box as well as inside it. */
@@ -3475,6 +3489,29 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   pointer-events: none;
 }
 
+/* The shape being drawn (canvas/nodes.js's handleDrawPress), the same idea
+   as .canvas-edge-draft above but a box instead of a line -- dashed because
+   it isn't a shape yet either. A plain div in the world layer, not an SVG:
+   it is positioned and sized exactly like a real node (translate3d + width/
+   height), so it scales with zoom the same way the shape will once it
+   exists. z-index is pinned high rather than left to source order: it is
+   appended after every existing node, which stacking alone would put under
+   any of them that already has an explicit z-index -- the shape being drawn
+   needs to stay visible over whatever it's being drawn across. */
+.canvas-draw-preview {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 999999;
+  border: 1.5px dashed var(--accent);
+  background: var(--accent-soft);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* A tool is armed: empty canvas says so before the first drag even starts. */
+.canvas-viewport.is-drawing-shape { cursor: crosshair; }
+
 /* --- the per-edge style editor ---
    Screen-space chrome anchored to a world point (canvas/edge-style-panel.js
    repositions it in client coordinates via viewport.worldToScreen), so it is
@@ -3545,6 +3582,36 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
    position never shifts the swatch beside it. */
 .edge-style-reset:disabled { opacity: 0.35; cursor: default; }
 .edge-style-reset:disabled:hover { color: var(--project-ink, var(--ink)); }
+
+/* --- the shape style editor ---
+   Reuses edge-style-panel's own row/colour/button classes (fill and stroke
+   are each an .edge-style-colour-row, .shape-style-none an .edge-style-btn)
+   -- one floating-pill-with-a-colour-swatch visual language, not two.
+   Styled here only for what differs: a vertical stack, since three
+   independent controls (fill, stroke, width) don't fit the one row an
+   edge's colour+two toggle groups do. */
+.shape-style-panel {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4rem;
+  padding: 0.55rem 0.7rem;
+}
+
+.shape-style-row { justify-content: space-between; }
+
+/* Width means nothing without a stroke to apply it to -- dimmed rather than
+   hidden, so the panel doesn't reflow as stroke is toggled on and off. */
+.shape-style-width-row.is-disabled { opacity: 0.35; pointer-events: none; }
+
+.shape-style-width-label {
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.shape-style-width { width: 3.4rem; padding: 0.3rem 0.5rem; }
+
+.shape-style-none.is-active { box-shadow: var(--press-sm); color: var(--accent); }
 
 /* --- canvas chrome: status, hint, zoom cluster, add dock --- */
 
@@ -3683,6 +3750,10 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 
 .canvas-dock-add-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .canvas-dock-add { font-size: 0.78rem; padding: 0.45rem 0.9rem; }
+
+/* A shape tool while armed -- the same pressed-in "on" state
+   .canvas-node-lock.is-on already uses for the same idea. */
+.canvas-dock-tool.is-armed { box-shadow: var(--press-sm); color: var(--accent); }
 
 .canvas-dock-search { width: 100%; margin: 0 0 0.75rem; }
 

@@ -72,9 +72,9 @@ CONTAINER_WIDGET_TYPES = {"sidebar"}
 # 400 tells the UI its Add Widget list is out of step, where a 200 would leave
 # a phantom deletion on screen until the next reload.
 PERMANENT_WIDGET_TYPES = {"settings", "exit", "canvas"}
-# What a canvas node can be. See db.CANVAS_NODES_SCHEMA for why all three
+# What a canvas node can be. See db.CANVAS_NODES_SCHEMA for why all four
 # share one table.
-CANVAS_NODE_KINDS = {"reference", "text", "widget"}
+CANVAS_NODE_KINDS = {"reference", "text", "widget", "shape"}
 
 # In-memory only -- an analysis conversation is a live chat with Claude, not
 # library data, so it doesn't belong in SQLite and doesn't need to survive a
