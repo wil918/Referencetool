@@ -1,4 +1,4 @@
-import { makeCard, markSelectable, makeBarThumb } from "./shared/cards.js";
+import { makeCard, markSelectable, makeBarThumb, refreshThumbnail } from "./shared/cards.js";
 import * as carousel from "./shared/carousel.js";
 import * as folders from "./project/folders.js";
 
@@ -317,6 +317,7 @@ const archiveSelectBtn = document.getElementById("archive-select-btn");
 const archiveSelectionToolbar = document.getElementById("archive-selection-toolbar");
 const archiveProjectSelect = document.getElementById("archive-project-select");
 const archiveSelectionStatus = document.getElementById("archive-selection-status");
+const archiveEditBtn = document.getElementById("archive-selection-edit-btn");
 const archiveDeleteBtn = document.getElementById("archive-selection-delete-btn");
 let archiveSelectionMode = false;
 let archiveSelectedIds = new Set();
@@ -346,6 +347,7 @@ function toggleArchiveSelection(refId) {
 function updateArchiveSelectionToolbar() {
   const n = archiveSelectedIds.size;
   document.getElementById("archive-selection-count").textContent = `${n} selected`;
+  archiveEditBtn.disabled = n === 0;
   archiveDeleteBtn.disabled = n === 0;
   archiveProjectSelect.disabled = n === 0;
   archiveFolderProjectSelect.disabled = n === 0;
@@ -353,6 +355,45 @@ function updateArchiveSelectionToolbar() {
 }
 
 archiveSelectBtn.addEventListener("click", () => setArchiveSelectionMode(!archiveSelectionMode));
+
+// Images only (rotating a PDF's pages or a text note makes no sense -- hard
+// rule 6). A mixed selection just rotates the image subset and says so,
+// rather than refusing the whole batch over the non-image rest of it.
+archiveEditBtn.addEventListener("click", async () => {
+  const ids = Array.from(archiveSelectedIds).filter((id) => {
+    const ref = currentList.find((r) => r.id === id);
+    return ref && ref.type === "image";
+  });
+  if (!ids.length) {
+    archiveSelectionStatus.textContent = "Nothing selected can be rotated (text and PDF references aren't affected).";
+    return;
+  }
+
+  archiveEditBtn.disabled = true;
+  let done = 0;
+  for (const id of ids) {
+    archiveSelectionStatus.textContent = `Rotating ${done + 1} of ${ids.length}...`;
+    try {
+      const res = await fetch(`/api/references/${id}/rotate`, { method: "POST" });
+      if (res.ok) {
+        const updated = await res.json();
+        const item = currentList.find((r) => r.id === id);
+        if (item) item.content_hash = updated.content_hash;
+        // Turns the thumbnail as each one finishes, rather than waiting
+        // for the whole batch -- that visible feedback is the interface.
+        refreshThumbnail(id, updated.content_hash);
+      }
+    } catch (err) {
+      // best-effort -- move on to the rest of the batch
+    }
+    done++;
+  }
+  const skipped = archiveSelectedIds.size - ids.length;
+  archiveSelectionStatus.textContent =
+    `Rotated ${done} reference${done === 1 ? "" : "s"}.` +
+    (skipped ? ` ${skipped} skipped (not images).` : "");
+  archiveEditBtn.disabled = archiveSelectedIds.size === 0;
+});
 
 archiveProjectSelect.addEventListener("change", () => {
   const value = archiveProjectSelect.value;

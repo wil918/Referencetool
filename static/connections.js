@@ -7,6 +7,7 @@
  * two views read as one continuous move rather than a page change.
  */
 import * as THREE from "three";
+import { thumbSrc } from "./shared/cards.js";
 import {
   CROSS_THREAD_OPACITY,
   HANDOFF_IMAGE_KEY,
@@ -416,7 +417,7 @@ function buildScene(data, handoff) {
   function startThumbnail(entry) {
     entry.load = "loading";
     new THREE.TextureLoader().load(
-      `/media/${entry.ref.id}/thumb`,
+      thumbSrc(entry.ref),
       (texture) => {
         texture.colorSpace = THREE.SRGBColorSpace;
         const thumb = new THREE.Sprite(

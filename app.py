@@ -231,6 +231,10 @@ def _ref_summary(ref, match_label=None):
         "description": ref["description"],
         "ext": Path(ref["filepath"]).suffix.lower(),
         "is_own_work": ref["is_own_work"],
+        # Rides along so every thumbnail <img> can be cache-busted with it --
+        # otherwise the browser happily keeps showing a stale orientation
+        # after a rotate rewrites the file at the same URL.
+        "content_hash": ref["content_hash"],
     }
     if match_label:
         summary["match_label"] = match_label
@@ -378,6 +382,21 @@ def api_delete_reference(ref_id):
     embeddings.remove_from_index(ref["id"])
     db.delete_reference(ref["id"])
     return jsonify({"ok": True, "id": ref["id"]})
+
+
+@app.post("/api/references/<ref_id>/rotate")
+def api_rotate_reference(ref_id):
+    """Rotate one image reference 90 degrees clockwise. Used by both the
+    single-reference "Edit reference" control and the archive selection
+    toolbar's bulk rotate, which just calls this once per selected id."""
+    ref = _find_reference(ref_id)
+    if not ref:
+        abort(404)
+    if ref["type"] != "image":
+        return jsonify({"error": "Only images can be rotated."}), 400
+
+    updated = ingest.rotate_reference(ref["id"])
+    return jsonify(_ref_summary(updated))
 
 
 def _project_summary(project, preview_limit=PROJECT_BAR_PREVIEW_LIMIT):

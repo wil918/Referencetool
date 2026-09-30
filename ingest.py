@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 import fitz  # PyMuPDF
+from PIL import Image, ImageOps
 
 from config import IMAGES_DIR, TEXTS_DIR
 import colour
@@ -274,6 +275,61 @@ def add_reference(source_path, title=None, source=None, notes=None, force=False,
         "description": description,
         "is_own_work": is_own_work,
     }
+
+
+def rotate_reference(ref_id):
+    """Rotate a reference's image file 90 degrees clockwise, in place, and
+    refresh everything that depends on its bytes.
+
+    A scan that's upside down is simply wrong -- there's nothing worth
+    preserving about its original orientation, so this rewrites the file
+    rather than storing a display angle. A display angle would have to be
+    honoured by every consumer of the file (the thumbnail route, the media
+    route, drag-out, the portfolio PDF, the canvas, the 3D scenes), and the
+    first one missed would send a wrong-way-up image out of the app.
+
+    Any existing EXIF orientation tag is baked into the pixels first, so a
+    scan that already carries one doesn't end up rotated twice by whichever
+    viewer reads the tag next.
+
+    Saving re-encodes a JPEG, which loses a little fidelity on every rotate.
+    Accepted rather than pulling in a lossless-rotate dependency for one
+    button -- saved at high quality so it takes several rotations to notice.
+    """
+    # Imported locally, not at module load, so a test that monkeypatches
+    # config.REFERENCES_DIR after this module is already imported still
+    # resolves against the right archive (see colour.py's profile_for_reference
+    # for the same pattern, and tests/conftest.py's archive fixture).
+    from config import REFERENCES_DIR
+
+    ref = db.get_reference(ref_id)
+    if not ref:
+        raise ValueError(f"No reference {ref_id}")
+    if ref["type"] != "image":
+        raise ValueError("Only image references can be rotated")
+
+    path = REFERENCES_DIR / ref["filepath"]
+    with Image.open(path) as img:
+        original_format = img.format
+        rotated = ImageOps.exif_transpose(img).rotate(-90, expand=True)
+
+    save_kwargs = {"quality": 95} if original_format == "JPEG" else {}
+    rotated.save(path, format=original_format, **save_kwargs)
+
+    content_hash = _file_hash(path)
+    # Genuinely new pixels, so the CLIP vector has to be recomputed -- local
+    # CPU work, no API call, unlike the tagging this deliberately doesn't redo.
+    embedding = embeddings.embed_image(path)
+
+    db.update_reference_content_hash(ref_id, content_hash)
+    # A rotation doesn't touch the palette, so the stored colour profile is
+    # carried forward onto the new hash rather than invalidated -- otherwise
+    # list_references_needing_colour would re-queue every rotated image for
+    # an analysis whose result would come back identical.
+    db.update_colour_analysis_content_hash(ref_id, content_hash)
+    embeddings.update_embedding(ref_id, embedding)
+
+    return db.get_reference(ref_id)
 
 
 def add_folder(folder_path, source=None, notes=None, recursive=False, force=False, is_own_work=False):

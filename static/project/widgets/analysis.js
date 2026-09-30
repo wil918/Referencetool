@@ -26,7 +26,7 @@
  * config: { analysis_id, turnHtml, contentScale }
  */
 
-import { makeCard } from "../../shared/cards.js";
+import { makeCard, thumbSrc } from "../../shared/cards.js";
 import * as carousel from "../../shared/carousel.js";
 import { buildAnalysisRefMap, renderTranscript } from "../pages/analysis-panel.js";
 import { applyTypography } from "../typography.js";
@@ -280,7 +280,7 @@ export default {
         const thumb = document.createElement("div");
         thumb.className = "analysis-thumb";
         const img = document.createElement("img");
-        img.src = `/media/${ref.id}/thumb`;
+        img.src = thumbSrc(ref);
         img.alt = ref.title;
         img.onerror = () => img.remove();
         thumb.appendChild(img);

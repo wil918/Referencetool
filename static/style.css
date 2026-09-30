@@ -1653,6 +1653,19 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 
 .folders-modal-box { max-width: 480px; }
 
+.edit-reference-box { max-width: 420px; }
+
+.edit-reference-media {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-height: 320px;
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+
+.edit-reference-media img { max-width: 100%; max-height: 320px; object-fit: contain; border-radius: 6px; }
+
 .folders-list {
   display: flex;
   flex-direction: column;
@@ -1911,6 +1924,23 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 .carousel-info h2 { margin: 0 0 0.35rem; font-size: 1.35rem; }
 .carousel-info .muted { color: #c9c3ba; }
 .carousel-info p { font-size: 0.88rem; line-height: 1.5; }
+
+/* Flat and glassy, like .project-add select below -- the carousel is
+   deliberately excluded from the neumorphic .btn system (see the comment at
+   the top of this section), so this doesn't reach for it either. */
+.carousel-edit-btn {
+  margin-top: 1rem;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.3);
+  background: rgba(255,255,255,0.08);
+  color: #f2efe9;
+  box-shadow: none;
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 0.85rem;
+}
+.carousel-edit-btn:hover { background: rgba(255,255,255,0.16); }
 
 .project-add {
   margin-top: 1.25rem;

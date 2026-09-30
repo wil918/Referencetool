@@ -1240,6 +1240,16 @@ def update_reference_title(ref_id, title):
         conn.execute("UPDATE reference_items SET title = ? WHERE id = ?", (title, ref_id))
 
 
+def update_reference_content_hash(ref_id, content_hash):
+    """Repoint a reference at new file bytes without touching anything else
+    about it -- used when a reference's own file is rewritten in place
+    (currently: rotation)."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE reference_items SET content_hash = ? WHERE id = ?", (content_hash, ref_id)
+        )
+
+
 def find_titles_like(title):
     """Every existing title that is `title` itself, or `title` with anything
     appended -- the raw material for picking the next free " (N)" suffix.
@@ -1612,6 +1622,18 @@ def save_colour_analysis(reference_id, version, content_hash, profile_json):
                 profile_json,
                 datetime.now(timezone.utc).isoformat(),
             ),
+        )
+
+
+def update_colour_analysis_content_hash(reference_id, content_hash):
+    """Carry a stored colour profile forward onto new file bytes without
+    recomputing it -- for a change that doesn't touch the palette (currently:
+    rotation). A no-op if there's no analysis yet; list_references_needing_colour
+    picks that case up on its own regardless."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE colour_analysis SET content_hash = ? WHERE reference_id = ?",
+            (content_hash, reference_id),
         )
 
 

@@ -45,6 +45,7 @@ function buildCarouselMarkup() {
         <p id="info-description"></p>
         <p id="info-source" class="muted"></p>
         <p id="info-notes" class="muted"></p>
+        <button id="carousel-edit-btn" class="carousel-edit-btn" hidden>Edit reference</button>
 
         <div class="project-add">
           <label for="carousel-project-select">Add to project</label>

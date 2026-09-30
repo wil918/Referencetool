@@ -3,6 +3,24 @@
 // with no side effects on import -- every element and listener is created
 // only when a caller invokes one of these.
 
+/** The thumbnail URL for a reference, cache-busted with its content hash so
+ *  the browser fetches a fresh image after a rotate rewrites the file at
+ *  this same path -- without it, an already-cached thumbnail keeps showing
+ *  the old orientation until a hard reload. */
+export function thumbSrc(ref) {
+  return ref.content_hash ? `/media/${ref.id}/thumb?v=${ref.content_hash}` : `/media/${ref.id}/thumb`;
+}
+
+/** Updates every on-screen thumbnail for one reference after its bytes
+ *  change (currently: rotation), without needing the grid or bar it sits in
+ *  to re-render. Relies on makeCard/makeBarThumb tagging their <img> with
+ *  data-ref-thumb below. */
+export function refreshThumbnail(refId, contentHash) {
+  document.querySelectorAll(`img[data-ref-thumb="${refId}"]`).forEach((img) => {
+    img.src = `/media/${refId}/thumb?v=${contentHash}`;
+  });
+}
+
 /** A grid card: thumbnail (falling back to a text placeholder), title
  *  caption, own-work badge and optional match label. `onClick` is whatever
  *  the caller wants a click to do -- open the carousel, toggle selection. */
@@ -21,7 +39,8 @@ export function makeCard(ref, onClick) {
   // Always try a thumbnail first (works for images and PDFs); plain-text
   // references 404 on /thumb, so fall back to the text placeholder card.
   const img = document.createElement("img");
-  img.src = `/media/${ref.id}/thumb`;
+  img.dataset.refThumb = ref.id;
+  img.src = thumbSrc(ref);
   img.alt = ref.title;
   img.onerror = () => {
     img.remove();
@@ -121,7 +140,8 @@ export function makeBarThumb(ref, { showTitleForText = false } = {}) {
   const thumb = document.createElement("div");
   thumb.className = "bar-thumb";
   const img = document.createElement("img");
-  img.src = `/media/${ref.id}/thumb`;
+  img.dataset.refThumb = ref.id;
+  img.src = thumbSrc(ref);
   img.alt = ref.title;
   img.onerror = () => {
     img.remove();

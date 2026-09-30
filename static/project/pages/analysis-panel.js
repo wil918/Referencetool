@@ -9,7 +9,7 @@
  * panel right now, not whatever it was when the panel was built.
  */
 
-import { makeCard } from "../../shared/cards.js";
+import { makeCard, thumbSrc } from "../../shared/cards.js";
 import * as carousel from "../../shared/carousel.js";
 
 function escapeHtml(str) {
@@ -148,7 +148,7 @@ export function createAnalysisPanel({ project, getReferences }) {
     const thumb = document.createElement("div");
     thumb.className = "analysis-thumb";
     const img = document.createElement("img");
-    img.src = `/media/${ref.id}/thumb`;
+    img.src = thumbSrc(ref);
     img.alt = ref.title;
     img.onerror = () => img.remove();
     thumb.appendChild(img);
