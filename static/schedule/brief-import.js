@@ -44,21 +44,26 @@ function ensureOverlay() {
 }
 
 // --- small builders -------------------------------------------------------
+//
+// el/field/input/reviewRow/dateSuspectFlag/DATE are exported too -- supporting-
+// docs.js draws its own review sheet for a different document family, but it
+// is the same drafting-language review-row look, and duplicating it would
+// mean the two forking the moment either one changed.
 
-function el(tag, className, text) {
+export function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text != null) node.textContent = text;
   return node;
 }
 
-function field(labelText, control) {
+export function field(labelText, control) {
   const wrap = el("label", "brief-field");
   wrap.append(el("span", null, labelText), control);
   return wrap;
 }
 
-function input(type, value) {
+export function input(type, value) {
   const i = document.createElement("input");
   i.type = type;
   if (value != null && value !== "") i.value = value;
@@ -77,8 +82,10 @@ function acceptToggle(checked = true) {
 
 /** A reviewable row: an accept toggle down the left, an editable body on the
  *  right that dims when the row is toggled off. Returns { row, accepted(),
- *  body } -- body is where the caller hangs the fields. */
-function reviewRow(accepted = true, flag = null) {
+ *  body } -- body is where the caller hangs the fields. `flag` is a string or
+ *  array of strings, each rendered as its own tag -- e.g. a deliverable can be
+ *  both "new since last import" and carry a suspect date at once. */
+export function reviewRow(accepted = true, flag = null) {
   const row = el("div", "brief-row");
   const { toggle, checkbox } = acceptToggle(accepted);
   const body = el("div", "brief-row-body");
@@ -86,16 +93,25 @@ function reviewRow(accepted = true, flag = null) {
   checkbox.addEventListener("change", sync);
   sync();
   row.append(toggle, body);
-  if (flag) {
-    const tag = el("span", "brief-flag dr-micro", flag);
-    row.append(tag);
-  }
+  (Array.isArray(flag) ? flag : [flag]).filter(Boolean).forEach((text) => {
+    row.append(el("span", "brief-flag dr-micro", text));
+  });
   return { row, accepted: () => checkbox.checked, body };
+}
+
+// The sentence a date_suspect annotation (see briefs._flag_dates_out_of_range)
+// becomes in the review sheet -- never hidden, never auto-corrected, just
+// named so the person reviewing knows to look at it.
+export function dateSuspectFlag(item) {
+  const suspect = item && item.date_suspect;
+  if (!suspect || !suspect.checked_against) return null;
+  const [start, end] = suspect.checked_against;
+  return `date looks wrong -- outside ${DATE(start)} to ${DATE(end)}`;
 }
 
 // --- the three sections --------------------------------------------------
 
-const DATE = (s) => (s && s.length >= 10 ? s.slice(0, 10) : "");
+export const DATE = (s) => (s && s.length >= 10 ? s.slice(0, 10) : "");
 
 // Which deliverable, if any, a hand-in date is for -- by distinctive word
 // overlap between the date's label/note and each deliverable title ("deliverable"
@@ -131,7 +147,7 @@ function bestDeliverableMatch(text, titles) {
 function keyDateRows(container, dates, deliverableTitles) {
   const built = [];
   (dates || []).forEach((k) => {
-    const { row, accepted, body } = reviewRow();
+    const { row, accepted, body } = reviewRow(true, dateSuspectFlag(k));
     const label = input("text", k.label || "");
     label.placeholder = "e.g. Briefing";
     const date = input("date", DATE(k.date));
@@ -177,31 +193,79 @@ function keyDateRows(container, dates, deliverableTitles) {
   return built;
 }
 
+// The task skeleton's own array order IS its sequence -- "research, then
+// develop, then select, then mount" -- so the review sheet doesn't need a
+// separate control for it, just to show it (the position number) and to keep
+// it intact through discards. depends_on_index is the sparse HARD exception
+// (see briefs._DELIVERABLE_INSTRUCTIONS) and DOES need a control, since it's
+// not otherwise visible: a "Depends on" select per task, editable, pointing
+// at another task in the same skeleton.
+//
+// Returns a single buildTasks() rather than one builder per row, because a
+// dependency is stored as an INDEX and discarding a task shifts every index
+// after it -- exactly the remapping renderReview already does for a key
+// date's attach_to, done here at the task-skeleton's own scope.
 function taskRows(container, tasks) {
-  const built = [];
-  (tasks || []).forEach((t) => {
-    const { row, accepted, body } = reviewRow();
+  const rows = [];
+  (tasks || []).forEach((t, i) => {
+    // The position number rides in the row's existing flag slot (third grid
+    // column) rather than as an extra child -- .brief-row is a fixed
+    // three-column grid (toggle / body / flag) and a fourth child would just
+    // wrap onto a new row instead of sitting beside the others.
+    const { row, accepted, body } = reviewRow(true, `${i + 1}`);
     row.classList.add("brief-subrow");
     const title = input("text", t.title || "");
     const est = input("number", t.est_minutes ?? "");
     est.min = "0";
     est.step = "5";
     est.placeholder = "min";
+    const depends = document.createElement("select");
+    depends.append(new Option("— nothing —", ""));
     const grid = el("div", "brief-field-grid brief-field-grid--task");
-    grid.append(field("Task", title), field("Est. minutes", est));
+    grid.append(field("Task", title), field("Est. minutes", est), field("Depends on", depends));
     body.append(grid);
     if (t.note) body.append(el("p", "brief-note dr-body", t.note));
     container.append(row);
-    built.push(() => {
-      if (!accepted() || !title.value.trim()) return null;
-      return {
-        title: title.value.trim(),
-        description: (t.note || "").trim() || null,
-        est_minutes: est.value === "" ? null : Number(est.value),
-      };
-    });
+    rows.push({ accepted, title, est, depends, originalDependsOn: t.depends_on_index, note: t.note });
   });
-  return built;
+
+  // Every task's "Depends on" options are every OTHER task, by title, keyed
+  // by ORIGINAL index -- populated after the loop so a task can point at one
+  // that comes after it in the array too (rare, but the brief's own order is
+  // a suggestion, not a promise).
+  rows.forEach((r, i) => {
+    rows.forEach((other, j) => {
+      if (j === i) return;
+      const opt = new Option(other.title.value.trim() || `Task ${j + 1}`, String(j));
+      r.depends.add(opt);
+    });
+    if (Number.isInteger(r.originalDependsOn) && r.originalDependsOn !== i) {
+      r.depends.value = String(r.originalDependsOn);
+    }
+  });
+
+  return function buildTasks() {
+    // Original index -> submitted index, following exactly the pattern the
+    // deliverable-level attach_to remap uses: a discarded task's dependents
+    // simply lose that dependency rather than pointing at nothing.
+    const indexMap = new Map();
+    const kept = [];
+    rows.forEach((r, i) => {
+      if (!r.accepted() || !r.title.value.trim()) return;
+      indexMap.set(i, kept.length);
+      kept.push(r);
+    });
+    return kept.map((r) => {
+      const out = {
+        title: r.title.value.trim(),
+        description: (r.note || "").trim() || null,
+        est_minutes: r.est.value === "" ? null : Number(r.est.value),
+      };
+      const chosen = r.depends.value === "" ? null : Number(r.depends.value);
+      if (chosen != null && indexMap.has(chosen)) out.depends_on_index = indexMap.get(chosen);
+      return out;
+    });
+  };
 }
 
 // A brand-new deliverable: fully editable, opt-out, carries its task skeleton.
@@ -209,7 +273,7 @@ function newDeliverableRow(container, d, priorTitles) {
   const flag = d.title && !priorTitles.has(d.title.trim().toLowerCase()) && priorTitles.size
     ? "new since last import"
     : null;
-  const { row, accepted, body } = reviewRow(true, flag);
+  const { row, accepted, body } = reviewRow(true, [flag, dateSuspectFlag(d)]);
   row.classList.add("brief-row--block");
 
   const title = input("text", d.title || "");
@@ -232,10 +296,10 @@ function newDeliverableRow(container, d, priorTitles) {
   grid.append(field("Title", title), field("Due date", due), field("Weighting", weighting));
   body.append(grid, field("Notes", description), field("Spec (JSON, from the brief)", spec));
 
-  let taskBuilders = [];
+  let buildTasks = () => [];
   if (d.tasks && d.tasks.length) {
     body.append(el("p", "dr-label brief-subhead", "Task skeleton"));
-    taskBuilders = taskRows(body, d.tasks);
+    buildTasks = taskRows(body, d.tasks);
   }
   container.append(row);
 
@@ -257,7 +321,7 @@ function newDeliverableRow(container, d, priorTitles) {
       weighting: w,
       description: description.value.trim() || null,
       spec: parsedSpec,
-      tasks: taskBuilders.map((b) => b()).filter(Boolean),
+      tasks: buildTasks(),
     };
   };
 }

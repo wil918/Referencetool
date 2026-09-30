@@ -1,6 +1,7 @@
-import { makeCard, markSelectable, makeBarThumb, refreshThumbnail } from "./shared/cards.js";
+import { makeCard, markSelectable, makeBarThumb, attachDownload, refreshThumbnail } from "./shared/cards.js";
 import * as carousel from "./shared/carousel.js";
 import * as folders from "./project/folders.js";
+import { downloadZip } from "./shared/export.js";
 
 const SUPPORTED_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".txt", ".md", ".pdf"];
 
@@ -123,22 +124,31 @@ function filesFromDataTransferItems(items) {
 
 // --- Uploading ---
 
+function logRow(text) {
+  const log = document.getElementById("upload-log");
+  const row = document.createElement("div");
+  row.className = "log-row";
+  row.textContent = text;
+  log.prepend(row);
+  return row;
+}
+
 async function uploadFiles(files) {
   if (!files.length) return;
-  const log = document.getElementById("upload-log");
   const source = document.getElementById("file-source").value.trim();
   const ownWork = document.getElementById("file-own-work").checked;
 
+  const pdfs = [];
+  const rest = [];
   for (const file of files) {
     const dot = file.name.lastIndexOf(".");
     const ext = dot >= 0 ? file.name.slice(dot).toLowerCase() : "";
     if (file.name === ".DS_Store" || !SUPPORTED_EXTS.includes(ext)) continue;
+    (ext === ".pdf" ? pdfs : rest).push(file);
+  }
 
-    const row = document.createElement("div");
-    row.className = "log-row";
-    row.textContent = `${file.name} — uploading...`;
-    log.prepend(row);
-
+  for (const file of rest) {
+    const row = logRow(`${file.name} — uploading...`);
     try {
       const fd = new FormData();
       fd.append("file", file, file.name);
@@ -161,7 +171,110 @@ async function uploadFiles(files) {
     }
   }
 
+  // PDFs are queued one at a time through the split-controls panel, which
+  // pauses each one on an explicit "Add" click -- see handlePdfFile.
+  for (const file of pdfs) await queuePdfFile(file);
+
   refreshArchive();
+}
+
+// --- PDF page splitting ---
+//
+// A PDF is the one file type that might reasonably become dozens of
+// references instead of one, each with its own Claude tagging call and CLIP
+// embedding -- so unlike every other file type, it gets a pause: the page
+// count is fetched and shown, and nothing is queued until the user clicks Add.
+// A single shared confirm queue keeps two PDFs dropped in quick succession
+// from racing over the same panel and button.
+
+const pdfSplitControls = document.getElementById("pdf-split-controls");
+const pdfPageCountInfo = document.getElementById("pdf-page-count-info");
+const pdfSplitCheckbox = document.getElementById("file-split-pages");
+const pdfSplitRangeRow = document.getElementById("pdf-split-range-row");
+const pdfPageRangeInput = document.getElementById("pdf-page-range");
+const pdfSplitConfirmBtn = document.getElementById("pdf-split-confirm");
+
+pdfSplitCheckbox.addEventListener("change", () => {
+  pdfSplitRangeRow.hidden = !pdfSplitCheckbox.checked;
+});
+
+let pdfQueue = Promise.resolve();
+
+function queuePdfFile(file) {
+  const run = () => handlePdfFile(file);
+  pdfQueue = pdfQueue.then(run, run);
+  return pdfQueue;
+}
+
+async function handlePdfFile(file) {
+  const source = document.getElementById("file-source").value.trim();
+  const ownWork = document.getElementById("file-own-work").checked;
+
+  pdfSplitCheckbox.checked = false;
+  pdfSplitRangeRow.hidden = true;
+  pdfPageRangeInput.value = "";
+  pdfPageCountInfo.textContent = `${file.name} — checking page count...`;
+  pdfSplitControls.hidden = false;
+
+  let pages = null;
+  try {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    const res = await fetch("/api/pdf-info", { method: "POST", body: fd });
+    const data = await res.json();
+    if (res.ok) pages = data.pages;
+  } catch (err) {
+    // The count is a convenience, not a gate -- fall through and let the
+    // user decide without it.
+  }
+  pdfPageCountInfo.textContent = pages
+    ? `${file.name} — ${pages} page${pages === 1 ? "" : "s"}`
+    : file.name;
+
+  const decision = await new Promise((resolve) => {
+    const onConfirm = () => {
+      pdfSplitConfirmBtn.removeEventListener("click", onConfirm);
+      resolve({ split: pdfSplitCheckbox.checked, range: pdfPageRangeInput.value.trim() });
+    };
+    pdfSplitConfirmBtn.addEventListener("click", onConfirm);
+  });
+  pdfSplitControls.hidden = true;
+
+  const row = logRow(`${file.name} — ${decision.split ? "splitting..." : "uploading..."}`);
+  const fd = new FormData();
+  fd.append("file", file, file.name);
+  if (source) fd.append("source", source);
+  fd.append("own_work", ownWork ? "true" : "false");
+
+  try {
+    if (decision.split) {
+      if (decision.range) fd.append("range", decision.range);
+      const res = await fetch("/api/split-pdf", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) {
+        row.classList.add("error");
+        row.textContent = `${file.name} — failed: ${data.error}`;
+      } else {
+        row.classList.add("ok");
+        row.textContent = `${file.name} — queued ${data.queued} page${data.queued === 1 ? "" : "s"} for tagging`;
+      }
+    } else {
+      const res = await fetch("/api/add-file", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) {
+        row.classList.add(data.duplicate ? "warn" : "error");
+        row.textContent = data.duplicate
+          ? `${file.name} — skipped (already in the library)`
+          : `${file.name} — failed: ${data.error}`;
+      } else {
+        row.classList.add("ok");
+        row.textContent = `${file.name} — added${data.tags.length ? " (" + data.tags.slice(0, 3).join(", ") + ")" : ""}`;
+      }
+    }
+  } catch (err) {
+    row.classList.add("error");
+    row.textContent = `${file.name} — failed: ${err}`;
+  }
 }
 
 document.getElementById("text-save-btn").addEventListener("click", async () => {
@@ -265,7 +378,10 @@ async function refreshArchive() {
   const checkedTypes = typeCheckboxes.filter((cb) => cb.checked).map((cb) => cb.value);
   const checkedMethods = searchMethodCheckboxes.filter((cb) => cb.checked).map((cb) => cb.value);
   if (q) params.set("q", q);
-  if (filterOwnWork.value !== "any") params.set("own_work", filterOwnWork.value);
+  // Left unset by default, which the API reads as "not in a search, shown
+  // when browsing" -- a portfolio spread puts thirty own-work pages into the
+  // archive at a time, and a search is looking for research.
+  if (filterOwnWork.value) params.set("own_work", filterOwnWork.value);
   if (checkedTypes.length) params.set("type", checkedTypes.join(","));
   if (checkedMethods.length) params.set("search_by", checkedMethods.join(","));
 
@@ -278,7 +394,10 @@ async function refreshArchive() {
   }
   currentList = refs;
   archiveFiltersActive =
-    Boolean(q) || filterOwnWork.value !== "any" || checkedTypes.length > 0 || Boolean(archiveFolderFilter);
+    Boolean(q) ||
+    !["", "any"].includes(filterOwnWork.value) ||
+    checkedTypes.length > 0 ||
+    Boolean(archiveFolderFilter);
   // A reference that's no longer in the list (deleted, or filtered out)
   // shouldn't stay silently selected behind the scenes.
   const visible = new Set(currentList.map((r) => r.id));
@@ -303,6 +422,7 @@ function renderGrid() {
       archiveSelectionMode ? () => toggleArchiveSelection(ref.id) : () => carousel.open(currentList, idx)
     );
     if (archiveSelectionMode) markSelectable(card, archiveSelectedIds.has(ref.id));
+    attachDownload(card, ref);
     grid.appendChild(card);
   });
 }
@@ -319,6 +439,7 @@ const archiveProjectSelect = document.getElementById("archive-project-select");
 const archiveSelectionStatus = document.getElementById("archive-selection-status");
 const archiveEditBtn = document.getElementById("archive-selection-edit-btn");
 const archiveDeleteBtn = document.getElementById("archive-selection-delete-btn");
+const archiveExportBtn = document.getElementById("archive-selection-export-btn");
 let archiveSelectionMode = false;
 let archiveSelectedIds = new Set();
 let archiveFiltersActive = false;
@@ -349,6 +470,7 @@ function updateArchiveSelectionToolbar() {
   document.getElementById("archive-selection-count").textContent = `${n} selected`;
   archiveEditBtn.disabled = n === 0;
   archiveDeleteBtn.disabled = n === 0;
+  archiveExportBtn.disabled = n === 0;
   archiveProjectSelect.disabled = n === 0;
   archiveFolderProjectSelect.disabled = n === 0;
   if (!archiveFolderSelect.hidden) archiveFolderSelect.disabled = n === 0;
@@ -393,6 +515,15 @@ archiveEditBtn.addEventListener("click", async () => {
     `Rotated ${done} reference${done === 1 ? "" : "s"}.` +
     (skipped ? ` ${skipped} skipped (not images).` : "");
   archiveEditBtn.disabled = archiveSelectedIds.size === 0;
+});
+
+// On-screen order, not selection-click order -- currentList is already in
+// the order the grid rendered it, so filtering it down to the selection
+// keeps that order, which is what the zip's numbering prefix depends on.
+archiveExportBtn.addEventListener("click", () => {
+  const ids = currentList.filter((r) => archiveSelectedIds.has(r.id)).map((r) => r.id);
+  if (!ids.length) return;
+  downloadZip("/api/export", ids);
 });
 
 archiveProjectSelect.addEventListener("change", () => {

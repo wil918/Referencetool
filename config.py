@@ -16,6 +16,13 @@ CHROMA_DIR = DATA_DIR / "chroma_db"
 # review sheet can link "view original". Not references -- a brief is the source
 # a project's deliverables were built from, not an item in the library.
 BRIEFS_DIR = DATA_DIR / "briefs"
+# Original supporting documents (workshop/materials lists, reading lists,
+# technical handouts) -- PDF or .docx, kept for the same "view original"
+# reason as BRIEFS_DIR. Separate directory because these are a different
+# table (supporting_documents, not briefs) with no filename collision risk
+# between the two id spaces, but keeping them apart avoids ever needing to
+# tell them apart by listing a mixed directory.
+SUPPORTING_DOCS_DIR = DATA_DIR / "supporting_docs"
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 # You can swap this for any current Claude model via the .env file.
@@ -69,5 +76,5 @@ def _detect_local_timezone():
 
 LOCAL_TIMEZONE = _detect_local_timezone()
 
-for _d in (IMAGES_DIR, TEXTS_DIR, DATA_DIR, CHROMA_DIR, BRIEFS_DIR):
+for _d in (IMAGES_DIR, TEXTS_DIR, DATA_DIR, CHROMA_DIR, BRIEFS_DIR, SUPPORTING_DOCS_DIR):
     _d.mkdir(parents=True, exist_ok=True)

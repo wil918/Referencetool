@@ -416,6 +416,24 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
   color: var(--muted);
 }
 
+.pdf-split-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.pdf-split-controls[hidden] { display: none; }
+
+.pdf-split-range-row {
+  display: flex;
+  align-items: center;
+}
+
+.pdf-split-range-row[hidden] { display: none; }
+
+.pdf-split-range-row input[type="text"] { width: 160px; }
+
 .upload-log {
   margin-top: 1rem;
   display: flex;
@@ -694,6 +712,36 @@ input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
   background: var(--accent);
   box-shadow: 0 0 6px var(--accent), 0 0 13px var(--accent-soft);
 }
+
+/* A small always-there download control, bottom-right so it doesn't compete
+   with own-work-badge (top-left) or card-select-check (top-right). Same
+   solid-circle treatment as those two -- see cards.js's attachDownload --
+   since a badge overlaid on a photo is an established exception to rule 6's
+   "no fill" (the rule is about page surfaces, not iconography on an image).
+   Hidden until hover/focus so the grid stays a clean contact sheet at rest. */
+.card-download-btn {
+  position: absolute;
+  bottom: 0.5rem;
+  right: 0.5rem;
+  z-index: 2;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--slate);
+  color: #f4f7fb;
+  font-size: 0.8rem;
+  line-height: 1;
+  text-decoration: none;
+  box-shadow: 0 2px 6px rgba(22, 27, 29, 0.3);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.card:hover .card-download-btn,
+.card:focus-within .card-download-btn { opacity: 1; }
 
 /* --- Projects --- */
 
@@ -1739,6 +1787,7 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 
 .analyze-transcript {
   flex: 1;
+  min-height: 140px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1781,6 +1830,46 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 }
 
 .analyze-input-row input { flex: 1; }
+
+/* Concept analysis's "next actions" review list -- one raised row per
+   proposed task, same opt-out pattern as the brief import review sheet, in
+   the neumorphic system's own vocabulary rather than that sheet's drafting
+   one (concept-panel.js lives in the project shell, not the schedule). */
+
+/* A fixed, capped-height strip below the transcript, never the other way
+   round -- a critique with a long NEXT ACTIONS list must not be able to push
+   the critique itself down to a sliver. The list scrolls internally instead
+   of growing the modal. */
+.concept-actions { flex: 0 0 auto; margin-bottom: 1rem; }
+
+.concept-actions-label { margin: 0 0 0.6rem; }
+
+.concept-actions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-height: 190px;
+  overflow-y: auto;
+  padding-right: 0.3rem;
+  margin-bottom: 0.75rem;
+}
+
+.concept-action-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 18px;
+  background: var(--bg);
+  box-shadow: var(--raise-sm);
+}
+
+.concept-action-title { flex: 1; }
+
+.concept-actions-footer {
+  display: flex;
+  justify-content: flex-end;
+}
 
 .ref-link {
   color: var(--accent);
@@ -1941,6 +2030,39 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   font-size: 0.85rem;
 }
 .carousel-edit-btn:hover { background: rgba(255,255,255,0.16); }
+
+/* File actions (download / copy / reveal) -- the carousel is deliberately
+   left outside the neumorphic system (see the "Carousel" comment above), so
+   these are plain pill buttons matching its existing dark chrome rather
+   than .btn's raised/pressed soft-UI treatment. */
+.carousel-file-actions {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255,255,255,0.15);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.carousel-action-btn {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--sans);
+  font-size: 0.8rem;
+  padding: 0.45rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.3);
+  background: rgba(255,255,255,0.08);
+  color: #f2efe9;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.carousel-action-btn:hover { background: rgba(255,255,255,0.18); }
+.carousel-action-btn[hidden] { display: none; }
+
+.carousel-file-actions .muted { flex-basis: 100%; margin: 0; }
 
 .project-add {
   margin-top: 1.25rem;
@@ -3318,6 +3440,38 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 .canvas-node-reference .text-card { flex: 1 1 auto; min-height: 0; aspect-ratio: auto; }
 .canvas-node-reference .card-caption { flex: 0 0 auto; }
 
+/* A file just dropped from Finder, ingesting on the worker (nodes.js's
+   addPendingReference). Same shape as the real reference node it will become
+   -- same size, same card layout -- so nothing visibly jumps when file-drop.js
+   swaps it out; the pulse is the only thing marking it "not yet real". No
+   gestures of its own: pointer-events is off so a click or drag started over
+   it falls through to whatever the canvas would do there anyway (pan, most
+   often), rather than being silently swallowed by an element with no
+   handlers attached. */
+.canvas-node-pending {
+  pointer-events: none;
+  animation: canvas-pending-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes canvas-pending-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* A shape node has no rest-state depth of its own. Its fill, stroke and
+   corner radius are painted inline, per node, from the user's own colour
+   choice (canvas/nodes.js's applyShapeStyle) -- a raised card shadow under a
+   flat rectangle, or showing through an outline-only shape's own
+   --project-bg fill, would read as a card, not a mark. box-sizing: border-box
+   keeps an inline stroke width inside the node's own stored w/h rather than
+   growing past it. Selection, drag and lock feedback still show: those are
+   two-class rules (.canvas-node.is-selected and friends) and outrank this
+   one-class reset on specificity alone, regardless of source order. */
+.canvas-node-shape {
+  box-shadow: none;
+  box-sizing: border-box;
+}
+
 /* The text node's editable area. Deliberately not named after the kind: the
    node wrapper already carries .canvas-node-text, and one class on both
    elements would put this padding on the box as well as inside it. */
@@ -3487,6 +3641,29 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
   pointer-events: none;
 }
 
+/* The shape being drawn (canvas/nodes.js's handleDrawPress), the same idea
+   as .canvas-edge-draft above but a box instead of a line -- dashed because
+   it isn't a shape yet either. A plain div in the world layer, not an SVG:
+   it is positioned and sized exactly like a real node (translate3d + width/
+   height), so it scales with zoom the same way the shape will once it
+   exists. z-index is pinned high rather than left to source order: it is
+   appended after every existing node, which stacking alone would put under
+   any of them that already has an explicit z-index -- the shape being drawn
+   needs to stay visible over whatever it's being drawn across. */
+.canvas-draw-preview {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 999999;
+  border: 1.5px dashed var(--accent);
+  background: var(--accent-soft);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* A tool is armed: empty canvas says so before the first drag even starts. */
+.canvas-viewport.is-drawing-shape { cursor: crosshair; }
+
 /* --- the per-edge style editor ---
    Screen-space chrome anchored to a world point (canvas/edge-style-panel.js
    repositions it in client coordinates via viewport.worldToScreen), so it is
@@ -3557,6 +3734,287 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
    position never shifts the swatch beside it. */
 .edge-style-reset:disabled { opacity: 0.35; cursor: default; }
 .edge-style-reset:disabled:hover { color: var(--project-ink, var(--ink)); }
+
+/* --- the shape style editor ---
+   Reuses edge-style-panel's own row/colour/button classes (fill and stroke
+   are each an .edge-style-colour-row, .shape-style-none an .edge-style-btn)
+   -- one floating-pill-with-a-colour-swatch visual language, not two.
+   Styled here only for what differs: a vertical stack, since three
+   independent controls (fill, stroke, width) don't fit the one row an
+   edge's colour+two toggle groups do. */
+.shape-style-panel {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4rem;
+  padding: 0.55rem 0.7rem;
+}
+
+.shape-style-row { justify-content: space-between; }
+
+/* Width means nothing without a stroke to apply it to -- dimmed rather than
+   hidden, so the panel doesn't reflow as stroke is toggled on and off. */
+.shape-style-width-row.is-disabled { opacity: 0.35; pointer-events: none; }
+
+.shape-style-width-label {
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.shape-style-width { width: 3.4rem; padding: 0.3rem 0.5rem; }
+
+.shape-style-none.is-active { box-shadow: var(--press-sm); color: var(--accent); }
+
+/* --- portfolio spreads ---
+   A spread (canvas/spread.js) is a canvas node whose box is only the region
+   it was drawn as: no fill, no depth of its own at rest, like a project
+   widget -- the pages are the structure, the container is invisible. Selected,
+   it shows the same accent ring every node does, without the raised card that
+   would otherwise appear under thirty pages at once. */
+.canvas-node-pages {
+  background: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.canvas-node-pages.is-selected,
+.canvas-node-pages.is-active { box-shadow: 0 0 0 2px var(--accent-soft); }
+.canvas-node-pages.is-locked { box-shadow: none; }
+.canvas-node-pages.is-locked.is-selected { box-shadow: 0 0 0 2px var(--accent-soft); }
+
+/* Not clipped: a page lifted to be reordered, and the faint overhang of an
+   image whose crop is being chosen, both reach past the page they belong to. */
+.canvas-node-pages .canvas-node-body.spread-body {
+  position: relative;
+  overflow: visible;
+  border-radius: 0;
+}
+
+/* A page: absolutely placed by spread.js from the layout, and sized in world
+   units, so everything inside it scales off --spread-page-w (the page width)
+   and stays in proportion at every zoom and every spread size. Square
+   corners, because it's paper. */
+.spread-page {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 1;
+  border-radius: 1px;
+  overflow: hidden;
+  touch-action: none;
+  transition: box-shadow 0.22s ease, opacity 0.18s ease;
+}
+
+/* Empty is the normal state of a portfolio in progress, so it's drawn as a
+   slot waiting to be filled -- pressed into the page, the same inversion that
+   means "waiting" everywhere else here -- not as a missing thing. */
+.spread-page.is-empty,
+.spread-page.is-missing { box-shadow: var(--press-sm); cursor: copy; }
+
+/* A filled page is a sheet lying on the canvas: the page colour, raised. The
+   letterbox around a contained image is that sheet showing through. */
+.spread-page.is-filled {
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-sm);
+  cursor: grab;
+}
+
+.spread-page.is-pending { animation: canvas-pending-pulse 1.6s ease-in-out infinite; }
+
+.spread-page.is-active { box-shadow: var(--raise-sm), 0 0 0 2px var(--accent-soft); }
+.spread-page.is-empty.is-active { box-shadow: var(--press-sm), 0 0 0 2px var(--accent-soft); }
+.spread-page.is-drop-target,
+.spread-page.is-file-target { box-shadow: var(--press-sm), 0 0 0 2px var(--accent); }
+.spread-page.is-lifted { opacity: 0.3; }
+.spread-page.is-cropping { z-index: 2; cursor: move; }
+
+.spread-page-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  user-select: none;
+}
+
+.spread-page-img[hidden] { display: none; }
+
+/* The folio: in the outer corner of each page of a booklet pair, centred on
+   a sequential page. Always on an empty slot, where it's how the pagination
+   is read; on a filled page only while the spread is selected, so a spread
+   at rest shows the work and nothing over it. */
+.spread-page-number {
+  position: absolute;
+  bottom: calc(var(--spread-page-w, 100px) * 0.04);
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-family: var(--sans);
+  font-size: calc(var(--spread-page-w, 100px) * 0.075);
+  line-height: 1;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.spread-page.is-left .spread-page-number { text-align: left; padding-left: calc(var(--spread-page-w, 100px) * 0.06); }
+.spread-page.is-right .spread-page-number { text-align: right; padding-right: calc(var(--spread-page-w, 100px) * 0.06); }
+.spread-page.is-filled .spread-page-number { display: none; }
+.canvas-node-pages.is-selected .spread-page.is-filled .spread-page-number {
+  display: block;
+  color: var(--project-ink, var(--ink));
+  text-shadow: 0 0 3px var(--project-bg, var(--bg)), 0 0 6px var(--project-bg, var(--bg));
+}
+
+/* What a page will look like in print, said on the page: cropped or
+   letterboxed when the image isn't A4, and the dpi when it's too low. The
+   own-work badge's pill, in its own two colours -- a page's mismatch is
+   information, its resolution a warning. */
+.spread-page-flags {
+  position: absolute;
+  top: calc(var(--spread-page-w, 100px) * 0.04);
+  left: calc(var(--spread-page-w, 100px) * 0.04);
+  right: calc(var(--spread-page-w, 100px) * 0.04);
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--spread-page-w, 100px) * 0.025);
+  pointer-events: none;
+}
+
+.spread-page-flag {
+  font-family: var(--sans);
+  font-size: calc(var(--spread-page-w, 100px) * 0.055);
+  line-height: 1;
+  letter-spacing: 0.04em;
+  padding: 0.3em 0.6em;
+  border-radius: 999px;
+  background: var(--slate);
+  color: #f4f7fb;
+  white-space: nowrap;
+}
+
+.spread-page-flag-dpi { background: var(--warn); }
+
+/* The page being reordered, following the pointer above everything else in
+   the spread. */
+.spread-page-ghost {
+  z-index: 4;
+  opacity: 0.85;
+  box-shadow: var(--raise-lg);
+  pointer-events: none;
+}
+
+/* The whole image behind a page whose crop is being chosen, faint, so what
+   the page cuts off is visible while choosing. Sized by spread.js to the
+   image's own proportions, so filling that box never distorts it. */
+.spread-crop-ghost {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+  opacity: 0.28;
+  pointer-events: none;
+  user-select: none;
+}
+
+.spread-crop-ghost[hidden] { display: none; }
+
+/* Drawing a spread: the outline fills with the pages it will hold. */
+.canvas-draw-preview-page {
+  position: absolute;
+  left: 0;
+  top: 0;
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.canvas-draw-preview-page[hidden] { display: none; }
+
+/* --- the spread editor ---
+   The edge/shape panel's raised surface, stacked in rows: the spread's own
+   settings, then the clicked page's. Wraps rather than growing past the
+   window on a narrow canvas. */
+.spread-panel {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.45rem;
+  /* Its own width, not whatever room is left between its left edge and the
+     window's: otherwise moving it changes how it wraps, and so its height,
+     after that height has been used to keep it on screen. */
+  width: max-content;
+  max-width: min(52rem, calc(100vw - 2rem));
+  /* Placed by its top-left corner (spread-panel.js works out above or below
+     the spread), so only the horizontal centring is left to the transform. */
+  transform: translateX(-50%);
+  padding: 0.5rem 0.7rem;
+  border-radius: 18px;
+}
+
+.spread-panel-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.7rem;
+}
+
+.spread-panel-row[hidden] { display: none; }
+
+.spread-panel-page {
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--edge);
+}
+
+.spread-panel-seg { display: flex; gap: 0.1rem; }
+.spread-panel-seg.is-disabled { opacity: 0.35; pointer-events: none; }
+
+.spread-panel-btn {
+  padding: 0.3rem 0.65rem;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--project-ink, var(--ink));
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: var(--press);
+}
+
+.spread-panel-btn:hover { color: var(--ink-strong); }
+.spread-panel-btn.is-active { box-shadow: var(--press-sm); color: var(--accent); }
+.spread-panel-btn:disabled { opacity: 0.35; cursor: default; }
+.spread-panel-export { box-shadow: var(--raise-sm); }
+.spread-panel-export:active { box-shadow: var(--press-sm); }
+.spread-panel-danger { color: var(--accent); }
+
+.spread-panel-field {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.spread-panel-field.is-disabled { opacity: 0.35; }
+
+.spread-panel-label,
+.spread-panel-page-label {
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.spread-panel-page-label { color: var(--project-ink, var(--ink)); }
+
+/* Beats the global input[type="number"] padding, which leaves no room for
+   two digits beside the spinner. */
+.spread-panel .spread-panel-count { width: 4.4rem; padding: 0.3rem 0.35rem 0.3rem 0.7rem; }
+.spread-panel-gap { width: 6rem; }
+
+.spread-panel-note {
+  flex-basis: 100%;
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.spread-panel-note.is-warning { color: var(--warn); }
 
 /* --- canvas chrome: status, hint, zoom cluster, add dock --- */
 
@@ -3695,6 +4153,10 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 
 .canvas-dock-add-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .canvas-dock-add { font-size: 0.78rem; padding: 0.45rem 0.9rem; }
+
+/* A shape tool while armed -- the same pressed-in "on" state
+   .canvas-node-lock.is-on already uses for the same idea. */
+.canvas-dock-tool.is-armed { box-shadow: var(--press-sm); color: var(--accent); }
 
 .canvas-dock-search { width: 100%; margin: 0 0 0.75rem; }
 

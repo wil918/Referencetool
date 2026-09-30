@@ -46,6 +46,20 @@
           <input type="checkbox" id="file-own-work">
           This is my own work
         </label>
+        <div id="pdf-split-controls" class="pdf-split-controls" hidden>
+          <span id="pdf-page-count-info" class="muted"></span>
+          <label class="checkbox-label">
+            <input type="checkbox" id="file-split-pages">
+            Split into individual pages
+          </label>
+          <div id="pdf-split-range-row" class="pdf-split-range-row" hidden>
+            <label>
+              Pages
+              <input type="text" id="pdf-page-range" placeholder="all pages, or e.g. 1-10">
+            </label>
+          </div>
+          <button id="pdf-split-confirm" type="button" class="btn primary">Add</button>
+        </div>
       </div>
       <div id="upload-log" class="upload-log"></div>
 
@@ -74,7 +88,8 @@
         </div>
         <label>
           Own work
-          <select id="filter-own-work">
+          <select id="filter-own-work" title="Own work shows when browsing but is left out of search results unless you ask for it">
+            <option value="">Not in search</option>
             <option value="any">Any</option>
             <option value="only">Only</option>
             <option value="exclude">Exclude</option>
@@ -112,6 +127,7 @@
             <option value="" selected>Choose a folder…</option>
           </select>
           <button id="archive-selection-edit-btn" class="btn" disabled>Edit references</button>
+          <button id="archive-selection-export-btn" class="btn" disabled>Export as ZIP</button>
           <button id="archive-selection-delete-btn" class="btn danger" disabled>Delete from archive</button>
         </div>
       </div>
@@ -251,6 +267,13 @@
         <p id="info-source" class="muted"></p>
         <p id="info-notes" class="muted"></p>
         <button id="carousel-edit-btn" class="carousel-edit-btn" hidden>Edit reference</button>
+
+        <div class="carousel-file-actions">
+          <a id="carousel-download-btn" class="carousel-action-btn" download>Download</a>
+          <button type="button" id="carousel-copy-btn" class="carousel-action-btn" hidden>Copy image</button>
+          <button type="button" id="carousel-reveal-btn" class="carousel-action-btn" hidden>Reveal in Finder</button>
+          <p id="carousel-file-status" class="muted"></p>
+        </div>
 
         <div class="project-add">
           <label for="carousel-project-select">Add to project</label>

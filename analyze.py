@@ -7,11 +7,16 @@ The resulting conversation can be continued turn-by-turn so the user can
 ask follow-up questions and steer the exploration, with full context of
 the references and prior replies preserved.
 """
+import math
 import re
+from datetime import date
 from html.parser import HTMLParser
 
+import colour
 import db
 import embeddings
+import graph_layout
+import scheduling
 import tagging
 from config import CLAUDE_MODEL
 
@@ -316,13 +321,186 @@ def _project_canvas_text(project_id):
     return plain, html
 
 
-def _build_concept_prompt(extraction, references, related, notes, prior_critiques=None):
+def _cluster_colour_stats(colour_nodes):
+    """Mean lightness/chroma and a circular mean hue (degrees) across a
+    cluster's own colour-analysed references, or None if none of them have
+    been analysed yet -- colour.backfill runs archive-wide, on its own
+    schedule, independent of tagging."""
+    if not colour_nodes:
+        return None
+    lightness = sum(n["lightness"] for n in colour_nodes) / len(colour_nodes)
+    chroma = sum(n["chroma"] for n in colour_nodes) / len(colour_nodes)
+    sin_sum = sum(math.sin(math.radians(n["hue"])) for n in colour_nodes)
+    cos_sum = sum(math.cos(math.radians(n["hue"])) for n in colour_nodes)
+    hue = (math.degrees(math.atan2(sin_sum, cos_sum)) + 360) % 360
+    return {"lightness": lightness, "chroma": chroma, "hue": hue}
+
+
+def _cluster_analysis_context(references):
+    """The CLIP cluster structure (graph_layout.build_graph) and colour
+    placement (colour.colour_map) for a set of references -- MEASURED
+    groupings for the concept critique to reason about, rather than groupings
+    it would otherwise have to invent from titles alone.
+
+    Returns (clusters, bridge). `clusters` is a list of
+    {"cluster": id, "members": [reference dict, ...], "colour": stats|None},
+    largest first. `bridge` is the strongest cross-cluster similarity edge --
+    {"cluster_a", "cluster_b", "ref_a", "ref_b", "score"}, the two clusters
+    that come closest to touching -- or None if there are fewer than two
+    clusters, or no similarity scores have been computed yet.
+    """
+    ids = [r["id"] for r in references]
+    graph = graph_layout.build_graph(reference_ids=ids)
+    if not graph["nodes"]:
+        return [], None
+
+    colour_by_id = {n["id"]: n for n in colour.colour_map(include_ids=ids)["nodes"]}
+    ref_by_id = {r["id"]: r for r in references}
+    node_by_id = {n["id"]: n for n in graph["nodes"]}
+
+    grouped = {}
+    for node in graph["nodes"]:
+        grouped.setdefault(node["cluster"], []).append(node)
+
+    clusters = []
+    for cluster_id, nodes in grouped.items():
+        clusters.append({
+            "cluster": cluster_id,
+            "members": [ref_by_id[n["id"]] for n in nodes if n["id"] in ref_by_id],
+            "colour": _cluster_colour_stats(
+                [colour_by_id[n["id"]] for n in nodes if n["id"] in colour_by_id]
+            ),
+        })
+    clusters.sort(key=lambda c: -len(c["members"]))
+
+    bridge = None
+    if len(grouped) > 1:
+        for edge in graph["edges"]:
+            if not edge["cross_cluster"]:
+                continue
+            a, b = node_by_id[edge["source"]], node_by_id[edge["target"]]
+            if bridge is None or edge["score"] > bridge["score"]:
+                bridge = {
+                    "cluster_a": a["cluster"], "cluster_b": b["cluster"],
+                    "ref_a": a, "ref_b": b, "score": edge["score"],
+                }
+    return clusters, bridge
+
+
+# Matches schedule/deliverables.js's own RESOLVED set -- a task that's done or
+# part-done counts as worked, so a deliverable's completion reads the same way
+# here as it does in the tab that actually tracks it.
+_DONE_TASK_STATUSES = {"done", "partial"}
+
+
+def _project_stage_context(project_id, extraction):
+    """Where the project sits in time: days elapsed/remaining against the
+    brief's own dates (falling back to the project's creation date and each
+    deliverable's own due date), each deliverable's task completion, and
+    whatever the scheduler currently flags at risk for this project.
+
+    This only gathers the timing data -- it doesn't decide what's worth
+    saying about it. That judgement (absence only matters once it's late) is
+    left to the prompt instructions, so the model weighs it against
+    everything else it's been shown rather than against a threshold picked
+    here.
+    """
+    project = db.get_project(project_id)
+    deliverables = db.list_deliverables(project_id)
+    tasks = db.list_tasks(project_id=project_id)
+
+    key_dates = (extraction or {}).get("key_dates") or []
+    briefing_dates = [k["date"] for k in key_dates if k.get("kind") == "briefing" and k.get("date")]
+    handin_dates = [k["date"] for k in key_dates if k.get("kind") == "hand-in" and k.get("date")]
+    due_dates = [d["due_at"][:10] for d in deliverables if d.get("due_at")]
+
+    start_date = min(briefing_dates) if briefing_dates else (
+        project["date_created"][:10] if project and project.get("date_created") else None
+    )
+    end_date = max(handin_dates) if handin_dates else (max(due_dates) if due_dates else None)
+
+    today = date.today()
+    days_elapsed = days_remaining = None
+    if start_date:
+        try:
+            days_elapsed = (today - date.fromisoformat(start_date)).days
+        except ValueError:
+            pass
+    if end_date:
+        try:
+            days_remaining = (date.fromisoformat(end_date) - today).days
+        except ValueError:
+            pass
+
+    deliverable_status = []
+    for d in deliverables:
+        d_tasks = [t for t in tasks if t.get("deliverable_id") == d["id"]]
+        resolved = sum(1 for t in d_tasks if t["status"] in _DONE_TASK_STATUSES)
+        deliverable_status.append({
+            "title": d["title"],
+            "due_at": d.get("due_at"),
+            "task_count": len(d_tasks),
+            "tasks_resolved": resolved,
+            "is_done": bool(d_tasks) and resolved == len(d_tasks),
+        })
+
+    at_risk = []
+    try:
+        at_risk = [e for e in scheduling.plan()["at_risk"] if e.get("project_id") == project_id]
+    except scheduling.DependencyCycleError:
+        pass  # a cycle elsewhere in the schedule -- stage awareness just goes without it
+
+    return {
+        "days_elapsed": days_elapsed,
+        "days_remaining": days_remaining,
+        "deliverables": deliverable_status,
+        "at_risk": at_risk,
+    }
+
+
+_NEXT_ACTIONS_RE = re.compile(r"(?im)^\s*[#*]{0,3}\s*next actions\s*[#*:]{0,3}\s*$")
+
+
+def _extract_next_actions(text):
+    """The bulleted list under the critique's trailing NEXT ACTIONS heading,
+    as plain strings -- the structured half of an otherwise prose write-up,
+    for the same review-and-apply flow brief import uses (proposed, editable,
+    nothing becomes a task unasked). The prose itself is left exactly as
+    written; this only reads it, it doesn't strip the section back out.
+    """
+    lines = text.splitlines()
+    start = next((i + 1 for i, line in enumerate(lines) if _NEXT_ACTIONS_RE.match(line)), None)
+    if start is None:
+        return []
+    actions = []
+    for line in lines[start:]:
+        stripped = line.strip()
+        if not stripped:
+            if actions:
+                break
+            continue
+        m = re.match(r"^[-*•]\s+(.+)", stripped)
+        if m:
+            actions.append(m.group(1).strip())
+        elif actions:
+            actions[-1] = f"{actions[-1]} {stripped}"  # a soft-wrapped continuation
+    return actions
+
+
+def _build_concept_prompt(extraction, stage, clusters, bridge, references, notes, prior_critiques=None):
     parts = [
-        "You are a critic helping a fashion design student pressure-test the "
-        "concept behind a project. Below is the brief (if one has been "
-        "imported), the visual research they have gathered, and -- separately "
-        "-- their own written thinking about that research. Your job is to "
-        "judge whether the second is actually carried by the first.\n"
+        "You are helping a fashion design student read their own moodboard: the "
+        "canvas of visual research and clusters they have been gathering. "
+        "Connection in this kind of work is associative and lateral, not "
+        "argumentative -- a real chain from a student on this course ran: an "
+        "artist who builds architecture out of other materials, some of them "
+        "translucent -> that recalls animals moulting, a lizard's shed skin -> a "
+        "photograph of wallpaper peeling -> the pattern printed on that "
+        "wallpaper. Each step is a jump on a shared physical quality, not a "
+        "deduction, and nobody could defend it as an argument -- being asked to "
+        "would have killed it at the second step. Early on, the designer is "
+        "finding a vibe and gathering clusters that feel right; the connection "
+        "is the designer's eye. Your job is to widen that eye, not grade it.\n"
     ]
 
     if extraction:
@@ -330,30 +508,74 @@ def _build_concept_prompt(extraction, references, related, notes, prior_critique
         parts.append(_format_brief(extraction))
         parts.append("")
     else:
-        parts.append(
-            "THE BRIEF: none imported. Critique the concept's internal "
-            "coherence and the depth of its research instead, and say plainly "
-            "that there is no brief to check the work against.\n"
-        )
+        parts.append("THE BRIEF: none imported -- treat brief compliance as not applicable.\n")
 
-    parts.append("VISUAL RESEARCH (the reference images and material selected):")
-    if references:
+    parts.append("STAGE:")
+    if stage["days_elapsed"] is not None or stage["days_remaining"] is not None:
+        bits = []
+        if stage["days_elapsed"] is not None:
+            bits.append(f"{stage['days_elapsed']} day(s) in")
+        if stage["days_remaining"] is not None:
+            bits.append(f"{stage['days_remaining']} day(s) to the deadline")
+        parts.append("  " + ", ".join(bits) + ".")
+    else:
+        parts.append("  No dates on record -- treat this as early-stage.")
+    for d in stage["deliverables"]:
+        status = (
+            "done" if d["is_done"]
+            else f"{d['tasks_resolved']}/{d['task_count']} tasks resolved" if d["task_count"]
+            else "no tasks yet"
+        )
+        due = f", due {d['due_at'][:10]}" if d.get("due_at") else ""
+        parts.append(f"  - {d['title']}: {status}{due}")
+    if stage["at_risk"]:
+        parts.append(f"  {len(stage['at_risk'])} task(s) currently flagged at risk by the scheduler:")
+        for e in stage["at_risk"][:5]:
+            parts.append(f'    - "{e["title"]}": {e["message"]}')
+    parts.append(
+        "  Absence is only worth raising when it is late: no garment research in "
+        "week one is what a project that has just started looks like; in week "
+        "five it is the finding. Brief compliance is the same -- a late-stage "
+        "concern, nearly silent early.\n"
+    )
+
+    ref_by_id = {r["id"]: r for r in references}
+    if clusters:
+        parts.append(
+            "VISUAL RESEARCH, AS MEASURED CLUSTERS (grouped by CLIP visual "
+            "similarity -- not by title, not invented):"
+        )
+        for c in clusters:
+            n = len(c["members"])
+            parts.append(f'CLUSTER {c["cluster"]} ({n} reference{"s" if n != 1 else ""}):')
+            if c["colour"]:
+                col = c["colour"]
+                parts.append(
+                    f"  measured colour -- lightness {col['lightness']:.2f} (0 black, 1 "
+                    f"white), chroma {col['chroma']:.1f} (Lab units, higher = more "
+                    f"saturated), hue {col['hue']:.0f}° (0/360 red, 60 yellow, 120 "
+                    "green, 180 cyan, 240 blue, 300 magenta)"
+                )
+            for ref in c["members"]:
+                parts.append(_format_reference(ref))
+            parts.append("")
+        if bridge:
+            parts.append(
+                f'CLOSEST TWO CLUSTERS: cluster {bridge["cluster_a"]} and cluster '
+                f'{bridge["cluster_b"]} come nearest to touching, via '
+                f'"{bridge["ref_a"]["title"]}" and "{bridge["ref_b"]["title"]}".\n'
+            )
+    elif references:
+        parts.append("VISUAL RESEARCH (too few references yet for meaningful clusters):")
         for ref in references:
             parts.append(_format_reference(ref))
-            matches = related.get(ref["id"], [])
-            if matches:
-                for m in matches:
-                    meta = m["metadata"]
-                    parts.append(
-                        f'    (related in library: "{meta["title"]}" tags: {meta.get("tags", "")})'
-                    )
+        parts.append("")
     else:
-        parts.append("  (nothing selected -- the student has not put research on the canvas yet)")
-    parts.append("")
+        parts.append("VISUAL RESEARCH: nothing selected -- the student has not put research on the canvas yet.\n")
 
     parts.append(
-        "THE THINKING (the student's own notes -- treat each as a claim to be "
-        "tested against the research above, not as established fact):"
+        "THE THINKING (the student's own notes -- their working ideas about "
+        "this research, not established fact):"
     )
     if notes:
         for i, note in enumerate(notes, 1):
@@ -367,8 +589,8 @@ def _build_concept_prompt(extraction, references, related, notes, prior_critique
             "EARLIER AI CRITIQUE (you wrote this on a previous pass and the "
             "student kept it on the canvas -- it is your own prior output, NOT "
             "their position. Do not simply restate or agree with it; treat its "
-            "conclusions as provisional and revisit them as hard as the notes "
-            "above):"
+            "conclusions as provisional and revisit them as hard as the "
+            "research above):"
         )
         for i, critique in enumerate(prior_critiques, 1):
             parts.append(f"  [earlier critique {i}]")
@@ -376,19 +598,42 @@ def _build_concept_prompt(extraction, references, related, notes, prior_critique
         parts.append("")
 
     parts.append(
-        "Write a critique with these four headed sections:\n"
-        "1. Strong connections -- where the research genuinely demonstrates the "
-        "idea (or the brief's requirement), with the specific references that do it.\n"
-        "2. Asserted, not demonstrated -- claims in the notes the research does "
-        "not actually support yet.\n"
-        "3. The weak link -- name the single reference doing the least "
-        "argumentative work: there because it looks good rather than because it "
-        "argues for anything. If every reference earns its place, say so and say why.\n"
-        "4. Research directions -- specific things to look for or read that would "
-        "close the gaps above.\n\n"
-        "Be useful rather than flattering. A critique that says everything is "
-        "fine is worthless. Refer to references by title. Plain prose under each "
-        "heading, no preamble."
+        "Write this up in five headed sections. Head each with its name in "
+        "capitals, alone on its own line -- no markdown, no numbering. Track "
+        "length to how much there is to say; a thin canvas gets a short "
+        "answer.\n\n"
+        "READ -- one to three sentences on where the work stands right now.\n\n"
+        "CLUSTERS -- for each cluster above, one or two sentences on what "
+        "seems to bind it: a form, a surface, a colour behaviour, a process, "
+        "a quality of light. Offer this, don't assert it -- name what you "
+        "see, since the eye may have been after something else.\n\n"
+        "LATERAL DIRECTIONS -- this is the main point of the exercise. One "
+        "sub-heading per cluster (its name from above), then 2-4 bullets: "
+        "take the quality that binds the cluster and say where else in the "
+        "world it turns up -- nature, decay, industry, architecture, other "
+        "cultures, other materials. Make every bullet something to look at, "
+        "search for, or go and photograph -- \"look at snake sheds and "
+        "blistered paint\", never \"consider the theme of transformation\".\n\n"
+        "THE WHOLE BODY -- judge the set of clusters together, never "
+        "reference by reference. Do they speak to each other, or read as "
+        "unrelated projects sharing a folder? Is a through-line emerging, and "
+        "what is it? Is one cluster carrying everything while another hasn't "
+        "grown past a single image? Say which two clusters come closest to "
+        "touching (named above, if given) and what might sit between them -- "
+        "that gap is usually where the project actually is. A cluster with "
+        "only one reference in it might be a fourth direction or might be a "
+        "stray; say so and leave the call to the designer. Fold in brief "
+        "compliance and any at-risk deadlines here, only as far as STAGE "
+        "above says they're worth raising yet.\n\n"
+        "NEXT ACTIONS -- this MUST be the last section, and nothing follows "
+        "it. A bulleted list, one line each, every bullet a concrete "
+        "directive a student could act on today (\"add garment research on "
+        "trench coats\"), never a suggestion (\"the project would benefit "
+        "from...\"). Each should be liftable straight into a task as written.\n\n"
+        "Never ask a reference to justify itself. One that's there because it "
+        "looks right is doing its job -- that's what a mood is made of. Refer "
+        "to references by title. Plain prose under every heading but NEXT "
+        "ACTIONS, no preamble."
     )
     return "\n".join(parts)
 
@@ -396,7 +641,9 @@ def _build_concept_prompt(extraction, references, related, notes, prior_critique
 def start_concept_analysis(
     project_id, reference_ids=None, notes=None, note_html=None, prior_analysis_ids=None
 ):
-    """Critique a project's concept against its imported brief.
+    """Read a project's moodboard: the measured clusters in its visual
+    research, named and pushed lateral, evaluated as a whole body of work
+    rather than reference by reference.
 
     The canvas selection is the picker. `reference_ids` are the lassoed
     reference nodes -- the visual research. The student's own thinking arrives
@@ -409,9 +656,11 @@ def start_concept_analysis(
     An empty selection falls back to the whole project: every reference in it
     AND every bit of writing on its canvas, by the same rules.
 
-    Returns (writeup, messages, reference_map) -- the same shape as
-    start_conversation, so the in-memory session store, the follow-up /reply
-    route and the save path all work against it unchanged.
+    Returns (writeup, messages, reference_map, next_actions). The first three
+    are the same shape start_conversation returns, so the in-memory session
+    store, the follow-up /reply route and the save path all work against it
+    unchanged. `next_actions` is the trailing NEXT ACTIONS bullets, pulled out
+    as plain strings for a review-and-apply UI -- see _extract_next_actions.
     """
     ref_ids = list(reference_ids or [])
     plain_notes = [n for n in (notes or []) if n and n.strip()]
@@ -432,16 +681,18 @@ def start_concept_analysis(
     all_notes = plain_notes + [n for n in notepad_notes if n and n.strip()]
     prior_critiques = [c for c in prior_critiques if c and c.strip()]
 
-    related = gather_context(references) if references else {}
     extraction = _latest_brief_extraction(project_id)
+    stage = _project_stage_context(project_id, extraction)
+    clusters, bridge = _cluster_analysis_context(references) if references else ([], None)
     prompt = _build_concept_prompt(
-        extraction, references, related, all_notes, prior_critiques
+        extraction, stage, clusters, bridge, references, all_notes, prior_critiques
     )
 
     messages = [{"role": "user", "content": prompt}]
     writeup = _send(messages)
     messages.append({"role": "assistant", "content": writeup})
-    return writeup, messages, _reference_map(references, related)
+    next_actions = _extract_next_actions(writeup)
+    return writeup, messages, _reference_map(references, {}), next_actions
 
 
 def continue_conversation(messages, user_message):

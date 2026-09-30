@@ -201,3 +201,24 @@ def test_token_is_enforced_when_configured(client, ext_headers, monkeypatch):
 def test_no_token_configured_means_open_locally(client, ext_headers):
     r = client.post("/api/captures/check", headers=ext_headers, json={"capture": envelope()})
     assert r.status_code == 200
+
+
+def test_token_is_not_required_from_this_machine_without_an_extension_origin(client, monkeypatch):
+    """The canvas's own file-drop calls /api/captures same-origin, with no
+    chrome-extension:// Origin header and no bearer token attached -- just
+    like every other fetch the app's own pages already make. A token
+    configured for the phone must not lock that out: the test client's
+    requests are loopback (127.0.0.1), same as the desktop app calling
+    itself, and get the loopback exemption every other /api/ route already
+    has (_guard_api_when_exposed). Only a genuine browser extension origin is
+    still required to present the token -- see
+    test_token_is_enforced_when_configured."""
+    import app as flask_app
+
+    monkeypatch.setattr(flask_app, "ARCHIVE_API_TOKEN", "s3cret")
+    r = client.post(
+        "/api/captures",
+        json={"capture": envelope(type="file", content={"selected_text": "dropped from the canvas"})},
+    )
+    assert r.status_code == 202
+    drain()
