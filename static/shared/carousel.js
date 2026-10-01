@@ -8,9 +8,13 @@
 // archive grid, a project grid, an analysis preview, ...), and prev/next
 // and the similar-items jump all operate on that same list.
 
-import { makeCard } from "./cards.js";
+import { makeCard, refreshThumbnail } from "./cards.js";
+import * as desktopBridge from "./desktop-bridge.js";
 
 const IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"];
+
+const supportsClipboardImageWrite = () =>
+  typeof navigator.clipboard?.write === "function" && typeof window.ClipboardItem !== "undefined";
 
 let list = [];
 let index = -1;
@@ -43,6 +47,12 @@ function ensureInit() {
   els.projectSelect = document.getElementById("carousel-project-select");
   els.projectStatus = document.getElementById("carousel-project-status");
   els.similarGrid = document.getElementById("similar-grid");
+  els.editBtn = document.getElementById("carousel-edit-btn");
+  els.editBtn.addEventListener("click", openEditor);
+  els.downloadBtn = document.getElementById("carousel-download-btn");
+  els.copyBtn = document.getElementById("carousel-copy-btn");
+  els.revealBtn = document.getElementById("carousel-reveal-btn");
+  els.fileStatus = document.getElementById("carousel-file-status");
 
   document.getElementById("carousel-prev").addEventListener("click", () => {
     index = (index - 1 + list.length) % list.length;
@@ -80,6 +90,35 @@ function ensureInit() {
     const label = els.projectSelect.options[els.projectSelect.selectedIndex].textContent;
     addCurrentReferenceToProject(value, label);
   });
+
+  els.copyBtn.addEventListener("click", async () => {
+    const ref = list[index];
+    if (!ref) return;
+    els.fileStatus.textContent = "Copying…";
+    try {
+      const res = await fetch(`/media/${ref.id}`);
+      const blob = await res.blob();
+      await navigator.clipboard.write([new window.ClipboardItem({ [blob.type]: blob })]);
+      els.fileStatus.textContent = "Copied to clipboard.";
+    } catch (err) {
+      els.fileStatus.textContent = `Couldn't copy: ${err.message}`;
+    }
+  });
+
+  els.revealBtn.addEventListener("click", async () => {
+    const ref = list[index];
+    if (!ref) return;
+    const ok = await desktopBridge.reveal(ref.id);
+    els.fileStatus.textContent = ok ? "" : "Reveal isn't available here.";
+  });
+
+  // pywebview injects window.pywebview asynchronously after page load, so
+  // isAvailable() can read false for a moment even inside the desktop
+  // build -- if the carousel's first open lands before that, re-check once
+  // the bridge is actually ready and reveal the button retroactively.
+  desktopBridge.ready().then((available) => {
+    if (available && list[index]) els.revealBtn.hidden = false;
+  });
 }
 
 export function open(newList, newIndex) {
@@ -92,6 +131,95 @@ export function open(newList, newIndex) {
 
 export function close() {
   if (els.overlay) els.overlay.hidden = true;
+}
+
+// --- Reference editor: rotate -----------------------------------------------
+//
+// Built once in JS and appended to <body> on first use, the same way
+// overlays.js builds its ref-preview-popup -- so this needs no markup
+// duplicated between index.html's hard-coded carousel and overlays.js's
+// buildCarouselMarkup(), only the one "Edit reference" button both already
+// declare (queried above as els.editBtn).
+let editorEls = {};
+let editorInitialized = false;
+
+function ensureEditorInit() {
+  if (editorInitialized) return;
+  editorInitialized = true;
+
+  const overlay = document.createElement("div");
+  overlay.id = "edit-reference-overlay";
+  overlay.className = "modal-overlay";
+  overlay.hidden = true;
+  overlay.innerHTML = `
+    <div class="modal-box edit-reference-box">
+      <h3>Edit reference</h3>
+      <div class="edit-reference-media"><img id="edit-reference-img" alt=""></div>
+      <p id="edit-reference-status" class="muted"></p>
+      <div class="modal-actions">
+        <button id="edit-reference-done" class="btn">Done</button>
+        <button id="edit-reference-rotate" class="btn primary">Rotate 90&deg;</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  editorEls.overlay = overlay;
+  editorEls.img = overlay.querySelector("#edit-reference-img");
+  editorEls.status = overlay.querySelector("#edit-reference-status");
+  editorEls.rotateBtn = overlay.querySelector("#edit-reference-rotate");
+
+  overlay.querySelector("#edit-reference-done").addEventListener("click", closeEditor);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeEditor();
+  });
+  editorEls.rotateBtn.addEventListener("click", rotateCurrent);
+}
+
+function openEditor() {
+  const ref = list[index];
+  if (!ref) return;
+  ensureEditorInit();
+  editorEls.img.src = `/media/${ref.id}?v=${ref.content_hash || ""}`;
+  editorEls.img.alt = ref.title || "";
+  editorEls.status.textContent = "";
+  editorEls.rotateBtn.disabled = false;
+  editorEls.overlay.hidden = false;
+}
+
+function closeEditor() {
+  if (editorEls.overlay) editorEls.overlay.hidden = true;
+}
+
+async function rotateCurrent() {
+  const ref = list[index];
+  if (!ref) return;
+  editorEls.rotateBtn.disabled = true;
+  editorEls.status.textContent = "Rotating...";
+  try {
+    const res = await fetch(`/api/references/${ref.id}/rotate`, { method: "POST" });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      editorEls.status.textContent = `Error: ${data.error || res.statusText}`;
+      return;
+    }
+    const updated = await res.json();
+    // Applies immediately -- there's no confirm step, because four presses
+    // is the undo. Update the in-memory list entry so prev/next and a
+    // re-open both see the new bytes, and patch every on-screen thumbnail
+    // for it (the grid card behind this overlay, any bar thumb) rather than
+    // waiting for whatever page this carousel is on to next re-render.
+    ref.content_hash = updated.content_hash;
+    editorEls.img.src = `/media/${ref.id}?v=${ref.content_hash}`;
+    editorEls.status.textContent = "";
+    refreshThumbnail(ref.id, ref.content_hash);
+    const mediaImg = els.media.querySelector("img");
+    if (mediaImg) mediaImg.src = `/media/${ref.id}?v=${ref.content_hash}`;
+  } catch (err) {
+    editorEls.status.textContent = `Error: ${err}`;
+  } finally {
+    editorEls.rotateBtn.disabled = false;
+  }
 }
 
 async function populateProjectSelect() {
@@ -147,8 +275,10 @@ async function loadItem() {
   const res = await fetch(`/api/references/${ref.id}`);
   if (!res.ok) return;
   const data = await res.json();
+  ref.content_hash = data.content_hash; // keep the list entry in sync for openEditor()
 
   els.media.innerHTML = "";
+  els.editBtn.hidden = data.type !== "image"; // rotation is images only (hard rule 6)
 
   if (data.ext === ".pdf") {
     const iframe = document.createElement("iframe");
@@ -156,7 +286,7 @@ async function loadItem() {
     els.media.appendChild(iframe);
   } else if (IMAGE_EXTS.includes(data.ext)) {
     const img = document.createElement("img");
-    img.src = `/media/${data.id}`;
+    img.src = `/media/${data.id}?v=${data.content_hash || ""}`;
     els.media.appendChild(img);
   } else {
     const pre = document.createElement("pre");
@@ -171,6 +301,11 @@ async function loadItem() {
   els.title.textContent = data.title;
   els.type.textContent = `${data.type}${data.ext ? " · " + data.ext.slice(1) : ""}`;
   els.ownWork.hidden = !data.is_own_work;
+
+  els.downloadBtn.href = `/media/${data.id}/download`;
+  els.copyBtn.hidden = !(IMAGE_EXTS.includes(data.ext) && supportsClipboardImageWrite());
+  els.revealBtn.hidden = !desktopBridge.isAvailable();
+  els.fileStatus.textContent = "";
 
   els.tags.innerHTML = "";
   (data.tags || []).forEach((t) => {

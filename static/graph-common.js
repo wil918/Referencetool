@@ -9,6 +9,7 @@
  */
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { thumbSrc } from "./shared/cards.js";
 
 export const DOT_SIZE = 0.16;
 export const HUB_DOT_SIZE = 0.23;
@@ -255,7 +256,7 @@ export function loadThumbnail(sprite, onLoaded) {
   const ref = sprite.userData.ref;
   sprite.userData.thumbState = "loading";
   new THREE.TextureLoader().load(
-    `/media/${ref.id}/thumb`,
+    thumbSrc(ref),
     (texture) => {
       if (sprite.userData.thumbState !== "loading") {
         texture.dispose();

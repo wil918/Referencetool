@@ -757,6 +757,21 @@ NOMINAL_WORKING_MINUTES_PER_DAY = 8 * 60
 # asks to be done next.
 SLACK_HALF_LIFE_MINUTES = 7 * MINUTES_PER_DAY
 
+# The soft "not really ready yet" discount a task carries before its
+# sequence-derived earliest start (see _earliest_start) -- how much of its
+# score survives even at its most suppressed. Never zero: this is a BIAS, not
+# a gate (task_dependencies is the hard version), so if it's the only eligible
+# task left on a day it must still be placeable, or "soft" would be a lie.
+EARLIEST_START_FLOOR = 0.15
+
+# How sharply readiness ramps up as a task's earliest start approaches --
+# same half-life mechanism _urgency uses, just measured the other way
+# (distance TO a date, not past one). A few days rather than a week: this
+# only has to keep a late-sequence task off the very first days of a project
+# with weeks still to run, not fight the deadline urgency that takes over as
+# its own due date closes in.
+EARLIEST_START_HALF_LIFE_MINUTES = 3 * MINUTES_PER_DAY
+
 # ENERGY GATES DIFFICULTY, and this is the only place that mapping lives, so
 # it can be tuned in one edit. Energy and difficulty share the same 1-5 scale.
 #
@@ -915,8 +930,13 @@ def plan(now=None, finishing_buffer_minutes=None):
     critical = _critical_minutes(order, dependents, minutes)
 
     rate = _work_rate(days)
+    seq_totals = _sequence_totals(tasks)
+    earliest_starts = {
+        tid: _earliest_start(by_id[tid], deliverables, seq_totals, anchor) for tid in by_id
+    }
     scores = {
-        tid: _score(by_id[tid], deadlines[tid], critical[tid], anchor, rate) for tid in by_id
+        tid: _score(by_id[tid], deadlines[tid], critical[tid], anchor, rate, earliest_starts[tid])
+        for tid in by_id
     }
     # THE ranking. Highest score first, ties broken by id so that two tasks
     # that genuinely rank the same never swap places between replans.
@@ -1634,12 +1654,72 @@ def _urgency(slack):
     return SLACK_HALF_LIFE_MINUTES / (SLACK_HALF_LIFE_MINUTES + slack)
 
 
-def _score(task, deadline, critical, anchor, rate):
-    """Urgency x importance. Urgency says when it has to happen, importance
-    says how much it matters that it does; a task needs both to earn a slot
-    ahead of the rest."""
+def _sequence_totals(tasks):
+    """The highest tasks.sequence_position among a deliverable's own tasks,
+    keyed by deliverable_id -- the N a task's (position, N) fraction is
+    measured against in _earliest_start. A deliverable none of whose tasks
+    carry a position (a hand-built one, or one from before this existed) is
+    simply absent here, and every task under it gets no bias at all."""
+    totals = {}
+    for t in tasks:
+        pos, did = t.get("sequence_position"), t.get("deliverable_id")
+        if pos is None or not did:
+            continue
+        totals[did] = max(totals.get(did, 0), pos)
+    return totals
+
+
+def _earliest_start(task, deliverables, totals, anchor):
+    """The soft reference date a task's sequence position biases its score
+    against, or None for a task this doesn't apply to (no position, no
+    deliverable, a deliverable with no due date, or the only task in its
+    sequence -- nothing to spread across).
+
+    Spread proportionally across the calendar time between NOW and the
+    deliverable's own due date: position 1 of N sits at the anchor itself (no
+    bias), position N sits at the due date, everything between falls linearly
+    in between. Relative to the deliverable's own span rather than a fixed
+    number of days, so a three-week deliverable and a three-month one both
+    spread sensibly, and relative to the anchor rather than the project's
+    start, so this recomputes sanely on every replan instead of freezing a
+    stale span from whenever the tasks were first created.
+    """
+    total = totals.get(task.get("deliverable_id"))
+    pos = task.get("sequence_position")
+    if pos is None or not total or total <= 1:
+        return None
+    due = _own_deadline(task, deliverables)
+    if due is None or due <= anchor:
+        return None
+    fraction = (pos - 1) / (total - 1)
+    if fraction <= 0:
+        return None
+    return anchor + (due - anchor) * fraction
+
+
+def _readiness(earliest_start, anchor):
+    """1.0 once `earliest_start` has arrived (or there is none to honour),
+    fading down to EARLIEST_START_FLOOR the further before it today sits. The
+    same decay shape _urgency uses, just running the other way: this measures
+    distance TO a date rather than past one."""
+    if earliest_start is None:
+        return 1.0
+    minutes_until = (earliest_start - anchor).total_seconds() / 60.0
+    if minutes_until <= 0:
+        return 1.0
+    decay = EARLIEST_START_HALF_LIFE_MINUTES / (EARLIEST_START_HALF_LIFE_MINUTES + minutes_until)
+    return EARLIEST_START_FLOOR + (1 - EARLIEST_START_FLOOR) * decay
+
+
+def _score(task, deadline, critical, anchor, rate, earliest_start=None):
+    """Urgency x importance x readiness. Urgency says when it has to happen,
+    importance says how much it matters that it does, and readiness -- see
+    _readiness -- softly holds back a task that sits late in its
+    deliverable's own sequence until closer to when it would actually make
+    sense to start it."""
     slack = _slack_minutes(deadline, anchor, critical, rate)
-    return _urgency(slack) * _level(task.get("importance"), DEFAULT_IMPORTANCE)
+    base = _urgency(slack) * _level(task.get("importance"), DEFAULT_IMPORTANCE)
+    return base * _readiness(earliest_start, anchor)
 
 
 # --- What the walk needs to know about each task ---------------------------------

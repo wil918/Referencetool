@@ -16,6 +16,7 @@
  * to the same /api/colour/search.
  */
 import * as THREE from "three";
+import { thumbSrc } from "./shared/cards.js";
 import {
   COLOUR_FLAT_MARGIN,
   HANDOFF_IMAGE_KEY,
@@ -489,7 +490,7 @@ function buildScene(data, handoff, excludeBlackWhite) {
   function startThumbnail(entry) {
     entry.load = "loading";
     new THREE.TextureLoader().load(
-      `/media/${entry.ref.id}/thumb`,
+      thumbSrc(entry.ref),
       (texture) => {
         texture.colorSpace = THREE.SRGBColorSpace;
         const size = selection.has(entry.ref.id) ? SELECTED_THUMB_SIZE : THUMB_SIZE;

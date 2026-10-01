@@ -19,6 +19,7 @@ assumes a fixed one; `deliverables.spec` staying JSON is the same decision.
 import hashlib
 import json
 import re
+from datetime import date, timedelta
 
 import fitz  # PyMuPDF
 
@@ -56,6 +57,107 @@ def extract_text(pdf_path):
         return "\n".join(page.get_text() for page in doc).strip()
     finally:
         doc.close()
+
+
+# --- date context and validation ----------------------------------------------
+#
+# A brief gives bare dates -- "Monday 26th October" -- and a model asked to
+# resolve those with no year in view will guess one, sometimes wrong (a real
+# 2026 brief came back dated 2025). The fix is two separate things: GIVE the
+# model real context to resolve against (this project's own timetable, or the
+# current academic year when there isn't one yet), and then VALIDATE what it
+# returns rather than trust it -- a wrong year that imports quietly is worse
+# than one flagged, because every downstream deadline inherits it.
+
+# How far outside the known range an extracted date has to fall before it's
+# suspect. Loose on purpose: a brief's own hand-in can legitimately sit a few
+# weeks past the last timetabled session, and the point is to catch a
+# transposed YEAR, not to second-guess every date near the edge of term.
+_DATE_TOLERANCE_DAYS = 31
+
+
+def academic_year_range(today=None):
+    """The current academic year as (start, end) ISO date strings, 1 September
+    to 31 August -- the fallback context when a project has no commitments
+    imported yet to anchor a bare date against."""
+    today = today or date.today()
+    start_year = today.year if today.month >= 9 else today.year - 1
+    return f"{start_year}-09-01", f"{start_year + 1}-08-31"
+
+
+def date_context(commitment_range=None, today=None):
+    """The {start, end, source} passed into extraction as explicit year
+    context, and later used to validate every extracted date against.
+
+    `commitment_range` is (earliest, latest) over the project's imported
+    timetable -- app.py computes it (db.commitments_date_range()) and passes
+    it in, so this module keeps no direct database access, matching every
+    other entry point here. Where there's nothing imported yet, this falls
+    back to the current academic year rather than to nothing, and says so
+    (`source`) so the review sheet can be honest about how strong the anchor
+    actually is.
+    """
+    start, end = commitment_range or (None, None)
+    if start and end:
+        return {"start": start[:10], "end": end[:10], "source": "commitments"}
+    start, end = academic_year_range(today)
+    return {"start": start, "end": end, "source": "academic_year"}
+
+
+def _date_context_paragraph(ctx):
+    if not ctx:
+        return ""
+    span = f"{ctx['start']} to {ctx['end']}"
+    if ctx["source"] == "commitments":
+        return (
+            f"\n\nDATE CONTEXT: this project's own timetable runs {span}. A bare "
+            f"date in the brief (\"Monday 26th October\", no year given) almost "
+            f"certainly falls inside or near this range -- resolve its year from "
+            f"that, not by guessing from the date alone."
+        )
+    return (
+        f"\n\nDATE CONTEXT: no timetable is imported for this project yet, so "
+        f"there is nothing to check a bare date against. Treat {span} (the "
+        f"current academic year) as the likely window, but this is a weaker "
+        f"signal than a real timetable -- say what you actually read rather "
+        f"than force-fitting it."
+    )
+
+
+def _is_out_of_range(date_str, ctx):
+    """True if `date_str` (a YYYY-MM-DD prefix) falls outside `ctx`'s range by
+    more than _DATE_TOLERANCE_DAYS in either direction. Never raises -- an
+    unparseable or missing date is simply not flaggable this way."""
+    if not date_str or not ctx:
+        return False
+    try:
+        moment = date.fromisoformat(date_str[:10])
+        start = date.fromisoformat(ctx["start"])
+        end = date.fromisoformat(ctx["end"])
+    except ValueError:
+        return False
+    tolerance = timedelta(days=_DATE_TOLERANCE_DAYS)
+    return moment < start - tolerance or moment > end + tolerance
+
+
+def _flag_dates_out_of_range(overview, ctx):
+    """Mark -- never silently correct -- any key date or deliverable due date
+    that's implausible against `ctx`. `date_suspect` carries the range it was
+    checked against, so the review sheet can say why rather than just that.
+
+    This runs whether or not `ctx` came from real commitments: even the
+    academic-year fallback catches a date transposed to entirely the wrong
+    year, which is the failure this exists for.
+    """
+    if not ctx:
+        return
+    checked_against = [ctx["start"], ctx["end"]]
+    for k in overview.get("key_dates") or []:
+        if isinstance(k, dict) and _is_out_of_range(k.get("date"), ctx):
+            k["date_suspect"] = {"checked_against": checked_against}
+    for d in overview.get("deliverables") or []:
+        if isinstance(d, dict) and _is_out_of_range(d.get("due_date"), ctx):
+            d["date_suspect"] = {"checked_against": checked_against}
 
 
 # Two prompts, because one response can't safely carry a whole four-part brief
@@ -114,7 +216,7 @@ a JSON object (no prose, no markdown fences) in this shape:
 {
   "spec": {"pages": 20, "required_items": ["3 documented fabric tests"]},
   "tasks": [
-    {"title": "Compile fabric research", "note": "", "est_minutes": null}
+    {"title": "Compile fabric research", "note": "", "est_minutes": null, "depends_on_index": null}
   ]
 }
 
@@ -124,8 +226,24 @@ Rules:
   short strings a student can tick off. Use only what the brief states for this
   deliverable; omit a key rather than guess.
 - `tasks` is a SKELETON: 3-6 concrete steps that would get this deliverable done, in
-  rough order. `est_minutes` only if the brief implies a duration, otherwise null.
-- Either may be empty if the brief says nothing concrete about this deliverable."""
+  SEQUENCE -- the order they actually happen in (research, then develop, then select,
+  then mount, or whatever this deliverable's own shape is). This ordering is the single
+  most reliable thing you can say about the work, and it matters even where nothing
+  formally blocks a task from starting early: a task near the end of the sequence
+  (choosing the strongest outcome, mounting a final piece) should not be scheduled as
+  though it could happen on day one just because nothing forces it not to.
+- `depends_on_index` is a HARD dependency: the 0-based index, within this same `tasks`
+  array, of another task that must be FINISHED before this one can start at all -- not
+  merely "comes before it in the sequence". Use it SPARINGLY, only where the brief (or
+  the plain nature of the work) makes it a real precondition, e.g. "select the final
+  garment" can't start before the tasks that produce the candidates to choose from are
+  done. Most tasks depend on nothing formally and should leave this null -- chaining
+  everything serialises work that could happen in parallel and makes the schedule
+  brittle. The sequence above already carries the soft ordering; this field is only for
+  a genuine hard block.
+- `est_minutes` only if the brief implies a duration, otherwise null.
+- Either `spec` or `tasks` may be empty if the brief says nothing concrete about this
+  deliverable."""
 
 
 # Per-pass memo, keyed by (brief-text hash, pass name). The whole point of
@@ -197,12 +315,20 @@ def _run_pass(client, prompt, max_tokens):
     return data
 
 
-def analyse(text):
+def analyse(text, date_context=None):
     """Ask Claude for the brief's structure, in passes so no single response has
     to carry everything: one overview call (summary, key dates, the deliverable
     list, mandatory activities), then one call per deliverable for its spec and
-    task skeleton. Each pass is cached on a hash of the brief text, so a retry
-    after one pass fails does not repeat the others.
+    task skeleton. Each pass is cached on a hash of the brief text (and of
+    `date_context`, since a stale cache hit from before a timetable was
+    imported would silently keep serving the weaker context), so a retry after
+    one pass fails does not repeat the others.
+
+    `date_context` -- see date_context() -- is folded into the overview prompt
+    so a bare date resolves against this project's own timetable rather than
+    from nothing, and is then used to VALIDATE (never silently correct) every
+    extracted date: see _flag_dates_out_of_range. Callers that don't pass one
+    get the old, context-free behaviour with no validation pass.
 
     Returns the assembled dict with a stable source_key on every deliverable and
     activity. Raises BriefExtractionError if any pass comes back truncated or
@@ -210,11 +336,14 @@ def analyse(text):
     """
     client = tagging.get_client()
     brief_text = text[:_MAX_BRIEF_CHARS]
-    fingerprint = hashlib.sha256(brief_text.encode("utf-8")).hexdigest()
+    fingerprint = hashlib.sha256(
+        (brief_text + json.dumps(date_context or {}, sort_keys=True)).encode("utf-8")
+    ).hexdigest()
 
     overview = _cache(fingerprint, "overview", lambda: _run_pass(
         client,
-        f"{_OVERVIEW_INSTRUCTIONS}\n\nHere is the brief:\n\n{brief_text}",
+        f"{_OVERVIEW_INSTRUCTIONS}{_date_context_paragraph(date_context)}"
+        f"\n\nHere is the brief:\n\n{brief_text}",
         max_tokens=8192,
     ))
 
@@ -251,6 +380,8 @@ def analyse(text):
         if not isinstance(overview.get(key), list):
             overview[key] = []
     overview.setdefault("summary", "")
+    _flag_dates_out_of_range(overview, date_context)
+    overview["date_context"] = date_context
     return assign_source_keys(overview)
 
 

@@ -1,10 +1,19 @@
 /* What is on the canvas, and what you can do to it.
  *
- * Three kinds of node share one table and one set of gestures (db.py's
+ * Four kinds of node share one table and one set of gestures (db.py's
  * canvas_nodes schema says why): a reference from this project, a simple
- * text node, or a widget instance. They are dragged, locked, deleted,
- * connected and resized identically; only what is drawn inside the box
- * differs, which is the one thing buildBody() below branches on.
+ * text node, a widget instance, or a shape. They are dragged, locked,
+ * deleted, connected and resized identically; only what is drawn inside the
+ * box differs, which is the one thing buildBody() below branches on. A
+ * shape is the one kind with no host contract and nothing to destroy -- it
+ * doesn't go through registry.js at all, which is also why it never shows
+ * up in the project grid's Add Widget dock: it isn't a widget, it's a mark.
+ *
+ * A fifth kind, "pages", is a portfolio spread (spread.js): one node that
+ * owns a document's worth of A4 pages. The pages are its contents, not nodes
+ * -- they move and scale with it, never on their own -- so everything here
+ * treats a spread exactly like any other node, and only a press that lands on
+ * one of its pages is handed to spread.js instead of starting a drag.
  *
  * Two rules shape the whole file:
  *
@@ -30,6 +39,15 @@ import { definitionFor, mountWidget } from "../registry.js";
 import { insertPlainText } from "../text-utils.js";
 import { createEdgeLayer } from "./edges.js";
 import { createEdgeStylePanel } from "./edge-style-panel.js";
+import {
+  createShapeStylePanel,
+  DEFAULT_FILL,
+  DEFAULT_STROKE,
+  DEFAULT_STROKE_WIDTH,
+} from "./shape-style-panel.js";
+import { createSpread } from "./spread.js";
+import { createSpreadPanel } from "./spread-panel.js";
+import { DEFAULT_PAGE_COUNT, defaultSpreadConfig, layoutSpread } from "./spread-layout.js";
 
 // How big a node is when nothing says otherwise. Sizes are world units, which
 // at scale 1 are CSS pixels -- so these are simply "how big it looks when you
@@ -37,6 +55,10 @@ import { createEdgeStylePanel } from "./edge-style-panel.js";
 const DEFAULT_SIZE = {
   reference: { w: 200, h: 236 }, // a square thumbnail plus its caption
   text: { w: 240, h: 120 },
+  shape: { w: 160, h: 120 },
+  // Only ever used for a spread restored or added without a drawn region --
+  // drawing one is how a spread is normally made.
+  pages: { w: 720, h: 420 },
 };
 // A widget's own defaultSize is in homepage grid cells, so it needs
 // converting. These are that grid's own metrics (grid.js's ROW_HEIGHT + GAP,
@@ -67,6 +89,19 @@ const ICON = {
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
     'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
     '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0"/></svg>',
+  // Two overlapping squares, the emphasised one saying which end of the
+  // stack this button sends the shape to -- shape-only controls, added in
+  // buildChrome below (see "Shapes sit behind by default" in the header).
+  front:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="4" y="4" width="11" height="11" rx="1.5" opacity="0.45"/>' +
+    '<rect x="9" y="9" width="11" height="11" rx="1.5" fill="currentColor" fill-opacity="0.18"/></svg>',
+  back:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="9" y="9" width="11" height="11" rx="1.5" opacity="0.45"/>' +
+    '<rect x="4" y="4" width="11" height="11" rx="1.5" fill="currentColor" fill-opacity="0.18"/></svg>',
 };
 
 /* A widget mounted on the canvas is never "being edited" the way one on the
@@ -164,6 +199,12 @@ export function createNodes({
   // it is only ever *more* than one after a marquee.
   let selectedNodeIds = new Set();
   let selectedEdgeId = null;
+  // The single shape node the style panel below is open for, kept separate
+  // from selectedNodeIds because the panel only ever makes sense for exactly
+  // one shape at a time -- see syncShapePanel.
+  let selectedShapeId = null;
+  // Likewise for the one spread whose panel is open.
+  let selectedSpreadId = null;
   const edges = createEdgeLayer(world, { onSelect: selectEdge });
   // Screen-space chrome, not world content -- mounted as a sibling of the
   // world layer (viewport.container, not viewport.el) so panning and zooming
@@ -176,9 +217,25 @@ export function createNodes({
       if (style) store.patchEdgeStyle(edgeId, style);
     },
   });
+  // Same floating-chrome deal as stylePanel above, for a selected shape's
+  // fill/stroke/width instead of an edge's colour/arrowhead/shape.
+  const shapePanel = createShapeStylePanel({
+    container: viewport.container,
+    onChange: (nodeId, patch) => {
+      const entry = entries.get(nodeId);
+      if (!entry) return;
+      entry.node.config = { ...entry.node.config, ...patch };
+      applyShapeStyle(entry);
+      store.patchNode(nodeId, { config: entry.node.config });
+    },
+  });
+  // And for a selected spread: its layout, page count and export, plus
+  // whichever of its pages was last clicked (spread-panel.js).
+  const spreadPanel = createSpreadPanel({ container: viewport.container });
   const unsubscribeViewport = viewport.subscribe(() => {
-    if (!selectedEdgeId) return;
-    stylePanel.reposition(edgeAnchor(selectedEdgeId));
+    if (selectedEdgeId) stylePanel.reposition(edgeAnchor(selectedEdgeId));
+    if (selectedShapeId) shapePanel.reposition(nodeAnchor(selectedShapeId));
+    if (selectedSpreadId) spreadPanel.reposition(spreadAnchor(selectedSpreadId));
   });
 
   const entries = new Map(); // node id -> { node, el, body, mounted, text }
@@ -196,8 +253,9 @@ export function createNodes({
   // captures the pointer.
   let gesture = null;
 
-  /* Undo: add node, delete node, connect, disconnect, and move (a single
-   * node's drag, or a marquee-selected group's). Not a resize, a lock, or a
+  /* Undo: add node, delete node, connect, disconnect, move (a single node's
+   * drag, or a marquee-selected group's), and an edit to a spread's pages
+   * (spread.js's record() says which). Not a resize, a lock, or a
    * text edit -- contenteditable already has its own native undo for text,
    * which fighting over would behave worse than doing nothing (see
    * onKeyDown below), and a resize has no equivalent group case forcing the
@@ -274,6 +332,28 @@ export function createNodes({
     return viewport.worldToScreen((from.x + to.x) / 2, (from.y + to.y) / 2);
   }
 
+  /** Where the shape style panel anchors: the screen position of the node's
+   *  own top edge, centred. Recomputed from the node's live position rather
+   *  than cached, the same reasoning as edgeAnchor above -- correct through
+   *  a drag, a resize, and a pan/zoom without any of them having to remember
+   *  to tell this function anything. */
+  /** The spread panel's anchor: the node's top and bottom edges on screen,
+   *  so the panel can sit under a spread whose top is off the top of the
+   *  window instead of over its first row of pages. */
+  function spreadAnchor(nodeId) {
+    const entry = entries.get(nodeId);
+    if (!entry) return null;
+    const top = viewport.worldToScreen(entry.node.x + entry.node.w / 2, entry.node.y);
+    const bottom = viewport.worldToScreen(entry.node.x, entry.node.y + entry.node.h);
+    return { x: top.x, top: top.y, bottom: bottom.y };
+  }
+
+  function nodeAnchor(nodeId) {
+    const entry = entries.get(nodeId);
+    if (!entry) return null;
+    return viewport.worldToScreen(entry.node.x + entry.node.w / 2, entry.node.y);
+  }
+
   // --- selection and z-order -----------------------------------------------
 
   /** Replace the node selection outright with exactly this set of ids --
@@ -293,6 +373,46 @@ export function createNodes({
       if (!selectedNodeIds.has(id)) entries.get(id)?.el.classList.add("is-selected");
     }
     selectedNodeIds = next;
+    syncShapePanel();
+  }
+
+  /** Show the shape style panel when the selection is exactly one shape
+   *  node, hide it otherwise -- a marquee across several nodes, or a
+   *  selection of anything else, has no single config for it to edit. */
+  function syncShapePanel() {
+    const onlyId = selectedNodeIds.size === 1 ? [...selectedNodeIds][0] : null;
+    const entry = onlyId ? entries.get(onlyId) : null;
+    if (entry && entry.node.kind === "shape") {
+      selectedShapeId = entry.node.id;
+      shapePanel.show(entry.node.id, entry.node.config, nodeAnchor(entry.node.id));
+    } else {
+      selectedShapeId = null;
+      shapePanel.hide();
+    }
+    syncSpreadPanel(entry);
+  }
+
+  /** The same rule for spreads: the panel is open for exactly one selected
+   *  spread. A spread that stops being the selection also lets go of its
+   *  active page, so coming back to it starts from the spread, not from a
+   *  page clicked some time ago. */
+  function syncSpreadPanel(onlyEntry) {
+    const next = onlyEntry && onlyEntry.node.kind === "pages" ? onlyEntry : null;
+    if (selectedSpreadId && selectedSpreadId !== next?.node.id) {
+      entries.get(selectedSpreadId)?.mounted?.deselect();
+    }
+    if (next) {
+      selectedSpreadId = next.node.id;
+      spreadPanel.show(next.mounted, spreadAnchor(next.node.id));
+    } else {
+      selectedSpreadId = null;
+      spreadPanel.hide();
+    }
+  }
+
+  /** A spread's config or active page changed: its panel re-reads it. */
+  function refreshSpreadPanel(nodeId) {
+    if (nodeId === selectedSpreadId) spreadPanel.refresh(spreadAnchor(nodeId));
   }
 
   function selectNode(nodeId) {
@@ -330,6 +450,24 @@ export function createNodes({
     store.patchNode(entry.node.id, { z_index: topZ });
   }
 
+  /** The opposite of bringToFront, and the one z-order move nothing does
+   *  automatically -- grabbing a node already brings it forward, but nothing
+   *  ever pushes one back, so a shape meant as a ground under other nodes
+   *  needs an explicit way there. Goes one below whatever the lowest
+   *  z_index on the canvas currently is, so repeated use keeps working its
+   *  way further back rather than colliding with the last thing sent there. */
+  function sendToBack(entry) {
+    let minZ = Infinity;
+    for (const { node } of entries.values()) {
+      if (node.id !== entry.node.id) minZ = Math.min(minZ, node.z_index);
+    }
+    const newZ = (minZ === Infinity ? 0 : minZ) - 1;
+    entry.node.z_index = newZ;
+    entry.el.style.zIndex = String(newZ + 1);
+    if (topNodeId === entry.node.id) topNodeId = null;
+    store.patchNode(entry.node.id, { z_index: newZ });
+  }
+
   // --- building a node -----------------------------------------------------
 
   function control(className, label, html) {
@@ -351,6 +489,27 @@ export function createNodes({
     // chrome should start a move or be left to a click handler.
     const grip = control("canvas-node-grip", "Move", ICON.grip);
     chrome.appendChild(grip);
+
+    // Shapes are usually grounds for other things (the header comment's
+    // "sit behind by default"), which is the one node kind that actually
+    // needs to move explicitly within the stack rather than just always
+    // coming forward on grab -- every other kind already gets that for free
+    // from bringToFront below, so this pair is shape-only.
+    if (entry.node.kind === "shape") {
+      const back = control("canvas-node-btn canvas-node-back", "Send to back", ICON.back);
+      back.addEventListener("click", (event) => {
+        event.stopPropagation();
+        sendToBack(entry);
+      });
+      chrome.appendChild(back);
+
+      const front = control("canvas-node-btn canvas-node-front", "Bring to front", ICON.front);
+      front.addEventListener("click", (event) => {
+        event.stopPropagation();
+        bringToFront(entry);
+      });
+      chrome.appendChild(front);
+    }
 
     const link = control("canvas-node-btn canvas-node-link", "Connect to another node", ICON.connect);
     link.addEventListener("pointerdown", (event) => beginConnect(event, entry));
@@ -466,6 +625,47 @@ export function createNodes({
     selection.addRange(range);
   }
 
+  /* A shape's fill, stroke and corner radius are painted on entry.el itself,
+   * not inside the body -- the node's own box *is* the shape. That's what
+   * makes an outline-only shape (fill: none) show the world behind it
+   * rather than the node's usual --project-bg fill, and it's why style.css
+   * strips .canvas-node-shape's rest-state card shadow: a flat rectangle
+   * with a raised card shadow under it reads as a card, not a mark. Colour
+   * is deliberately free here (hard rule 6's own exception) -- this is the
+   * one surface in the app where the user's own colour choice is the point,
+   * unlike drafting.css's two-colour schedule system.
+   */
+  function applyShapeStyle(entry) {
+    const config = entry.node.config || {};
+    const isEllipse = config.shape === "ellipse";
+    const strokeWidth = config.stroke ? Number(config.strokeWidth) || DEFAULT_STROKE_WIDTH : 0;
+    entry.el.style.borderRadius = isEllipse ? "50%" : "0";
+    entry.el.style.background = config.fill || "transparent";
+    entry.el.style.border = config.stroke ? `${strokeWidth}px solid ${config.stroke}` : "none";
+  }
+
+  function buildShapeBody(entry, body) {
+    // Nothing to put in the body -- see applyShapeStyle above. It still
+    // returns one, like every other kind, so addEntry has a consistent
+    // element to append and clip corners against.
+    applyShapeStyle(entry);
+  }
+
+  /* A spread fills its body with its pages and keeps them laid out; the
+   * handle it returns has the same notifyResize/destroy shape a mounted widget
+   * does, so addEntry and a resize treat the two identically. */
+  function buildPagesBody(entry, body) {
+    entry.mounted = createSpread({
+      entry,
+      body,
+      viewport,
+      store,
+      onStatus,
+      onChange: () => refreshSpreadPanel(entry.node.id),
+      onEdit: (before) => pushUndo({ type: "spread", nodeId: entry.node.id, config: before }),
+    });
+  }
+
   function buildWidgetBody(entry, body) {
     const type = entry.node.config?.type;
     const definition = definitionFor(type);
@@ -506,6 +706,8 @@ export function createNodes({
     if (entry.node.kind === "reference") buildReferenceBody(entry, body);
     else if (entry.node.kind === "text") buildTextBody(entry, body);
     else if (entry.node.kind === "widget") buildWidgetBody(entry, body);
+    else if (entry.node.kind === "shape") buildShapeBody(entry, body);
+    else if (entry.node.kind === "pages") buildPagesBody(entry, body);
     return body;
   }
 
@@ -615,6 +817,10 @@ export function createNodes({
     if (node.locked) return false;
     if (target.closest(".canvas-node-grip")) return true;
     if (node.kind === "widget") return false;
+    // A page is the spread's contents, not a handle on it: pressing one
+    // clicks or reorders that page (spread.js). The spread itself moves by
+    // its grip or the space between its pages.
+    if (node.kind === "pages" && target.closest(".spread-page")) return false;
     if (target.closest('[contenteditable="true"]')) return false;
     return true;
   }
@@ -775,7 +981,16 @@ export function createNodes({
   }
 
   function beginResize(event, entry) {
-    if (!event.isPrimary || event.button !== 0 || gesture || entry.node.locked || event.shiftKey) return;
+    // Every other kind still hands a Shift-held press off to the marquee
+    // (there's nothing here for Shift to mean for them) -- a shape is the
+    // one exception, since Shift is how its resize constrains to one axis,
+    // and a user who holds Shift *before* pressing the handle is exactly as
+    // likely as one who presses first and holds it mid-drag. stopPropagation
+    // just below is what keeps the marquee from also claiming this press.
+    const shiftIsOurs = entry.node.kind === "shape";
+    if (!event.isPrimary || event.button !== 0 || gesture || entry.node.locked || (event.shiftKey && !shiftIsOurs)) {
+      return;
+    }
     event.stopPropagation();
     selectNode(entry.node.id);
     bringToFront(entry);
@@ -789,6 +1004,11 @@ export function createNodes({
       // pointer instead of jumping to it.
       offsetW: entry.node.w - (pointer.x - entry.node.x),
       offsetH: entry.node.h - (pointer.y - entry.node.y),
+      // The box this gesture started from -- a shape's resize (below) scales
+      // and constrains relative to this, not to zero, so proportion is the
+      // shape's own aspect ratio rather than a fixed 1:1.
+      startW: entry.node.w,
+      startH: entry.node.h,
       startX: event.clientX,
       startY: event.clientY,
       active: false,
@@ -815,6 +1035,119 @@ export function createNodes({
     world.classList.add("is-connecting");
   }
 
+  // --- drawing a new shape ---------------------------------------------------
+  //
+  // A shape is the one thing on this canvas that isn't dropped at a fixed
+  // size -- picking a tool (setDrawTool, called from palette.js) arms a drag
+  // on empty canvas to draw it at exactly the size and place it's dragged.
+  // That drag has to win over viewport.js's own pan and marquee decisions
+  // for a press on empty space, so it gets the same "first refusal" viewport
+  // already grants marqueeHandler -- see viewport.js's setDrawHandler.
+
+  // Set by setDrawTool. Sticky rather than one-shot: stays armed across
+  // several draws until palette.js explicitly disarms it (clicking the tool
+  // again, picking the other one, or Escape below) -- the same way a real
+  // drawing tool's selection persists until you put it down yourself.
+  //
+  // "pages" is the exception, and puts itself down after one spread: a
+  // document is drawn once, and a tool left armed would turn the next drag
+  // on empty canvas -- a pan, usually -- into a second thirty-page spread.
+  let drawTool = null;
+  const drawToolListeners = new Set();
+
+  function setDrawTool(kind) {
+    const next = kind === "rect" || kind === "ellipse" || kind === "pages" ? kind : null;
+    if (next === drawTool) return;
+    drawTool = next;
+    viewport.container.classList.toggle("is-drawing-shape", Boolean(drawTool));
+    for (const fn of drawToolListeners) fn(drawTool);
+  }
+
+  /* While a spread is being drawn, the outline fills with the pages it will
+   * hold -- the same layout the spread will use, at the default page count --
+   * so the size of a page is visible before letting go rather than after. */
+  function drawPagePreview(previewEl, rect) {
+    const { pages } = layoutSpread({ width: rect.w, height: rect.h, count: DEFAULT_PAGE_COUNT });
+    const cells = previewEl.children;
+    pages.forEach((page, i) => {
+      const cell = cells[i];
+      cell.hidden = false;
+      cell.style.transform = `translate(${page.x}px, ${page.y}px)`;
+      cell.style.width = `${page.w}px`;
+      cell.style.height = `${page.h}px`;
+    });
+    for (let i = pages.length; i < cells.length; i++) cells[i].hidden = true;
+  }
+
+  /** viewport.js's drawHandler: first refusal on a plain press on empty
+   *  space, ahead of both its marquee and pan decisions, exactly like
+   *  marqueeHandler gets ahead of just its pan decision -- see beginMarquee
+   *  above for why that priority can't be wired the other way around.
+   *  Returns whether it claimed the press, which is also how viewport.js
+   *  knows whether to fall through to its own logic when no tool is armed. */
+  function handleDrawPress(event) {
+    if (!drawTool || gesture) return false;
+
+    const previewEl = document.createElement("div");
+    previewEl.className = "canvas-draw-preview";
+    previewEl.style.borderRadius = drawTool === "ellipse" ? "50%" : "0";
+    if (drawTool === "pages") {
+      previewEl.classList.add("canvas-draw-preview-pages");
+      for (let i = 0; i < DEFAULT_PAGE_COUNT; i++) {
+        const cell = document.createElement("div");
+        cell.className = "canvas-draw-preview-page";
+        cell.hidden = true;
+        previewEl.appendChild(cell);
+      }
+    }
+    world.appendChild(previewEl);
+
+    gesture = {
+      kind: "draw",
+      shapeType: drawTool,
+      pointerId: event.pointerId,
+      startWorld: viewport.screenToWorld(event.clientX, event.clientY),
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+      captureEl: viewport.container,
+      previewEl,
+    };
+    viewport.container.setPointerCapture(event.pointerId);
+    return true;
+  }
+
+  /** Create the drawn shape once the drag that outlined it is released.
+   *  Fields mirror what addNode already accepts -- x/y/w/h here simply come
+   *  from the gesture instead of DEFAULT_SIZE and a centred drop point. */
+  function addShapeFromDraw({ rect, shapeType }) {
+    if (shapeType === "pages") {
+      // A spread: empty A4 slots, filling the region that was drawn.
+      setDrawTool(null);
+      return addNode({
+        kind: "pages",
+        x: rect.x,
+        y: rect.y,
+        w: Math.max(MIN_W, rect.w),
+        h: Math.max(MIN_H, rect.h),
+        config: defaultSpreadConfig(),
+      });
+    }
+    return addNode({
+      kind: "shape",
+      x: rect.x,
+      y: rect.y,
+      w: Math.max(MIN_W, rect.w),
+      h: Math.max(MIN_H, rect.h),
+      config: {
+        shape: shapeType,
+        fill: DEFAULT_FILL,
+        stroke: DEFAULT_STROKE,
+        strokeWidth: DEFAULT_STROKE_WIDTH,
+      },
+    });
+  }
+
   /** What "this gesture just became real" means, per kind -- called once,
    *  the moment the drag threshold is first crossed. */
   function activateGesture() {
@@ -825,6 +1158,8 @@ export function createNodes({
       // turns into a drag shouldn't blow away whatever was already selected.
       clearSelection();
       gesture.rectEl.hidden = false;
+    } else if (gesture.kind === "draw") {
+      gesture.previewEl.classList.add("is-active");
     } else {
       gesture.entry.el.classList.add("is-active");
     }
@@ -865,6 +1200,8 @@ export function createNodes({
       entry.node.y = pointer.y + gesture.offsetY;
       place(entry);
       refreshEdges(entry.node.id);
+      if (entry.node.id === selectedShapeId) shapePanel.reposition(nodeAnchor(entry.node.id));
+      if (entry.node.id === selectedSpreadId) spreadPanel.reposition(spreadAnchor(entry.node.id));
     } else if (gesture.kind === "multi-drag") {
       // Every mover keeps its own offset from the pointer (captured in
       // onNodePointerDown), which is what preserves relative spacing --
@@ -879,14 +1216,67 @@ export function createNodes({
       }
     } else if (gesture.kind === "resize") {
       const { entry } = gesture;
-      entry.node.w = Math.max(MIN_W, pointer.x - entry.node.x + gesture.offsetW);
-      entry.node.h = Math.max(MIN_H, pointer.y - entry.node.y + gesture.offsetH);
+      if (entry.node.kind === "shape") {
+        /* Inverted from drawing a new shape, deliberately (see the header
+         * comment): once a shape exists you usually want to keep its
+         * proportion and occasionally stretch it, where while drawing you
+         * usually want freedom and occasionally a true square/circle. So
+         * here it's the other way around -- no modifier scales both axes
+         * together, locked to the shape's own aspect ratio at the start of
+         * this gesture; Shift breaks the lock and moves one axis only. Do
+         * not "fix" this to match Figma; it's the opposite on purpose. */
+        const rawW = pointer.x - entry.node.x + gesture.offsetW;
+        const rawH = pointer.y - entry.node.y + gesture.offsetH;
+        if (event.shiftKey) {
+          // Whichever axis the pointer actually moved further along (in its
+          // own terms) is the one that changes -- the same "which direction
+          // dominates" rule edges.js's curved shape picks its bow axis with.
+          if (Math.abs(rawW - gesture.startW) >= Math.abs(rawH - gesture.startH)) {
+            entry.node.w = Math.max(MIN_W, rawW);
+            entry.node.h = gesture.startH;
+          } else {
+            entry.node.h = Math.max(MIN_H, rawH);
+            entry.node.w = gesture.startW;
+          }
+        } else {
+          const scaleW = Math.max(MIN_W, rawW) / gesture.startW;
+          const scaleH = Math.max(MIN_H, rawH) / gesture.startH;
+          const scale = Math.abs(scaleW - 1) >= Math.abs(scaleH - 1) ? scaleW : scaleH;
+          entry.node.w = Math.max(MIN_W, gesture.startW * scale);
+          entry.node.h = Math.max(MIN_H, gesture.startH * scale);
+        }
+      } else {
+        entry.node.w = Math.max(MIN_W, pointer.x - entry.node.x + gesture.offsetW);
+        entry.node.h = Math.max(MIN_H, pointer.y - entry.node.y + gesture.offsetH);
+      }
       size(entry);
       refreshEdges(entry.node.id);
+      if (entry.node.id === selectedShapeId) shapePanel.reposition(nodeAnchor(entry.node.id));
+      if (entry.node.id === selectedSpreadId) spreadPanel.reposition(spreadAnchor(entry.node.id));
       entry.mounted?.notifyResize(entry.node.w, entry.node.h);
     } else if (gesture.kind === "marquee") {
       updateMarqueeRect(event);
       setNodeSelection(nodesInMarquee(marqueeWorldBox(event)));
+    } else if (gesture.kind === "draw") {
+      let dx = pointer.x - gesture.startWorld.x;
+      let dy = pointer.y - gesture.startWorld.y;
+      if (event.shiftKey) {
+        // Constrained while drawing: a rectangle becomes a square, an
+        // ellipse a circle. Released, free proportions -- see beginResize's
+        // comment above for why resizing an existing shape inverts this.
+        const side = Math.max(Math.abs(dx), Math.abs(dy));
+        dx = dx < 0 ? -side : side;
+        dy = dy < 0 ? -side : side;
+      }
+      const x = Math.min(gesture.startWorld.x, gesture.startWorld.x + dx);
+      const y = Math.min(gesture.startWorld.y, gesture.startWorld.y + dy);
+      const w = Math.abs(dx);
+      const h = Math.abs(dy);
+      gesture.rect = { x, y, w, h };
+      gesture.previewEl.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+      gesture.previewEl.style.width = `${w}px`;
+      gesture.previewEl.style.height = `${h}px`;
+      if (gesture.shapeType === "pages") drawPagePreview(gesture.previewEl, gesture.rect);
     } else {
       const { entry } = gesture;
       edges.showDraft(centreOf(entry.node), pointer);
@@ -925,6 +1315,9 @@ export function createNodes({
 
     const singleEntry = kind === "drag" || kind === "resize" || kind === "connect" ? gesture.entry : null;
     const movers = kind === "multi-drag" ? gesture.movers : null;
+    // Captured before endGesture() clears `gesture` and removes the preview
+    // element the rect was being drawn onto.
+    const drawResult = kind === "draw" ? { rect: gesture.rect, shapeType: gesture.shapeType } : null;
 
     endGesture();
 
@@ -940,6 +1333,8 @@ export function createNodes({
       store.patchNode(singleEntry.node.id, { w: singleEntry.node.w, h: singleEntry.node.h });
     } else if (kind === "connect" && target && target !== singleEntry.node.id) {
       connect(singleEntry.node.id, target);
+    } else if (kind === "draw" && drawResult.rect) {
+      addShapeFromDraw(drawResult);
     }
     // marquee: selection was already applied live in trackGesture, and it
     // isn't persisted anywhere -- nothing left to do on release.
@@ -953,6 +1348,8 @@ export function createNodes({
       for (const mover of gesture.movers) mover.el.classList.remove("is-active");
     } else if (gesture.kind === "marquee") {
       gesture.rectEl.remove();
+    } else if (gesture.kind === "draw") {
+      gesture.previewEl.remove();
     } else {
       gesture.entry.el.classList.remove("is-active");
     }
@@ -1110,6 +1507,16 @@ export function createNodes({
     entries.delete(nodeId);
     selectedNodeIds.delete(nodeId);
     if (topNodeId === nodeId) topNodeId = null;
+    // setNodeSelection isn't going through here (the DOM is already gone),
+    // so the shape panel needs the same cleanup by hand if this was its node.
+    if (selectedShapeId === nodeId) {
+      selectedShapeId = null;
+      shapePanel.hide();
+    }
+    if (selectedSpreadId === nodeId) {
+      selectedSpreadId = null;
+      spreadPanel.hide();
+    }
     onCountChange(entries.size);
 
     if (record) pushUndo({ type: "delete", node: snapshot, edges: removedEdges });
@@ -1156,6 +1563,11 @@ export function createNodes({
       if (entries.has(sourceId) && entries.has(targetId)) {
         await connect(sourceId, targetId, { record: false });
       }
+    } else if (action.type === "spread") {
+      // A page reordered, emptied or deleted, or the layout changed: the
+      // spread takes back the whole document as it was. A spread deleted
+      // since has nothing to take it back.
+      entries.get(action.nodeId)?.mounted?.restoreConfig(action.config);
     } else if (action.type === "move") {
       // Every node this move touched goes back to its recorded starting
       // point, one by one -- there is no bulk position route (store.js's own
@@ -1173,6 +1585,86 @@ export function createNodes({
     }
   }
 
+  // --- pending references (file drop) ---------------------------------------
+  //
+  // A file dropped straight from Finder (file-drop.js) isn't a canvas_nodes
+  // row yet -- it has no reference_id until capture.py's worker finishes
+  // tagging and embedding it, seconds later, and canvas_nodes requires one
+  // (db.py's schema says so). So a drop draws a placeholder immediately,
+  // entirely outside `entries`: it is never selectable, draggable or
+  // connectable, which is what style.css's .canvas-node-pending switching off
+  // pointer-events is for. file-drop.js swaps it for a real, persisted node
+  // via addNode() once the capture resolves, at the same point and the same
+  // default reference size, so nothing visibly jumps. A reload mid-flight
+  // loses the placeholder, never the reference -- the capture queue survives
+  // a restart on its own, so nothing here needs to.
+
+  /** Draw a placeholder at `point` (top-left, same convention as every other
+   *  drop on this canvas) previewing `previewUrl` if there is one (an image,
+   *  via URL.createObjectURL) or `label` as a bare icon otherwise (a PDF or
+   *  text file has no useful client-side preview). Returns `remove()`, which
+   *  also revokes the object URL -- the one place that has to, since it's the
+   *  one place that created it. */
+  function addPendingReference(point, { previewUrl, label } = {}) {
+    const size = DEFAULT_SIZE.reference;
+    const el = document.createElement("div");
+    el.className = "canvas-node canvas-node-reference canvas-node-pending";
+    el.style.width = `${size.w}px`;
+    el.style.height = `${size.h}px`;
+    el.style.transform = `translate3d(${point.x}px, ${point.y}px, 0)`;
+    // Above whatever is already on the canvas, so a drop always lands on top
+    // of anything it happens to overlap rather than under it.
+    el.style.zIndex = String(topZ + 2);
+
+    const card = document.createElement("div");
+    card.className = "card";
+    if (previewUrl) {
+      const img = document.createElement("img");
+      img.src = previewUrl;
+      img.alt = "";
+      card.appendChild(img);
+    } else {
+      // Same shape textCard() draws for a PDF whose own render failed
+      // (shared/cards.js) -- reused here for the same reason: an icon and
+      // nothing else, styled by the same .text-card-placeholder rule.
+      const placeholder = document.createElement("div");
+      placeholder.className = "text-card text-card-placeholder";
+      const icon = document.createElement("span");
+      icon.className = "text-card-icon";
+      icon.textContent = label || "···";
+      placeholder.appendChild(icon);
+      card.appendChild(placeholder);
+    }
+    const caption = document.createElement("div");
+    caption.className = "card-caption";
+    caption.textContent = "Adding…";
+    card.appendChild(caption);
+
+    const body = document.createElement("div");
+    body.className = "canvas-node-body";
+    body.appendChild(card);
+    el.appendChild(body);
+    world.appendChild(el);
+
+    return {
+      remove() {
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        el.remove();
+      },
+    };
+  }
+
+  /** Make a reference this canvas didn't already know about addressable by
+   *  buildReferenceBody and the carousel -- a file dropped straight from
+   *  Finder ingests into the project but was never in the `references` list
+   *  this page loaded at boot. Idempotent: resolving a duplicate that already
+   *  belongs to the project is a no-op here, not a second entry. */
+  function registerReference(ref) {
+    if (referencesById.has(ref.id)) return;
+    referencesById.set(ref.id, ref);
+    references.push(ref);
+  }
+
   // --- keyboard ------------------------------------------------------------
 
   function isUndoChord(event) {
@@ -1184,6 +1676,18 @@ export function createNodes({
 
   function onKeyDown(event) {
     if (event.key === "Escape") {
+      // Putting a tool down takes priority over clearing a selection -- the
+      // two rarely coincide (drawing already deselects, see beginDraw's
+      // world-pointerdown), and someone who armed a tool by mistake wants
+      // Escape to undo exactly that, not go hunting for a selection to lose.
+      if (drawTool) {
+        setDrawTool(null);
+        return;
+      }
+      // Inside a spread, Escape backs out a level first -- out of adjusting
+      // a crop, then off the page that was clicked -- before it lets go of
+      // the spread itself.
+      if (selectedSpreadId && entries.get(selectedSpreadId)?.mounted?.handleEscape()) return;
       // A text node's own keydown handler (buildTextBody) already blurs
       // itself on Escape without stopping propagation, so this still runs
       // afterward -- harmless, since a node mid-text-edit is never the
@@ -1208,6 +1712,10 @@ export function createNodes({
     if (selectedEdgeId) {
       event.preventDefault();
       removeEdge(selectedEdgeId);
+    } else if (selectedSpreadId && entries.get(selectedSpreadId)?.mounted?.handleDelete()) {
+      // A page of the spread was active: the key meant that page's image,
+      // not the whole spread (spread.js's handleDelete says why).
+      event.preventDefault();
     } else if (selectedNodeIds.size > 0) {
       event.preventDefault();
       // Each removal is its own undo entry (removeNode already pushes one),
@@ -1233,6 +1741,10 @@ export function createNodes({
   // viewport.js's own pan decision -- see beginMarquee and viewport.js's
   // setMarqueeHandler for why this can't be wired the other way around.
   viewport.setMarqueeHandler(beginMarquee);
+  // Same first-refusal deal, one step earlier: an armed shape tool outranks
+  // even the marquee, since Shift is also how a shape is drawn as a square
+  // or circle -- see handleDrawPress and viewport.js's setDrawHandler.
+  viewport.setDrawHandler(handleDrawPress);
 
   // --- public --------------------------------------------------------------
 
@@ -1245,6 +1757,32 @@ export function createNodes({
 
     addNode,
     removeNode,
+    addPendingReference,
+    registerReference,
+
+    /** Arm ("rect" | "ellipse") or disarm (null/anything else) the shape
+     *  drawing tool -- called from palette.js's Rectangle/Ellipse buttons. */
+    setDrawTool,
+    getDrawTool: () => drawTool,
+    /** Hear about the draw tool being armed or put down from this side --
+     *  the pages tool puts itself down after one spread, and the palette's
+     *  buttons need to say so. Returns an unsubscribe. */
+    onDrawToolChange(fn) {
+      drawToolListeners.add(fn);
+      return () => drawToolListeners.delete(fn);
+    },
+
+    /** Files dropped from Finder onto one of a spread's pages fill that page
+     *  (and the empty ones after it) instead of landing loose on the canvas.
+     *  False if `pageEl` isn't a spread's page, so the drop carries on as an
+     *  ordinary one. */
+    dropFilesOnPage(pageEl, files) {
+      const nodeEl = pageEl?.closest(".canvas-node-pages");
+      const entry = nodeEl ? entries.get(nodeEl.dataset.id) : null;
+      if (!entry?.mounted) return false;
+      if (!selectedNodeIds.has(entry.node.id) || selectedNodeIds.size !== 1) selectNode(entry.node.id);
+      return entry.mounted.dropFiles(pageEl, files);
+    },
 
     /** The current marquee/click selection, for concept analysis: the canvas
      *  is the picker, so this exposes exactly what is selected. Widget nodes
@@ -1292,6 +1830,7 @@ export function createNodes({
       window.removeEventListener("keydown", onKeyDown);
       viewport.container.removeEventListener("pointerdown", onWorldPointerDown);
       viewport.setMarqueeHandler(null);
+      viewport.setDrawHandler(null);
       // Widget nodes hold Three.js contexts; a canvas left without disposing
       // them takes the page down after a handful of visits (registry.js's
       // destroy contract spells this out).
@@ -1304,6 +1843,9 @@ export function createNodes({
       edges.destroy();
       unsubscribeViewport();
       stylePanel.destroy();
+      shapePanel.destroy();
+      spreadPanel.destroy();
+      drawToolListeners.clear();
     },
   };
 }

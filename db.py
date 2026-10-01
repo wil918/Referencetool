@@ -260,11 +260,21 @@ CREATE TABLE IF NOT EXISTS layouts (
 
 # Nodes on a project's infinite canvas.
 #
-# One table for all three kinds (reference | text | widget) rather than three,
-# because the canvas drags, locks, z-orders and connects all three identically.
-# Only what gets drawn inside the box differs: reference_id points at the
-# archive for a reference node, content holds the body of a text node, config
-# holds a widget node's settings.
+# One table for all five kinds (reference | text | widget | shape | pages)
+# rather than five, because the canvas drags, locks, z-orders and connects all
+# of them identically. Only what gets drawn inside the box differs:
+# reference_id points at the archive for a reference node, content holds the
+# body of a text node, config holds a widget node's settings or (kind =
+# "shape") the shape's own { shape: "rect" | "ellipse", fill, stroke,
+# strokeWidth }.
+#
+# kind = "pages" is a portfolio spread: one node that owns its pages, so
+# moving or resizing it carries every page with it. Its config holds the
+# layout and the page order -- { layout, orientation, cover, gap, pages: [
+# { reference_id, fit, crop?, capture_id? } ] } -- and a page is never a node
+# of its own. reference_id stays NULL on the node itself; the references are
+# inside config, one per page, and null there is an empty slot. See
+# spreads.py.
 #
 # x/y/w/h are REAL world coordinates, never screen coordinates -- a screen
 # position stops meaning anything the moment the canvas is panned or zoomed.
@@ -421,6 +431,15 @@ CREATE TABLE IF NOT EXISTS deliverables (
 # came from. Both NULL for a hand-made task. A brief-created task that has since
 # been worked (done, partial, or carrying a task_actuals row) is no longer a
 # mere import artefact and a brief reset keeps it -- see reset_brief.
+#
+# sequence_position is the SOFT ordering a brief's task skeleton carries: its
+# 1-based position among the tasks a deliverable extraction returned, i.e. the
+# order they actually happen in (research, then develop, then select, then
+# mount). NULL for a hand-made task or one with no known place in a sequence.
+# This is deliberately not a hard constraint -- see task_dependencies for
+# that -- it only biases scheduling._earliest_start_bias so a late-sequence
+# task isn't placed in the project's first week merely because nothing
+# formally blocks it.
 TASKS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
@@ -446,7 +465,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     difficulty_source TEXT,
     created_at TEXT NOT NULL,
     brief_id TEXT,
-    source_key TEXT
+    source_key TEXT,
+    sequence_position INTEGER
 );
 """
 
@@ -763,6 +783,26 @@ CREATE TABLE IF NOT EXISTS briefs (
 );
 """
 
+# A document that isn't the brief itself but names real preparation work with
+# a hard date -- a workshop and materials list, a reading list, a technical
+# handout. A project may carry several (unlike briefs: one per project), so
+# this is its own table rather than a second row shape crammed into briefs.
+#
+# `extracted` is the same envelope shape as briefs.extracted:
+#   {"extraction": <what supporting_docs.analyse produced>, "applied": <null | summary>}
+# but there is no diff/reset machinery here -- a supporting document is not
+# re-imported as a diff (see supporting_docs.py's module docstring); apply
+# always creates fresh rows, and starting over means deleting the document.
+SUPPORTING_DOCUMENTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS supporting_documents (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    filename TEXT,
+    extracted TEXT,
+    imported_at TEXT NOT NULL
+);
+"""
+
 # The user's own regular working hours, one row per weekday (same 0=Monday
 # convention as LOCATION_HOURS_SCHEMA) -- global rather than per-location,
 # since this is when the user could work at all, before location or
@@ -966,6 +1006,7 @@ def init_db():
         conn.execute(RESOURCE_ITEMS_SCHEMA)
         conn.execute(TASK_RESOURCES_SCHEMA)
         conn.execute(BRIEFS_SCHEMA)
+        conn.execute(SUPPORTING_DOCUMENTS_SCHEMA)
         conn.execute(WORKING_HOURS_SCHEMA)
         conn.execute(DOMESTIC_HOURS_SCHEMA)
         conn.execute(HOURS_OVERRIDES_SCHEMA)
@@ -1001,6 +1042,7 @@ def init_db():
             "ALTER TABLE deliverables ADD COLUMN source_key TEXT",
             "ALTER TABLE tasks ADD COLUMN brief_id TEXT",
             "ALTER TABLE tasks ADD COLUMN source_key TEXT",
+            "ALTER TABLE tasks ADD COLUMN sequence_position INTEGER",
         ):
             try:
                 conn.execute(ddl)
@@ -1240,6 +1282,16 @@ def update_reference_title(ref_id, title):
         conn.execute("UPDATE reference_items SET title = ? WHERE id = ?", (title, ref_id))
 
 
+def update_reference_content_hash(ref_id, content_hash):
+    """Repoint a reference at new file bytes without touching anything else
+    about it -- used when a reference's own file is rewritten in place
+    (currently: rotation)."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE reference_items SET content_hash = ? WHERE id = ?", (content_hash, ref_id)
+        )
+
+
 def find_titles_like(title):
     """Every existing title that is `title` itself, or `title` with anything
     appended -- the raw material for picking the next free " (N)" suffix.
@@ -1285,6 +1337,32 @@ def delete_reference(ref_id):
             (ref_id, ref_id),
         )
         conn.execute("DELETE FROM canvas_nodes WHERE reference_id = ?", (ref_id,))
+        # A page on a spread is different: the slot stays, empty, because the
+        # spread's pagination is the document. Removing the page would quietly
+        # renumber everything after it.
+        _empty_spread_pages(conn, ref_id)
+
+
+def _empty_spread_pages(conn, ref_id):
+    rows = conn.execute(
+        "SELECT id, config FROM canvas_nodes WHERE kind = 'pages' AND config LIKE ?",
+        (f"%{ref_id}%",),
+    ).fetchall()
+    for row in rows:
+        try:
+            config = json.loads(row["config"])
+        except (TypeError, ValueError):
+            continue
+        changed = False
+        for page in (config or {}).get("pages") or []:
+            if isinstance(page, dict) and page.get("reference_id") == ref_id:
+                page["reference_id"] = None
+                page.pop("crop", None)
+                changed = True
+        if changed:
+            conn.execute(
+                "UPDATE canvas_nodes SET config = ? WHERE id = ?", (json.dumps(config), row["id"])
+            )
 
 
 def _row_to_dict(row):
@@ -1362,6 +1440,7 @@ def delete_project(project_id):
         conn.execute("DELETE FROM deliverables WHERE project_id = ?", (project_id,))
         conn.execute("UPDATE tasks SET project_id = NULL WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM briefs WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM supporting_documents WHERE project_id = ?", (project_id,))
 
 
 def count_project_references(project_id):
@@ -1612,6 +1691,18 @@ def save_colour_analysis(reference_id, version, content_hash, profile_json):
                 profile_json,
                 datetime.now(timezone.utc).isoformat(),
             ),
+        )
+
+
+def update_colour_analysis_content_hash(reference_id, content_hash):
+    """Carry a stored colour profile forward onto new file bytes without
+    recomputing it -- for a change that doesn't touch the palette (currently:
+    rotation). A no-op if there's no analysis yet; list_references_needing_colour
+    picks that case up on its own regardless."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE colour_analysis SET content_hash = ? WHERE reference_id = ?",
+            (content_hash, reference_id),
         )
 
 
@@ -2697,7 +2788,7 @@ def create_task(task_id, title, project_id=None, deliverable_id=None, descriptio
                 difficulty=None, is_finishing=False, is_domestic=False, status="pending",
                 recurrence_id=None, continues_task_id=None,
                 est_minutes_source=None, importance_source=None, difficulty_source=None,
-                brief_id=None, source_key=None):
+                brief_id=None, source_key=None, sequence_position=None):
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO tasks
@@ -2705,8 +2796,8 @@ def create_task(task_id, title, project_id=None, deliverable_id=None, descriptio
                     deadline, required_location_id, support_level, est_minutes, importance,
                     difficulty, is_finishing, is_domestic, status, recurrence_id,
                     continues_task_id, slip_count, est_minutes_source, importance_source,
-                    difficulty_source, created_at, brief_id, source_key)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)""",
+                    difficulty_source, created_at, brief_id, source_key, sequence_position)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 task_id,
                 project_id,
@@ -2731,6 +2822,7 @@ def create_task(task_id, title, project_id=None, deliverable_id=None, descriptio
                 datetime.now(timezone.utc).isoformat(),
                 brief_id,
                 source_key,
+                sequence_position,
             ),
         )
 
@@ -2801,7 +2893,7 @@ TASK_PATCH_COLUMNS = (
     "deadline", "required_location_id", "support_level", "est_minutes",
     "importance", "difficulty", "is_finishing", "is_domestic", "status", "recurrence_id",
     "continues_task_id", "slip_count", "est_minutes_source", "importance_source",
-    "difficulty_source",
+    "difficulty_source", "sequence_position",
 )
 
 
@@ -3250,6 +3342,24 @@ def list_commitments():
     with get_conn() as conn:
         rows = conn.execute("SELECT * FROM commitments ORDER BY start").fetchall()
         return [_commitment_to_dict(r) for r in rows]
+
+
+def commitments_date_range():
+    """(earliest start, latest end) across every commitment, as YYYY-MM-DD
+    strings, or (None, None) if none are imported yet.
+
+    Commitments carry no project_id (see COMMITMENTS_SCHEMA) -- this is one
+    shared calendar, not a per-project one. That's exactly what makes this
+    useful as "the project's timetable": briefs.date_context reads it to
+    resolve a bare date's year against something real instead of guessing
+    from nothing, and every project drawing from the same imported term
+    shares the same range.
+    """
+    with get_conn() as conn:
+        row = conn.execute("SELECT MIN(start) AS lo, MAX(end) AS hi FROM commitments").fetchone()
+    lo = row["lo"][:10] if row and row["lo"] else None
+    hi = row["hi"][:10] if row and row["hi"] else None
+    return (lo, hi)
 
 
 def get_commitment(commitment_id):
@@ -4060,6 +4170,81 @@ def reset_brief(brief_id, purge=False):
 
 
 def _brief_to_dict(row):
+    d = dict(row)
+    d["extracted"] = json.loads(d["extracted"]) if d["extracted"] else None
+    return d
+
+
+# --- Schedule: supporting documents -----------------------------------------
+
+
+def create_supporting_document(doc_id, project_id, filename=None, extracted=None):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO supporting_documents (id, project_id, filename, extracted, imported_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                doc_id,
+                project_id,
+                filename,
+                json.dumps(extracted) if extracted is not None else None,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def list_supporting_documents(project_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM supporting_documents WHERE project_id = ? ORDER BY imported_at DESC",
+            (project_id,),
+        ).fetchall()
+        return [_supporting_document_to_dict(r) for r in rows]
+
+
+def get_supporting_document(doc_id):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM supporting_documents WHERE id = ?", (doc_id,)
+        ).fetchone()
+        return _supporting_document_to_dict(row) if row else None
+
+
+SUPPORTING_DOCUMENT_PATCH_COLUMNS = ("filename", "extracted")
+
+
+def update_supporting_document(doc_id, **fields):
+    """Patch whichever of a supporting document's columns were sent -- used to
+    write the `applied` summary back into `extracted` once its review sheet is
+    approved, same as update_brief."""
+    sets, params = [], []
+    for column in SUPPORTING_DOCUMENT_PATCH_COLUMNS:
+        if column not in fields:
+            continue
+        value = fields[column]
+        if column == "extracted":
+            value = json.dumps(value) if value is not None else None
+        sets.append(f"{column} = ?")
+        params.append(value)
+    if not sets:
+        return
+    with get_conn() as conn:
+        conn.execute(
+            f"UPDATE supporting_documents SET {', '.join(sets)} WHERE id = ?",
+            [*params, doc_id],
+        )
+
+
+def delete_supporting_document(doc_id):
+    """Delete the document row. Unlike delete_brief/reset_brief, nothing here
+    undoes what an /apply already created -- see SUPPORTING_DOCUMENTS_SCHEMA:
+    a supporting document isn't re-imported as a diff, so there's no
+    provenance trail on its created tasks to walk back through."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM supporting_documents WHERE id = ?", (doc_id,))
+
+
+def _supporting_document_to_dict(row):
     d = dict(row)
     d["extracted"] = json.loads(d["extracted"]) if d["extracted"] else None
     return d

@@ -243,7 +243,7 @@ These are not preferences. Violating one means the change gets reverted.
 
 | `project/folders.js`, `folders-panel.js` | Folder API client (no DOM) and the folder management UI. |
 | `project/pages/*` | Hash-routed pages inside the shell: `grid-page.js` (the reference grid, used by both the project grid and folder pages), `canvas-page.js`, plus `analysis-panel.js`, `colour-panel.js` and `overlays.js` ported from `app.js`. |
-| `project/canvas/*` | The infinite canvas: `viewport.js` (single world transform, pan/zoom, screen↔world), `nodes.js` (reference/text/widget nodes, drag, lock, z-order), `edges.js` (one SVG inside the world layer, so edges need no separate projection), `store.js` (debounced per-node persistence), `palette.js` (how things get added). |
+| `project/canvas/*` | The infinite canvas: `viewport.js` (single world transform, pan/zoom, screen↔world), `nodes.js` (reference/text/widget/shape/pages nodes, drag, lock, z-order), `edges.js` (one SVG inside the world layer, so edges need no separate projection), `store.js` (debounced per-node persistence), `palette.js` (how things get added), `captures.js` (the canvas's client for capture.py's queue), `spread.js` + `spread-panel.js` + `spread-layout.js` (portfolio spreads — see below). |
 
 Widgets so far: `title`, `notepad`, `settings`, `exit`, `canvas`, `sidebar`, `folders`, `grid-button`, `folder`, `colourspace`, `similarity`.
 
@@ -294,7 +294,9 @@ Semantics that are easy to get wrong, and must not be "fixed":
 - **`widgets.parent_id`** is the container link. `NULL` = on the grid; non-null = inside that container widget.
 - **Anti-stacking:** containers may hold leaf widgets, never other containers. Nesting is one level deep by design. Enforced server-side in `app.py` and mirrored in the UI's Add Widget lists.
 - **Permanent widgets** (`settings`, `exit`, `canvas`) can be moved but never deleted. `DELETE` returns 400.
-- **`canvas_nodes.kind`** is `reference` | `text` | `widget`. One table rather than three, because the canvas drags, locks and connects all three identically.
+- **`canvas_nodes.kind`** is `reference` | `text` | `widget` | `shape` | `pages`. One table rather than five, because the canvas drags, locks and connects them all identically.
+- **A spread (`kind = "pages"`) owns its pages; a page is never a node.** Layout, orientation, cover, gap and the ordered page list all live in the node's `config`, each page `{ reference_id, fit, crop?, capture_id? }`. An empty slot (`reference_id: null`) is the normal state, and deleting a reference empties its slot rather than removing the page — pagination is the document. `fit` is `contain` or `cover`; stretching is refused by the API. The page geometry is `spread-layout.js` alone (pure, import-free), which `tests/test_spreads.py` runs under node rather than keeping a Python copy. The PDF export (`spreads.py`) streams via PyMuPDF incremental saves, one image in memory at a time.
+- **Pages uploaded onto a spread are own work** (`is_own_work = 1`, via the capture envelope) and are not filed into the project. `GET /api/references` leaves own work out of a *search* unless `own_work` is given; browsing with no query still shows everything.
 - **Canvas positions are world coordinates**, never screen coordinates — the latter are meaningless after a pan.
 - **`is_default` on a folder records origin, not protection.** Default folders (Texture, Colour, Form, Vibe, Fashion, Narrative) are renameable and deletable like any other.
 

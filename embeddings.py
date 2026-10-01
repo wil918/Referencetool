@@ -128,6 +128,15 @@ def add_to_index(ref_id, embedding, metadata):
     collection.add(ids=[ref_id], embeddings=[embedding], metadatas=[metadata])
 
 
+def update_embedding(ref_id, embedding):
+    """Replace a reference's stored vector in place, keeping its existing
+    metadata -- used when a file's bytes changed (currently: rotation) but
+    what it's tagged/titled as hasn't. An upsert rather than remove+add so
+    the metadata survives without being re-supplied here."""
+    collection = get_collection()
+    collection.upsert(ids=[ref_id], embeddings=[embedding])
+
+
 def remove_from_index(ref_id):
     """Drop a reference's vector from the index. Safe to call for an id that
     isn't there (e.g. a reference that never got embedded)."""

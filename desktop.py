@@ -10,15 +10,40 @@ Run with:
 used for the rest of the app).
 """
 import socket
+import subprocess
 import sys
 import threading
 import time
 
 import webview
 
-from app import PORT, app, bootstrap
+from app import PORT, _find_reference, app, bootstrap
+from config import REFERENCES_DIR
 
 HOST = "127.0.0.1"
+
+
+class Api:
+    """Exposed to the page as window.pywebview.api -- the carousel's "Reveal
+    in Finder" button calls window.pywebview.api.reveal(reference_id).
+
+    The one method on this bridge takes an id and resolves the path itself;
+    it never accepts a path from the page. app.py's API deliberately never
+    exposes a reference's filepath (see CLAUDE.md) -- a bridge that trusted a
+    path handed up from JS would reopen exactly that hole, just one process
+    over, and would let the page reveal (or, with a different verb later,
+    touch) any file readable by this process, not just archive references.
+    """
+
+    def reveal(self, reference_id):
+        ref = _find_reference(reference_id) if reference_id else None
+        if not ref:
+            return {"ok": False, "error": "unknown reference"}
+        path = REFERENCES_DIR / ref["filepath"]
+        if not path.exists():
+            return {"ok": False, "error": "file missing"}
+        subprocess.run(["open", "-R", str(path)], check=False)
+        return {"ok": True}
 
 
 def _port_is_listening():
@@ -66,7 +91,7 @@ def main():
     # webview.start() blocks and must run on the main thread on macOS
     # (Cocoa requires the UI to live there) -- so it goes last, not in a
     # thread of its own.
-    webview.create_window("Fashion Reference Library", f"http://{HOST}:{PORT}")
+    webview.create_window("Fashion Reference Library", f"http://{HOST}:{PORT}", js_api=Api())
     webview.start()
 
 

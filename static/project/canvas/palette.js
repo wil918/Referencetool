@@ -60,7 +60,14 @@ const DRAG_THRESHOLD = 4;
 // (200x236), which would leave dead space under a square image.
 const REFERENCE_GHOST_WIDTH = 200;
 
-export function createPalette({ container, viewport, references = [], addNode }) {
+export function createPalette({
+  container,
+  viewport,
+  references = [],
+  addNode,
+  setDrawTool,
+  onDrawToolChange = () => () => {},
+}) {
   let cascade = 0;
 
   const fab = document.createElement("button");
@@ -299,6 +306,83 @@ export function createPalette({ container, viewport, references = [], addNode })
   addSection.appendChild(addRow);
   panel.appendChild(addSection);
 
+  // --- shape tools -------------------------------------------------------
+  //
+  // Not another add-on-click/drag-to-place control: these arm nodes.js's own
+  // draw gesture (createNodes' setDrawTool) rather than adding anything
+  // themselves -- the shape is created by dragging directly on the canvas
+  // once armed (nodes.js's handleDrawPress), at exactly the size and place
+  // it's dragged. Sticky rather than one-shot, so several shapes can be
+  // drawn without reopening this panel each time; clicking the armed tool
+  // again, picking the other one, or Escape all put it down.
+
+  let armedTool = null;
+  const toolButtons = new Map();
+
+  function setArmed(tool) {
+    armedTool = tool;
+    for (const [type, btn] of toolButtons) btn.classList.toggle("is-armed", type === armedTool);
+    setDrawTool(armedTool);
+    // Out of the way once a tool is armed -- the whole point is to now drag
+    // on the canvas this panel is floating over.
+    if (armedTool) {
+      panel.hidden = true;
+      fab.classList.remove("is-open");
+    }
+  }
+
+  function onEscape(event) {
+    if (event.key === "Escape" && armedTool) setArmed(null);
+  }
+  window.addEventListener("keydown", onEscape);
+
+  // The other direction: nodes.js puts a tool down itself (the pages tool
+  // does after drawing one spread), and the button has to stop saying it's
+  // armed when it isn't.
+  const unsubscribeDrawTool = onDrawToolChange((tool) => {
+    if (tool === armedTool) return;
+    armedTool = tool;
+    for (const [type, btn] of toolButtons) btn.classList.toggle("is-armed", type === armedTool);
+  });
+
+  function shapeToolButton(label, shapeType) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn canvas-dock-add canvas-dock-tool";
+    btn.textContent = label;
+    btn.addEventListener("click", () => setArmed(armedTool === shapeType ? null : shapeType));
+    toolButtons.set(shapeType, btn);
+    return btn;
+  }
+
+  const shapeSection = document.createElement("div");
+  shapeSection.className = "canvas-dock-section";
+  const shapeHeading = document.createElement("p");
+  shapeHeading.className = "muted canvas-dock-heading";
+  shapeHeading.textContent = "Draw a shape";
+  shapeSection.appendChild(shapeHeading);
+
+  const shapeRow = document.createElement("div");
+  shapeRow.className = "canvas-dock-add-row";
+  shapeRow.append(shapeToolButton("Rectangle", "rect"), shapeToolButton("Ellipse", "ellipse"));
+  shapeSection.appendChild(shapeRow);
+  panel.appendChild(shapeSection);
+
+  // A portfolio spread is drawn the same way -- arm, then drag out the
+  // region it fills -- so it shares the shape tools' machinery, and only
+  // differs in putting itself down after one (see nodes.js's setDrawTool).
+  const pagesSection = document.createElement("div");
+  pagesSection.className = "canvas-dock-section";
+  const pagesHeading = document.createElement("p");
+  pagesHeading.className = "muted canvas-dock-heading";
+  pagesHeading.textContent = "Draw a region and it fills with A4 pages";
+  pagesSection.appendChild(pagesHeading);
+  const pagesRow = document.createElement("div");
+  pagesRow.className = "canvas-dock-add-row";
+  pagesRow.append(shapeToolButton("Pages", "pages"));
+  pagesSection.appendChild(pagesRow);
+  panel.appendChild(pagesSection);
+
   // --- the reference picker ----------------------------------------------
 
   const refSection = document.createElement("div");
@@ -367,6 +451,8 @@ export function createPalette({ container, viewport, references = [], addNode })
 
   return {
     destroy() {
+      window.removeEventListener("keydown", onEscape);
+      unsubscribeDrawTool();
       panel.remove();
       fab.remove();
     },

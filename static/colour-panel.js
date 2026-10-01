@@ -9,6 +9,8 @@
  * back in the same shape and are rendered the same way: thumbnail, title,
  * score, and the palette that was actually compared.
  */
+import { thumbSrc } from "./shared/cards.js";
+
 const DEBOUNCE_MS = 250; // matches the Project Space sidebar's slider debounce
 
 export function createColourPanel({ onMatches, onFocus }) {
@@ -84,7 +86,7 @@ export function createColourPanel({ onMatches, onFocus }) {
 
   function thumb(ref) {
     const img = document.createElement("img");
-    img.src = `/media/${ref.id}/thumb`;
+    img.src = thumbSrc(ref);
     img.alt = ref.title || "";
     img.loading = "lazy";
     return img;

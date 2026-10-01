@@ -138,6 +138,45 @@ def test_a_non_pdf_is_rejected(client):
     assert db.list_briefs(pid) == []
 
 
+def test_import_passes_the_projects_commitment_range_as_date_context(client):
+    # app.py computes the date context from every imported commitment (see
+    # db.commitments_date_range) and hands it to briefs.analyse -- this is
+    # what lets a bare date in the brief resolve to the right year instead of
+    # being guessed. conftest's stub ignores arguments, so this test installs
+    # its own to actually inspect what app.py called it with.
+    db.create_commitment("c1", "Induction", "2026-09-21T09:00:00", "2026-09-21T11:00:00")
+    db.create_commitment("c2", "Final crit", "2026-10-27T09:00:00", "2026-10-27T12:00:00")
+    pid = make_project(client)
+
+    seen = {}
+
+    def fake_analyse(text, date_context=None):
+        seen["date_context"] = date_context
+        return copy.deepcopy(BRIEF_EXTRACTION)
+
+    with patch("briefs.analyse", side_effect=fake_analyse):
+        resp = import_brief(client, pid)
+    assert resp.status_code == 200, resp.get_json()
+    assert seen["date_context"] == {
+        "start": "2026-09-21", "end": "2026-10-27", "source": "commitments",
+    }
+
+
+def test_import_falls_back_to_the_academic_year_with_no_commitments(client):
+    pid = make_project(client)
+    seen = {}
+
+    def fake_analyse(text, date_context=None):
+        seen["date_context"] = date_context
+        return copy.deepcopy(BRIEF_EXTRACTION)
+
+    with patch("briefs.analyse", side_effect=fake_analyse):
+        resp = import_brief(client, pid)
+    assert resp.status_code == 200, resp.get_json()
+    assert seen["date_context"]["source"] == "academic_year"
+    assert seen["date_context"]["start"] and seen["date_context"]["end"]
+
+
 def test_a_pdf_with_no_text_is_rejected_and_leaves_nothing_behind(client):
     pid = make_project(client)
     doc = fitz.open()
@@ -224,6 +263,54 @@ def test_apply_creates_only_the_accepted_items(client):
     assert len(applied["deliverables"]) == 1
     assert {t["title"] for t in applied["tasks"]} == {"Gather fabric research", "Fabric shop visit"}
     assert applied["discarded"] == ["deliverable:1", "activity:archive-visit"]
+
+
+def test_apply_stores_sequence_and_resolves_a_hard_dependency(client):
+    # SEQUENCE + DEPENDENCIES: a task skeleton's array position is a SOFT
+    # ordering signal (stored as sequence_position for scheduling's earliest-
+    # start bias); depends_on_index is the sparse HARD exception, resolved
+    # into a real task_dependencies edge once every task in the skeleton
+    # actually exists.
+    pid = make_project(client)
+    brief_id = import_brief(client, pid).get_json()["id"]
+
+    payload = {
+        "deliverables": [
+            {
+                "source_key": "part-1",
+                "title": "Part 1 - Research",
+                "due_at": "2026-02-20",
+                "tasks": [
+                    {"title": "Gather fabric research", "est_minutes": 120},
+                    {"title": "Document fabric tests", "est_minutes": 60,
+                     "depends_on_index": 0},
+                    # Points at itself -- must be ignored, not looped.
+                    {"title": "Write up findings", "est_minutes": 30, "depends_on_index": 2},
+                    # Out of range -- must be ignored, not raise.
+                    {"title": "Bind the portfolio", "est_minutes": 30, "depends_on_index": 99},
+                ],
+            }
+        ],
+    }
+    resp = client.post(f"/api/briefs/{brief_id}/apply", json=payload)
+    assert resp.status_code == 200, resp.get_json()
+
+    tasks = client.get(f"/api/tasks?project_id={pid}").get_json()
+    by_title = {t["title"]: t for t in tasks}
+
+    assert by_title["Gather fabric research"]["sequence_position"] == 1
+    assert by_title["Document fabric tests"]["sequence_position"] == 2
+    assert by_title["Write up findings"]["sequence_position"] == 3
+    assert by_title["Bind the portfolio"]["sequence_position"] == 4
+
+    gather_id = by_title["Gather fabric research"]["id"]
+    document_id = by_title["Document fabric tests"]["id"]
+    write_up_id = by_title["Write up findings"]["id"]
+    bind_id = by_title["Bind the portfolio"]["id"]
+
+    assert db.list_task_dependencies(document_id) == [gather_id]
+    assert db.list_task_dependencies(write_up_id) == []  # self-reference ignored
+    assert db.list_task_dependencies(bind_id) == []  # out-of-range ignored
 
 
 def test_apply_with_nothing_selected_creates_nothing(client):

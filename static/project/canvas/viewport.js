@@ -107,6 +107,14 @@ export function createViewport(container, options = {}) {
   // canvas-page.js (nodes.js needs the viewport to already exist), so there
   // is nothing to pass in yet at construction time.
   let marqueeHandler = null;
+  // Same idea, one refusal earlier: set by nodes.js's setDrawHandler while a
+  // shape tool is armed. Drawing a shape is a third kind of thing a press on
+  // empty space can mean, on top of pan and marquee, and it has to outrank
+  // both -- Shift is also how a shape is constrained to a square or circle
+  // while it's being drawn, so if the marquee saw a Shift+press first it
+  // would start a box-selection instead of letting nodes.js's own drag
+  // logic ever see the Shift key at all.
+  let drawHandler = null;
 
   function applyTransform() {
     world.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
@@ -206,6 +214,16 @@ export function createViewport(container, options = {}) {
 
   function onPointerDown(event) {
     if (!event.isPrimary || pan) return;
+
+    // A shape tool is armed: any plain-button press on empty space draws
+    // instead, Shift included -- checked first, ahead of even the marquee
+    // decision below, for the reason drawHandler's own declaration explains.
+    // isEmptySpace is the same test isEmptySpace(event.target) the pan
+    // decision uses further down: a shape is only ever drawn starting from
+    // nothing already there.
+    if (event.button === 0 && drawHandler && isEmptySpace(event.target) && drawHandler(event)) {
+      return;
+    }
 
     // The middle mouse button, or Shift held with the primary button -- the
     // second form exists because not every mouse has a middle button and no
@@ -359,6 +377,14 @@ export function createViewport(container, options = {}) {
     setMarqueeHandler(fn) {
       marqueeHandler = fn || null;
     },
+    /** Claim (or release, with null) first refusal on any plain press on
+     *  empty space, ahead of even setMarqueeHandler's. `fn(event)` returns
+     *  whether it actually claimed this particular press (nodes.js's
+     *  handleDrawPress returns false when no tool is armed), so this can be
+     *  wired once and simply have nothing to do most of the time. */
+    setDrawHandler(fn) {
+      drawHandler = fn || null;
+    },
     /** Notify `fn` on every pan/zoom, starting with the current transform
      *  immediately (so a caller that shows something anchored to a world
      *  point doesn't need a separate first positioning call). Returns an
@@ -371,6 +397,7 @@ export function createViewport(container, options = {}) {
 
     destroy() {
       marqueeHandler = null;
+      drawHandler = null;
       container.removeEventListener("pointerdown", onCapturePointerDown, true);
       container.removeEventListener("pointerdown", onPointerDown);
       container.removeEventListener("pointermove", onPointerMove);

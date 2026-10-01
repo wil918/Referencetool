@@ -20,10 +20,11 @@ import webbrowser
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import quote
 
 import fitz  # PyMuPDF
 from flask import (
-    Flask, abort, jsonify, make_response, request, send_file, send_from_directory,
+    Flask, Response, abort, jsonify, make_response, request, send_file, send_from_directory,
 )
 
 import analyze
@@ -33,11 +34,14 @@ import colour
 import config
 import db
 import embeddings
+import export
 import graph_layout
 import ics_import
 import ingest
 import scheduling
+import spreads
 import style_gen
+import supporting_docs
 import task_ai
 import thumbnails
 from config import ARCHIVE_API_TOKEN
@@ -73,9 +77,9 @@ CONTAINER_WIDGET_TYPES = {"sidebar"}
 # 400 tells the UI its Add Widget list is out of step, where a 200 would leave
 # a phantom deletion on screen until the next reload.
 PERMANENT_WIDGET_TYPES = {"settings", "exit", "canvas"}
-# What a canvas node can be. See db.CANVAS_NODES_SCHEMA for why all three
+# What a canvas node can be. See db.CANVAS_NODES_SCHEMA for why all five
 # share one table.
-CANVAS_NODE_KINDS = {"reference", "text", "widget"}
+CANVAS_NODE_KINDS = {"reference", "text", "widget", "shape", "pages"}
 
 # In-memory only -- an analysis conversation is a live chat with Claude, not
 # library data, so it doesn't belong in SQLite and doesn't need to survive a
@@ -105,11 +109,28 @@ def _extension_origin():
 
 
 def _capture_auth_ok():
-    """True unless a token is configured and the request didn't present it."""
+    """True unless a token is configured and the request didn't present it.
+
+    A browser extension always has to prove it holds the token, even calling
+    from this same Mac -- it's a separate trust domain (any extension the
+    user has installed could otherwise write into the archive with no
+    limit), so "this machine" is deliberately not a substitute for it here,
+    which is what test_token_is_enforced_when_configured pins down. Anything
+    else that reaches these routes -- this app's own pages (the canvas's
+    file-drop, same-origin) and the phone, which is genuinely off-machine --
+    gets the same loopback rule the rest of the API already uses
+    (_guard_api_when_exposed below): loopback is trusted, and a non-loopback
+    caller needs the token, which the phone's own fetch wrapper already
+    attaches.
+    """
     if not ARCHIVE_API_TOKEN:
         return True
     header = request.headers.get("Authorization", "")
-    return header == f"Bearer {ARCHIVE_API_TOKEN}"
+    if header == f"Bearer {ARCHIVE_API_TOKEN}":
+        return True
+    if _extension_origin():
+        return False
+    return _client_is_loopback()
 
 
 @app.after_request
@@ -236,6 +257,10 @@ def _ref_summary(ref, match_label=None):
         "description": ref["description"],
         "ext": Path(ref["filepath"]).suffix.lower(),
         "is_own_work": ref["is_own_work"],
+        # Rides along so every thumbnail <img> can be cache-busted with it --
+        # otherwise the browser happily keeps showing a stale orientation
+        # after a rotate rewrites the file at the same URL.
+        "content_hash": ref["content_hash"],
     }
     if match_label:
         summary["match_label"] = match_label
@@ -296,9 +321,16 @@ def api_list_references():
     reference is included if ANY selected signal matches (OR), but results
     stay ordered by semantic relevance throughout, since that ranking is
     computed for the whole library regardless of which signals are active.
+
+    Own work is left out of a search unless asked for (`own_work=any` or
+    `only`): a search is looking for research, and a portfolio spread puts
+    thirty of the user's own pages into the archive at a time. Browsing with
+    no query still shows everything, so something just added never seems to
+    have vanished.
     """
     query = (request.args.get("q") or "").strip()
-    own_work = request.args.get("own_work", "any")  # any | only | exclude
+    # any | only | exclude
+    own_work = request.args.get("own_work") or ("exclude" if query else "any")
     # Comma-separated, e.g. "image,pdf" -- checking multiple type boxes is an OR filter.
     file_types = {t for t in request.args.get("type", "").split(",") if t}
     search_by = {s for s in request.args.get("search_by", "distance").split(",") if s}
@@ -383,6 +415,21 @@ def api_delete_reference(ref_id):
     embeddings.remove_from_index(ref["id"])
     db.delete_reference(ref["id"])
     return jsonify({"ok": True, "id": ref["id"]})
+
+
+@app.post("/api/references/<ref_id>/rotate")
+def api_rotate_reference(ref_id):
+    """Rotate one image reference 90 degrees clockwise. Used by both the
+    single-reference "Edit reference" control and the archive selection
+    toolbar's bulk rotate, which just calls this once per selected id."""
+    ref = _find_reference(ref_id)
+    if not ref:
+        abort(404)
+    if ref["type"] != "image":
+        return jsonify({"error": "Only images can be rotated."}), 400
+
+    updated = ingest.rotate_reference(ref["id"])
+    return jsonify(_ref_summary(updated))
 
 
 def _project_summary(project, preview_limit=PROJECT_BAR_PREVIEW_LIMIT):
@@ -966,6 +1013,10 @@ def api_replace_canvas(project_id):
     for node in nodes:
         if node.get("kind") not in CANVAS_NODE_KINDS:
             return jsonify({"error": f"unknown node kind: {node.get('kind')!r}"}), 400
+        if node["kind"] == "pages":
+            error = spreads.validate_config(node.get("config"))
+            if error:
+                return jsonify({"error": error}), 400
 
     node_ids = {n["id"] for n in nodes}
     edges = [{**e, "id": e.get("id") or str(uuid.uuid4())} for e in edges]
@@ -992,6 +1043,12 @@ def api_create_canvas_node(project_id):
         if not ref:
             return jsonify({"error": "reference not found"}), 404
         reference_id = ref["id"]
+    elif kind == "pages":
+        error = spreads.validate_config(body.get("config"))
+        if error:
+            return jsonify({"error": error}), 400
+        # A spread's references live per page, inside config.
+        reference_id = None
 
     node_id = str(uuid.uuid4())
     db.create_canvas_node(
@@ -1015,12 +1072,17 @@ def api_create_canvas_node(project_id):
 def api_update_canvas_node(node_id):
     """Update only the fields that were sent -- most calls are a drag, and
     carry nothing but x and y."""
-    if not db.get_canvas_node(node_id):
+    node = db.get_canvas_node(node_id)
+    if not node:
         abort(404)
     body = request.get_json(force=True, silent=True) or {}
     fields = {k: v for k, v in body.items() if k in db.CANVAS_NODE_PATCH_COLUMNS}
     if "kind" in fields and fields["kind"] not in CANVAS_NODE_KINDS:
         return jsonify({"error": f"unknown node kind: {fields['kind']!r}"}), 400
+    if fields.get("kind", node["kind"]) == "pages" and ("config" in fields or "kind" in fields):
+        error = spreads.validate_config(fields.get("config", node["config"]))
+        if error:
+            return jsonify({"error": error}), 400
     db.update_canvas_node(node_id, **fields)
     return jsonify(db.get_canvas_node(node_id))
 
@@ -1031,6 +1093,50 @@ def api_delete_canvas_node(node_id):
         abort(404)
     db.delete_canvas_node(node_id)
     return jsonify({"ok": True, "id": node_id})
+
+
+@app.get("/api/canvas/nodes/<node_id>/export.pdf")
+def api_export_spread(node_id):
+    """A portfolio spread as a print-ready PDF: true A4 pages, in the spread's
+    order, streamed as it's built (spreads.export_pdf says how). An empty slot
+    -- or an upload that hasn't finished ingesting, or an image since deleted
+    from the archive -- is a blank page, never a skipped one."""
+    node = db.get_canvas_node(node_id)
+    if not node:
+        abort(404)
+    if node["kind"] != "pages":
+        return jsonify({"error": "only a spread of pages can be exported as a PDF"}), 400
+    config_ = node["config"] or {}
+    entries = config_.get("pages") or []
+    if not entries:
+        return jsonify({"error": "this spread has no pages"}), 400
+
+    # Resolved up front, while the request is live: the generator below runs
+    # after this view has returned.
+    pages = []
+    for entry in entries:
+        ref = db.get_reference(entry.get("reference_id")) if entry.get("reference_id") else None
+        path = _resolve_ref_path(ref) if ref else None
+        if path is not None and (path.suffix.lower() not in ingest.IMAGE_EXTS or not path.exists()):
+            path = None
+        pages.append({"path": path, "fit": entry.get("fit"), "crop": entry.get("crop")})
+
+    project = db.get_project(node["project_id"])
+    title = project["title"] if project else "Portfolio"
+    orientation = config_.get("orientation", "portrait")
+    return Response(
+        spreads.export_pdf(pages, orientation=orientation, title=title),
+        mimetype="application/pdf",
+        headers={"Content-Disposition": _attachment_header(f"{title} - pages.pdf")},
+    )
+
+
+def _attachment_header(filename):
+    """Content-Disposition for a download whose name may not be ASCII -- a
+    project called "Été" still downloads as Été - pages.pdf, with a plain
+    fallback for anything that can't read the encoded form."""
+    fallback = "".join(c if c.isascii() and c not in '"\\' else "_" for c in filename)
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename)}"
 
 
 @app.post("/api/projects/<project_id>/canvas/edges")
@@ -1125,7 +1231,7 @@ def api_concept_analysis(project_id):
     _require_project(project_id)
     body = request.get_json(force=True, silent=True) or {}
     try:
-        writeup, messages, reference_map = analyze.start_concept_analysis(
+        writeup, messages, reference_map, next_actions = analyze.start_concept_analysis(
             project_id,
             reference_ids=body.get("reference_ids") or [],
             notes=body.get("notes") or [],
@@ -1139,7 +1245,12 @@ def api_concept_analysis(project_id):
 
     analysis_id = str(uuid.uuid4())
     _analysis_sessions[analysis_id] = messages
-    return jsonify({"analysis_id": analysis_id, "writeup": writeup, "references": reference_map})
+    return jsonify({
+        "analysis_id": analysis_id,
+        "writeup": writeup,
+        "references": reference_map,
+        "next_actions": next_actions,
+    })
 
 
 def _analysis_summary(a):
@@ -1309,6 +1420,28 @@ def media(ref_id):
     return send_file(path, mimetype=mime or "application/octet-stream")
 
 
+@app.get("/media/<ref_id>/download")
+def media_download(ref_id):
+    """Same bytes as GET /media/<ref_id>, but as a named attachment -- a
+    browser save (or a WKWebView one; see export.py) lands as "Balenciaga
+    1967.jpg", not a UUID. This is the one download mechanism every other
+    reference-export path in the UI (drag-out, bulk zip) falls back to, so
+    it has to work everywhere on its own with no client-side help."""
+    ref = _find_reference(ref_id)
+    if not ref:
+        abort(404)
+    path = _resolve_ref_path(ref)
+    if not path.exists():
+        abort(404)
+    mime, _ = mimetypes.guess_type(str(path))
+    return send_file(
+        path,
+        mimetype=mime or "application/octet-stream",
+        as_attachment=True,
+        download_name=export.download_filename(ref),
+    )
+
+
 @app.get("/media/<ref_id>/thumb")
 def media_thumb(ref_id):
     ref = _find_reference(ref_id)
@@ -1348,6 +1481,49 @@ def media_thumb(ref_id):
             abort(404)
 
     abort(404)  # plain text references have no image thumbnail
+
+
+@app.post("/api/export")
+def api_export():
+    """Zip of the given reference ids, in the given order -- the Archive and
+    project grids' bulk "Export as ZIP" toolbar action.
+
+    Submitted as a real form POST to a hidden iframe rather than fetched with
+    JS and turned into a Blob, so the browser's own save flow handles the
+    response exactly like /media/<id>/download does -- the same mechanism
+    that works in WKWebView, just carrying a batch instead of one id. `ids`
+    therefore usually arrives as a JSON-encoded form field; a plain JSON body
+    works too; either way order is preserved exactly as given, since that's
+    what the client determined (on-screen order) and the zip's numbering
+    depends on it.
+    """
+    ids = None
+    body = request.get_json(silent=True)
+    if isinstance(body, dict):
+        ids = body.get("ids")
+    if ids is None:
+        raw = request.form.get("ids")
+        ids = json.loads(raw) if raw else None
+    if not ids:
+        return jsonify({"error": "no references selected"}), 400
+
+    refs = [ref for ref in (_find_reference(i) for i in ids) if ref]
+    if not refs:
+        return jsonify({"error": "none of the selected references were found"}), 404
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    export.write_zip(tmp_path, refs, _resolve_ref_path)
+
+    response = send_file(
+        tmp_path,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="references.zip",
+    )
+    response.call_on_close(lambda: tmp_path.unlink(missing_ok=True))
+    return response
 
 
 @app.post("/api/add-file")
@@ -1397,6 +1573,103 @@ def api_add_text():
     except ingest.DuplicateReferenceError as e:
         return jsonify({"error": str(e), "duplicate": True}), 409
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@app.post("/api/pdf-info")
+def api_pdf_info():
+    """Page count for a PDF about to be split -- lets the Add tab show it
+    before the user commits to a page range. Each page becomes a Claude
+    tagging call plus a CLIP embedding, so this is worth knowing upfront."""
+    if "file" not in request.files:
+        return jsonify({"error": "no file uploaded"}), 400
+    upload = request.files["file"]
+    if Path(upload.filename or "").suffix.lower() != ".pdf":
+        return jsonify({"error": "not a PDF"}), 400
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        upload.save(tmp.name)
+        tmp_path = Path(tmp.name)
+    try:
+        return jsonify({"pages": ingest.pdf_page_count(tmp_path)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@app.post("/api/split-pdf")
+def api_split_pdf():
+    """Split a PDF into one reference per page instead of the whole document
+    as one reference -- a lookbook, scanned magazine or catalogue is more
+    useful with each page tagged, embedded and findable on its own.
+
+    Rendering is synchronous (tens of milliseconds a page); tagging and
+    embedding are not, so each rendered page is queued through the existing
+    capture pipeline (capture.py) rather than blocking this request or adding
+    a second ingest path. The original PDF itself is never kept -- only the
+    rendered pages become references.
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "no file uploaded"}), 400
+    upload = request.files["file"]
+    original_filename = upload.filename or "document.pdf"
+    if Path(original_filename).suffix.lower() != ".pdf":
+        return jsonify({"error": "not a PDF"}), 400
+
+    title = request.form.get("title") or Path(original_filename).stem
+    notes = request.form.get("notes") or None
+    is_own_work = request.form.get("own_work") == "true"
+    range_str = request.form.get("range") or ""
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        upload.save(tmp.name)
+        tmp_path = Path(tmp.name)
+
+    rendered = []
+    try:
+        page_count = ingest.pdf_page_count(tmp_path)
+        try:
+            page_indices = ingest.parse_page_range(range_str, page_count)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        if not page_indices:
+            return jsonify({"error": "no pages selected"}), 400
+
+        rendered = ingest.render_pdf_pages(tmp_path, page_indices)
+        width = len(str(page_count))
+        capture_ids = []
+        for page_number, png_path in rendered:
+            envelope = {
+                "type": "image",
+                "is_own_work": is_own_work,
+                "metadata": {
+                    "title": f"{title} — page {page_number:0{width}d}",
+                    "source_label": original_filename,
+                },
+                "metadata_provenance": [{
+                    "field": "title",
+                    "value": f"{title} — page {page_number:0{width}d}",
+                    "source": "pdf-split",
+                }],
+                "user_note": notes,
+            }
+            row = capture.accept(envelope, file_path=png_path)
+            capture_ids.append(row["id"])
+
+        return jsonify({
+            "queued": len(capture_ids),
+            "total_pages": page_count,
+            "capture_ids": capture_ids,
+        }), 202
+    except Exception as e:
+        # Anything rendered but not yet handed to capture.accept (which moves
+        # its file into PENDING_DIR) would otherwise leak in the system temp
+        # dir -- accepted pages are already gone from `rendered`'s paths.
+        for _, png_path in rendered:
+            Path(png_path).unlink(missing_ok=True)
         return jsonify({"error": str(e)}), 500
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -2026,7 +2299,13 @@ def api_import_brief(project_id):
         if not text:
             _restore_or_remove(pdf_path, prior_pdf)
             return jsonify({"error": "couldn't read any text out of that PDF"}), 400
-        extraction = briefs.assign_source_keys(briefs.analyse(text))
+        # This project's own timetable, if any has been imported, anchors a
+        # bare date's year -- see briefs.date_context. Commitments carry no
+        # project_id (one shared calendar), so this is every commitment's
+        # span; a project with nothing imported yet falls back to the current
+        # academic year rather than to nothing.
+        ctx = briefs.date_context(db.commitments_date_range())
+        extraction = briefs.assign_source_keys(briefs.analyse(text, date_context=ctx))
     except briefs.BriefExtractionError as e:
         # A parse failure is a failure, not an empty result -- say so, say why,
         # and let the user retry. The raw reply is logged for inspection, never
@@ -2218,9 +2497,21 @@ def api_apply_brief(brief_id):
         deliverable_ids.append(did)
         created["deliverables"].append({"id": did, "title": title})
 
-        for i, t in enumerate(d.get("tasks") or []):
+        # task_ids is index-aligned with d["tasks"] (None where a blank title
+        # skipped creation) so depends_on_index -- a HARD dependency the
+        # extraction names by position in the SAME array -- can be resolved
+        # into a real edge once every task in the skeleton actually exists.
+        # sequence_position is the SOFT signal: 1-based order-of-happening
+        # within this deliverable, which scheduling._earliest_start_bias reads
+        # to keep a late-sequence task (e.g. "mount the final piece") from
+        # being placed in the project's first week just because nothing
+        # formally blocks it -- see CLAUDE.md-adjacent brief session notes.
+        task_ids = []
+        raw_tasks = d.get("tasks") or []
+        for i, t in enumerate(raw_tasks):
             t_title = (t.get("title") or "").strip()
             if not t_title:
+                task_ids.append(None)
                 continue
             tid = str(uuid.uuid4())
             est = t.get("est_minutes")
@@ -2234,8 +2525,26 @@ def api_apply_brief(brief_id):
                 est_minutes_source="generated" if est else None,
                 brief_id=brief_id,
                 source_key=f"{source_key}#t{i}" if source_key else None,
+                sequence_position=i + 1,
             )
+            task_ids.append(tid)
             created["tasks"].append({"id": tid, "title": t_title})
+
+        for i, t in enumerate(raw_tasks):
+            tid = task_ids[i]
+            dep_idx = t.get("depends_on_index")
+            if tid is None or not isinstance(dep_idx, int) or dep_idx == i:
+                continue
+            if not (0 <= dep_idx < len(task_ids)) or task_ids[dep_idx] is None:
+                continue
+            depends_on = task_ids[dep_idx]
+            # These are all fresh tasks from the same skeleton, so a cycle
+            # here would mean the model's own depends_on_index values pointed
+            # at each other -- caught the same way the interactive dependency
+            # route catches a bad hand-added edge (db.add_task_dependency
+            # trusts its caller to have checked first).
+            if db.task_dependency_cycle(tid, depends_on) is None:
+                db.add_task_dependency(tid, depends_on)
 
     # Key dates: a date tied to a deliverable sets that deliverable's due date;
     # any other becomes a plain commitment on the calendar.
@@ -2308,6 +2617,148 @@ def api_apply_brief(brief_id):
         "removed": removed,
         "brief": db.get_brief(brief_id),
     })
+
+
+# --- Schedule: supporting documents --------------------------------------------
+#
+# A project may carry several of these alongside its one brief -- a workshop
+# and materials list, a reading list, a technical handout. Same attach / parse
+# / propose / review / apply shape as briefs.py, but see supporting_docs.py's
+# module docstring for the two things it does differently (group-split dates,
+# deadlined preparation rather than a task skeleton) and the one thing it
+# doesn't (re-import as a diff).
+
+_SUPPORTING_DOC_EXTENSIONS = (".pdf", ".docx")
+
+
+def _supporting_doc_path(doc_id, filename):
+    suffix = Path(filename or "").suffix.lower()
+    if suffix not in _SUPPORTING_DOC_EXTENSIONS:
+        suffix = ".pdf"
+    return config.SUPPORTING_DOCS_DIR / f"{doc_id}{suffix}"
+
+
+@app.post("/api/projects/<project_id>/supporting-documents")
+def api_import_supporting_document(project_id):
+    _require_project(project_id)
+    if "file" not in request.files:
+        return jsonify({"error": "no file uploaded"}), 400
+    upload = request.files["file"]
+    filename = upload.filename or ""
+    if not filename.lower().endswith(_SUPPORTING_DOC_EXTENSIONS):
+        return jsonify({"error": "a supporting document must be a PDF or .docx"}), 400
+
+    doc_id = str(uuid.uuid4())
+    doc_path = _supporting_doc_path(doc_id, filename)
+    upload.save(doc_path)
+
+    try:
+        text = supporting_docs.extract_text(doc_path)
+        if not text:
+            doc_path.unlink(missing_ok=True)
+            return jsonify({"error": "couldn't read any text out of that document"}), 400
+        # Exactly the context briefs.py uses (see its own comment) -- computed
+        # once here and shared by both extractors so a bare date resolves the
+        # same way whichever kind of document it came from.
+        ctx = briefs.date_context(db.commitments_date_range())
+        cohort_group = db.get_schedule_settings().get("cohort_group")
+        commitment_dates = {c["start"][:10] for c in db.list_commitments()}
+        extraction = supporting_docs.analyse(
+            text, date_context=ctx, cohort_group=cohort_group, commitment_dates=commitment_dates,
+        )
+    except briefs.BriefExtractionError as e:
+        doc_path.unlink(missing_ok=True)
+        print(f"supporting document extraction failed ({e.reason}): {e.raw[:2000]!r}")
+        return jsonify({"error": str(e), "reason": e.reason, "retryable": True}), 502
+    except Exception as e:
+        doc_path.unlink(missing_ok=True)
+        return jsonify({"error": f"couldn't read the document: {e}"}), 500
+
+    db.create_supporting_document(
+        doc_id, project_id, filename=doc_path.name,
+        extracted={"extraction": extraction, "applied": None},
+    )
+    return jsonify(db.get_supporting_document(doc_id))
+
+
+@app.get("/api/projects/<project_id>/supporting-documents")
+def api_list_supporting_documents(project_id):
+    _require_project(project_id)
+    return jsonify(db.list_supporting_documents(project_id))
+
+
+@app.get("/api/supporting-documents/<doc_id>")
+def api_get_supporting_document(doc_id):
+    doc = db.get_supporting_document(doc_id)
+    if not doc:
+        abort(404)
+    return jsonify(doc)
+
+
+@app.get("/api/supporting-documents/<doc_id>/file")
+def api_supporting_document_file(doc_id):
+    doc = db.get_supporting_document(doc_id)
+    if not doc:
+        abort(404)
+    path = _supporting_doc_path(doc_id, doc["filename"])
+    if not path.exists():
+        abort(404)
+    return send_file(path)
+
+
+@app.delete("/api/supporting-documents/<doc_id>")
+def api_delete_supporting_document(doc_id):
+    doc = db.get_supporting_document(doc_id)
+    if not doc:
+        abort(404)
+    db.delete_supporting_document(doc_id)
+    _supporting_doc_path(doc_id, doc["filename"]).unlink(missing_ok=True)
+    return jsonify({"ok": True, "id": doc_id})
+
+
+@app.post("/api/supporting-documents/<doc_id>/apply")
+def api_apply_supporting_document(doc_id):
+    """Turn the reviewed, accepted preparation tasks into real tasks.
+
+    The body is what the review sheet approved:
+
+        {"preparation_tasks": [{"source_key", "title", "description",
+                                 "due_date", "deliverable_id"}]}
+
+    Sessions never create anything -- see supporting_docs.py's module
+    docstring: the session itself is already a commitment (or the brief's own
+    concern), and only what has to be gathered or done beforehand becomes a
+    task, with its deadline set to the accepted due_date.
+    """
+    doc = db.get_supporting_document(doc_id)
+    if not doc:
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    project_id = doc["project_id"]
+
+    created = {"tasks": []}
+    for t in body.get("preparation_tasks") or []:
+        title = (t.get("title") or "").strip()
+        if not title:
+            continue
+        tid = str(uuid.uuid4())
+        db.create_task(
+            tid, title, project_id=project_id,
+            deliverable_id=(t.get("deliverable_id") or None),
+            description=(t.get("description") or None),
+            deadline=(t.get("due_date") or None),
+            source_key=(t.get("source_key") or None),
+        )
+        created["tasks"].append({"id": tid, "title": title})
+
+    envelope = doc["extracted"] or {}
+    envelope["applied"] = {
+        "at": datetime.now().isoformat(timespec="seconds"),
+        "tasks": created["tasks"],
+    }
+    db.update_supporting_document(doc_id, extracted=envelope)
+
+    return jsonify({"ok": True, "created": created, "document": db.get_supporting_document(doc_id)})
 
 
 # --- Schedule: locations -------------------------------------------------------
@@ -3254,7 +3705,15 @@ def api_create_capture():
     try:
         if "file" in request.files:
             envelope = _parse_envelope(request.form.get("capture"))
-            payload, code = _accept_one(envelope, upload=request.files["file"])
+            upload = request.files["file"]
+            # A page going onto a portfolio spread asks how it will print, so
+            # a low-resolution or oddly-proportioned page is flagged the moment
+            # it's uploaded rather than when the PDF comes back soft. Opt-in:
+            # the extension never sends `print`, and its response is unchanged.
+            check = spreads.inspect_upload(upload, envelope["print"]) if envelope.get("print") else None
+            payload, code = _accept_one(envelope, upload=upload)
+            if check:
+                payload["print"] = check
         else:
             body = request.get_json(force=True, silent=True) or {}
             envelope = _parse_envelope(body.get("capture", body))
