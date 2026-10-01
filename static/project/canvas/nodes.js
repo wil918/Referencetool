@@ -235,6 +235,12 @@ export function createNodes({
   function size(entry) {
     entry.el.style.width = `${entry.node.w}px`;
     entry.el.style.height = `${entry.node.h}px`;
+    // Only read while content-visibility is actually skipping this node's
+    // rendering (style.css scopes that to reference/text kinds) -- harmless
+    // to set on a widget node too, where nothing consults it. Kept here
+    // rather than written once at creation so a resize updates it the same
+    // way it already updates width/height.
+    entry.el.style.containIntrinsicSize = `${entry.node.w}px ${entry.node.h}px`;
   }
 
   /** Redraw only the connections touching this node. */

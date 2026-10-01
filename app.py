@@ -39,7 +39,8 @@ import ingest
 import scheduling
 import style_gen
 import task_ai
-from config import ARCHIVE_API_TOKEN, REFERENCES_DIR
+import thumbnails
+from config import ARCHIVE_API_TOKEN
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 
@@ -219,7 +220,11 @@ def _phone_completed_at():
 
 
 def _resolve_ref_path(ref):
-    return REFERENCES_DIR / ref["filepath"]
+    # config.REFERENCES_DIR, not a name imported from it -- tests monkeypatch
+    # the attribute on the module at fixture time, after app.py has already
+    # been imported, so a name bound at import time would stay pointed at
+    # whatever the real default was and silently read the wrong archive.
+    return config.REFERENCES_DIR / ref["filepath"]
 
 
 def _ref_summary(ref, match_label=None):
@@ -368,7 +373,7 @@ def api_delete_reference(ref_id):
 
     path = _resolve_ref_path(ref)
     if path.exists():
-        trash_dir = REFERENCES_DIR.parent / DELETED_DIR_NAME
+        trash_dir = config.REFERENCES_DIR.parent / DELETED_DIR_NAME
         trash_dir.mkdir(parents=True, exist_ok=True)
         destination = trash_dir / path.name
         if destination.exists():
@@ -1315,8 +1320,23 @@ def media_thumb(ref_id):
     ext = path.suffix.lower()
 
     if ext in ingest.IMAGE_EXTS:
-        mime, _ = mimetypes.guess_type(str(path))
-        return send_file(path, mimetype=mime or "image/jpeg")
+        try:
+            thumb_path, mime = thumbnails.thumbnail_for(path, ref.get("content_hash"))
+        except Exception:
+            # A file Pillow can't decode is rare but not a 404 -- fall back
+            # to the original exactly like before this cache existed.
+            mime, _ = mimetypes.guess_type(str(path))
+            return send_file(path, mimetype=mime or "image/jpeg")
+        # The cache key already *is* the bytes' identity, so the ETag is
+        # free and exact -- no need for Flask's default stat-based one, and
+        # max-age can be a year: the file at this path never changes under
+        # it, only a new path (new hash, new version) replaces it.
+        response = make_response(
+            send_file(thumb_path, mimetype=mime, etag=False, conditional=False)
+        )
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        response.set_etag(thumb_path.stem)
+        return response.make_conditional(request)
 
     if ext == ".pdf":
         try:

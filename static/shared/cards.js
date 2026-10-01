@@ -21,6 +21,12 @@ export function makeCard(ref, onClick) {
   // Always try a thumbnail first (works for images and PDFs); plain-text
   // references 404 on /thumb, so fall back to the text placeholder card.
   const img = document.createElement("img");
+  img.loading = "lazy";
+  img.decoding = "async";
+  // CSS already reserves the box (aspect-ratio: 1/1 on .card img, or the
+  // canvas node's flex fill) before this ever loads, so lazy loading can't
+  // collapse the layout -- the two attributes above just stop a grid of
+  // hundreds of cards decoding all of them at once.
   img.src = `/media/${ref.id}/thumb`;
   img.alt = ref.title;
   img.onerror = () => {

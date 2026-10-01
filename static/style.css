@@ -3244,6 +3244,22 @@ body.project-shell .project-detail-heading-row { padding-right: 3.25rem; }
 .canvas-node.is-selected { box-shadow: var(--raise-md), 0 0 0 2px var(--accent-soft); }
 .canvas-node.is-locked.is-selected { box-shadow: var(--press-sm), 0 0 0 2px var(--accent-soft); }
 
+/* Off-screen nodes skip rendering entirely -- most of a large canvas, at any
+   one moment. contain-intrinsic-size (set alongside width/height in
+   nodes.js's size(), so a resize keeps it current) is what stops the
+   browser collapsing a skipped node's box to nothing, which is what would
+   make scrolling past one jump. Neither the marquee nor the edge layer read
+   the DOM to find a node's box (nodes.js's own x/y/w/h model, always) so
+   culling paint here can't desync either of them.
+   Widget nodes are excluded: scene-host.js already pauses their Three.js
+   scenes off-screen, which is their own equivalent of this fix, and a live
+   WebGL canvas under content-visibility is untested territory this change
+   doesn't need to enter. */
+.canvas-node-reference,
+.canvas-node-text {
+  content-visibility: auto;
+}
+
 .canvas-node-body {
   width: 100%;
   height: 100%;

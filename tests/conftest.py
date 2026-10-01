@@ -78,6 +78,11 @@ def archive(tmp_path, monkeypatch):
     # at the temp archive too -- otherwise those look in the real library
     # while ingest writes to the temp one.
     monkeypatch.setattr(config, "REFERENCES_DIR", tmp_path / "references")
+    # Same reasoning, for thumbnails.py's cache -- a test that generates one
+    # must not write into (or read a stale hit from) the real archive's cache.
+    thumbnails_dir = tmp_path / "thumbnails"
+    thumbnails_dir.mkdir()
+    monkeypatch.setattr(config, "THUMBNAILS_DIR", thumbnails_dir)
     db.init_db()
 
     stubs = [
