@@ -126,22 +126,17 @@ def archive(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def client(archive, monkeypatch):
+def client(archive):
     """Flask test client bound to the throwaway archive.
 
-    app.py does `from config import REFERENCES_DIR` -- a name binding
-    frozen at first import, not a live read of config.REFERENCES_DIR -- so
-    the archive fixture's monkeypatch of the latter only reaches app.py's
-    file-resolving routes (/media, /api/export, reference delete) on the
-    very first test in the whole run to request this fixture; every test
-    after that would silently resolve paths against that first test's
-    already-torn-down tmp_path. Patched again here, directly on the
-    module (which may already be cached in sys.modules from an earlier
-    test), so every test gets its own archive regardless of import order.
+    Needs no REFERENCES_DIR patch of its own: app.py's file-resolving routes
+    (/media, /api/export, reference delete) read config.REFERENCES_DIR live
+    rather than a name bound at import time, so the archive fixture's own
+    monkeypatch of that attribute already reaches them correctly on every
+    test, regardless of import order.
     """
     import app as flask_app
 
-    monkeypatch.setattr(flask_app, "REFERENCES_DIR", archive / "references")
     flask_app.app.config["TESTING"] = True
     with flask_app.app.test_client() as c:
         yield c
