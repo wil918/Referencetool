@@ -1823,6 +1823,198 @@ leaves no orphans.
 
 ---
 
+### Session 15d — Year anchoring, task ordering, supporting documents
+
+**Delivers:** dates resolved against what the app already knows, tasks that arrive in a defensible order, and supplementary documents parsed alongside a brief.
+
+**Model:** Sonnet 5, `high` · 3–4 h · 280–380k tokens · ~1 window
+
+````
+Read briefs.py in full, the brief extraction prompt, db.py's TASKS and
+TASK_DEPENDENCIES schema, and scheduling.py's scoring first.
+
+Three faults, found by importing a real brief.
+
+1. THE YEAR IS GUESSED WHEN IT SHOULD BE KNOWN. A real 2026 brief extracted as
+   2025-10-26 and 2025-10-27. Briefs give bare dates -- "Monday 26th October" --
+   and the model resolves the year from nothing.
+
+   The app already knows. That project's imported commitments run 21 September
+   to 27 October 2026. Pass that range into the extraction as explicit context
+   and instruct that bare dates resolve inside or near it.
+
+   Then VALIDATE rather than trust: any extracted date falling outside the
+   project's commitment range by more than a month is suspect. Do not silently
+   correct it -- surface it in the review sheet as needing attention, with the
+   range it was checked against. A wrong year that imports quietly is worse
+   than one flagged, because every downstream deadline inherits it.
+
+   Where a project has no commitments to anchor against, say so and fall back
+   to the current academic year rather than to nothing.
+
+2. TASKS ARRIVE UNORDERED, SO SUMMARY WORK GETS SCHEDULED FIRST. There are
+   zero rows in task_dependencies against thirty brief-created tasks, because
+   the extraction never asked for ordering. "Create hero look page -- highlight
+   strongest/final outcome" was placed immediately after the briefing, when by
+   its nature it cannot be done until there are outcomes to select from.
+
+   The scheduler is not at fault: given no dependency and a distant deadline, a
+   short easy task correctly scores well. The information was never captured.
+
+   Ask the extraction for two things:
+
+     SEQUENCE. For each deliverable, the order its tasks actually happen in.
+     This is far more reliable from a model than a dependency graph, and a
+     portfolio chapter genuinely has one: research, develop, select, mount.
+
+     DEPENDENCIES, but only where real. A task that cannot start until another
+     finishes. Be sparing -- chaining everything serialises work that could run
+     in parallel and the scheduler will then refuse to fill days.
+
+   Turn sequence into a SOFT EARLIEST START rather than a hard chain: a task
+   late in its deliverable's sequence should not be placed in the project's
+   first week even when nothing formally blocks it. Derive it from position in
+   the sequence across the project's span, and let it bias placement without
+   making the schedule brittle. A hard dependency is a promise the brief did
+   not make; an earliest start is the shape of the work.
+
+   Surface both in the review sheet, editable before anything is applied.
+
+3. SUPPORTING DOCUMENTS. A brief rarely arrives alone. A workshop and materials
+   list, a reading list, a technical handout -- each generates real preparation
+   work with a hard date.
+
+   Let a project carry supplementary documents alongside its brief: attach,
+   parse, propose, review, apply, through the path session 15 already built.
+   Accept .docx as well as PDF.
+
+   Two things they do that a brief does not:
+
+     THEY ARE OFTEN SPLIT BY GROUP. "Groups 1 & 2: Monday 21st September.
+     Groups 3 & 4: Wednesday 23rd." Reconcile against the user's group setting
+     from session 15b and propose only their date. Where the document's group
+     names do not match the timetable's, ask rather than guess.
+
+     THEY PRODUCE DEADLINED PREPARATION. "Bring at least 3 artefacts", "bring
+     your Construction toile from first year", a list of specific media -- these
+     are tasks due before a session that already exists as a commitment. This
+     is exactly session 15's "implies preparation" branch: the workshop itself
+     is already in the timetable and must not become a task; what you must
+     gather beforehand must.
+
+     A materials list is one task per thing to obtain, not one task called
+     "gather materials" -- you will acquire them at different times and in
+     different places, and some you already own.
+
+Tests: a brief with bare dates resolves into the project's commitment year; a
+date outside that range is flagged, not corrected; a terminal task is never
+placed in the first week of a project; a materials list produces separate
+deadlined tasks; a group-split document proposes only the user's group's date.
+````
+
+**Exit criteria:** years resolve from the timetable, summary work cannot land on day one, and a workshop handout produces the right preparation tasks against the session already in the calendar.
+
+---
+
+### Session 15e — Concept analysis as curation, not critique
+
+**Delivers:** an analysis that reads the clusters already in the work, names what binds them, and offers lateral directions to extend them — instead of auditing references against a brief.
+
+**Model:** Sonnet 5, `high` · 3–4 h · 250–350k tokens · ~1 window
+
+````
+Read analyze.py's _build_concept_prompt and start_concept_analysis, the routes
+/api/projects/<pid>/similarity/graph and /api/projects/<pid>/colour/map,
+graph_layout.py's clustering, and db.py's deliverable and task queries first.
+
+THE PREMISE IS WRONG, not just the tone. The prompt at analyze.py:379 asks for
+"the single reference doing the least argumentative work -- there because it
+looks good rather than because it argues for anything". That is how a written
+argument is assessed. It is not how fashion research works.
+
+Connection in fashion is associative and lateral. A real chain from a student
+on this course: an artist who builds architecture out of other materials, some
+of them translucent -> that recalls animals moulting, a lizard's shed skin ->
+a photograph of wallpaper peeling -> the pattern printed on that wallpaper. Each
+step is a jump on a shared physical quality, not a deduction. Nobody could
+defend it as an argument, and being asked to would have killed it at the second
+step. Early on the designer is finding a vibe and gathering clusters that feel
+right; the connection is the designer's eye, and the tool's job is to widen it,
+not to grade it.
+
+Rebuild the analysis around that.
+
+1. USE THE CLUSTERS THE APP ALREADY COMPUTES. analyze.py references none of
+   this, though it is all project-scoped and sitting there:
+     /api/projects/<pid>/similarity/graph -- CLIP k-means clusters, with an
+       edge structure showing what sits near what
+     /api/projects/<pid>/colour/map -- where each reference falls in colour
+     each reference's tags and description from tagging.py
+   Feed the cluster structure in as INPUT. The model should be reasoning about
+   groupings that were measured, not inventing groupings from titles.
+
+2. NAME WHAT BINDS EACH CLUSTER. Three images often feel right together before
+   the designer can say why, and putting a word to it is genuinely useful --
+   it is the difference between a mood and a direction. Say what each cluster
+   holds in common: a form, a surface, a colour behaviour, a process, a
+   quality of light. Offer it, do not assert it; the eye may have been after
+   something else and naming the wrong thing out loud is still useful.
+
+3. SUGGEST LATERAL MOVES, WHICH IS THE PRIMARY OUTPUT. For each cluster, take
+   the quality that binds it and ask where else in the world that quality
+   appears -- in nature, decay, industry, architecture, other cultures, other
+   materials. Moulting to peeling paint to birch bark to palimpsest.
+
+   Make them CONCRETE AND COLLECTIBLE: things to look at, search for, or go
+   and photograph, not themes to consider. "Look at snake sheds and blistered
+   paint" is usable. "Consider the theme of transformation" is not.
+
+4. EVALUATE THE WHOLE BODY, not each reference. This is where judgement
+   belongs. Do the clusters speak to each other, or are they three unrelated
+   projects sharing a folder? Is a through-line emerging, and what is it? Is
+   one cluster carrying everything while another is a single image that has
+   not grown? Which two clusters are closest to touching, and what would sit
+   between them?
+
+   That last question is the most valuable thing this feature can ask, because
+   the space between two clusters is usually where the project actually is.
+
+5. NEVER ASK A REFERENCE TO JUSTIFY ITSELF. Delete the weak-link section and
+   the "argues for anything" framing entirely -- do not merely gate it. A
+   reference that is there because it looks right is doing its job; that is
+   what a mood is made of. If something genuinely sits apart from everything
+   else, say it is unattached and might be a fourth direction or might be a
+   stray, and leave the call to the designer.
+
+6. STAGE AWARENESS, still. Pass days elapsed and remaining, which deliverables
+   are done, task counts, and what the scheduler flags at risk. ABSENCE IS ONLY
+   WORTH RAISING WHEN IT IS LATE: no garment research in week one is what a
+   project that has just started looks like; in week five it is the finding.
+   Brief compliance is a late-stage concern and should be nearly silent early.
+
+7. ANSWER IN DIRECTIVES, NOT PROSE. A short read of where the work stands; the
+   clusters and what binds them; lateral directions as a bulleted list, one
+   line each; and specific next actions phrased as instructions -- "add garment
+   research on trench coats", never "the project would benefit from
+   consideration of outerwear precedents". Length tracks how much there is to
+   say. A thin canvas deserves a short answer.
+
+   Drop "a critique that says everything is fine is worthless". That line is
+   what makes it hunt.
+
+8. The next actions are already tasks. Offer them through the same review path
+   brief import uses -- proposed, editable, nothing applied unasked.
+
+Verify on a real project in its first week: the answer should name the clusters,
+say what each seems to be about, suggest places to look next, and contain no
+paragraph about what is missing. Then on a project in its last fortnight, gaps
+should be raised plainly, because by then they are the point.
+````
+
+**Exit criteria:** the analysis reasons about measured clusters, proposes concrete lateral research, judges the body rather than the reference, and never asks an image to argue.
+
+---
+
 ### Session 16 — Project integration and hardening
 
 **Model:** Sonnet 5, `high` · 2.5–3.5 h · 200–300k tokens · ~0.75 window
@@ -2044,6 +2236,734 @@ solves the size problem at the same time.
 
 ---
 
+## Archive-side work
+
+Not part of the schedule sequence, but this is the plan being worked from.
+
+### Session A1 — Getting files out of the archive
+
+**Delivers:** a reference as a usable file — named, downloadable, draggable, and exportable in bulk.
+
+**Model:** Sonnet 5, `high` · 2.5–3.5 h · 200–300k tokens · ~0.75 window
+
+````
+Read app.py's /media routes (~line 1295), static/shared/cards.js, static/app.js's
+archive selection (archiveSelectedIds and its toolbar), ingest.py's file layout,
+and desktop.py first.
+
+References are stored under references/images/ with UUID filenames -- 128 of
+them, none findable by hand -- and filepath is deliberately never exposed by the
+API. There is no download, drag-out or reveal anywhere in the UI, so putting a
+reference into InDesign currently means querying SQLite for its UUID. Fix that.
+
+Do NOT expose filepath through the API. The fix is better ways to get the
+BYTES out, not handing the client a path into the archive.
+
+1. NAMED DOWNLOAD. /media/<ref_id> serves the file with no Content-Disposition,
+   so a browser displays it and any save gets a UUID or a guess. Add a download
+   variant that sets `attachment` with a filename built from the reference's
+   TITLE, not its id.
+
+   Slug the title properly: strip path separators and characters the filesystem
+   or another OS will object to, collapse whitespace, cap the length, keep the
+   real extension from the stored file. Two references called "Balenciaga 1967"
+   must not produce the same filename -- dedupe with a short suffix.
+
+   This is the one mechanism that works everywhere, including WKWebView, so
+   everything else is an improvement on top of it rather than a replacement.
+
+2. DRAG-OUT, where the browser supports it. On dragstart from a card, set
+   dataTransfer's DownloadURL to
+   "<mime>:<filename>:<absolute url>" and the browser hands a real file to
+   Finder, InDesign or Photoshop on drop.
+
+   Chrome supports this well; WebKit historically does not, and the desktop
+   wrapper is WKWebView. Feature-detect and degrade to the download control
+   rather than offering a gesture that silently does nothing. Say in a comment
+   which engines this is expected to work in -- a later session will otherwise
+   "fix" the fallback.
+
+3. BULK EXPORT, which is the case that actually matters for portfolio work.
+   The archive and project grids already have selection; add an export to their
+   toolbars.
+
+   Stream a zip of the selected references, named as in item 1. Do not build it
+   in memory -- a folder of 40 images is tens of megabytes.
+
+   Offer an ordering that survives the zip: prefix with a zero-padded index in
+   the order they appear on screen, so a line-up stays in order when placed.
+
+   Handle every type, not just images: PDFs export as themselves, text
+   references as .txt with their content.
+
+4. REVEAL IN FINDER, desktop build only. desktop.py currently calls
+   webview.create_window(...) with no js_api bridge. Add one exposing a single
+   reveal(reference_id) that resolves the path server-side and runs
+   `open -R` on macOS.
+
+   Guard it: the bridge must accept a reference id and look the path up itself,
+   never accept a path from the page. Absent in the browser, where the control
+   should simply not appear rather than erroring.
+
+5. COPY IMAGE to the clipboard from a card, for quick pasting. Cheap, and it is
+   what you reach for half the time.
+
+Tests: a title with a slash, a colon and 200 characters produces a safe unique
+filename; two identical titles do not collide; a zip of a mixed selection
+contains images, a PDF and a .txt; the reveal bridge rejects anything that is
+not a known reference id.
+````
+
+**Exit criteria:** a reference reaches InDesign in one gesture, a selection exports as named files in order, and no path from the archive is ever exposed to the page.
+
+---
+
+### Session A2 — Drop files straight onto a canvas
+
+**Delivers:** dragging an image from Finder onto a project canvas ingests it, adds it to the project and places it where you dropped it.
+
+**Model:** Sonnet 5, `high` · 2.5–3.5 h · 200–300k tokens · ~0.75 window
+
+````
+Read static/project/canvas/palette.js (its comment on why internal drags are
+pointer events, not HTML5 DnD), canvas/nodes.js, canvas/store.js, capture.py in
+full, its routes in app.py, and ingest.py's duplicate handling first.
+
+The canvas has no external file handling -- every drag in it is the internal
+pointer-based palette. Getting an image from Finder onto a canvas currently
+means the Add tab, waiting for tagging, opening the project, adding to it, then
+placing it. Make it one gesture.
+
+1. DROP LOOSE FILES ON THE CANVAS. Use dataTransfer.files. This does NOT need
+   webkitGetAsEntry, so hard rule 5 is satisfied: that API is only required for
+   FOLDERS. A folder drop must therefore be refused with a clear message
+   pointing at the Add tab, not handled -- do not add a third use of that API.
+
+   Internal palette drags stay pointer-based and must keep working; the file
+   drop is a separate listener and the two must not fight over the same events.
+
+2. GO THROUGH THE CAPTURE QUEUE, do not add an ingest path. POST /api/captures
+   accepts a multipart file, writes it to PENDING_DIR, returns 202 immediately
+   and does the slow tagging and embedding on its worker. Its envelope already
+   takes project_ids, so pass the current project and the reference lands in it
+   without extra calls.
+
+3. PLACE THE NODE OPTIMISTICALLY. Ingestion takes seconds -- Claude tagging and
+   a CLIP embedding -- and a drop that appears to do nothing for ten seconds
+   reads as broken.
+
+   Draw a node at the drop point immediately, in a pending state, previewing
+   the dropped File through URL.createObjectURL so you see what you dropped
+   rather than a spinner. Poll /api/captures/<id> and swap in the real
+   reference when it resolves. Revoke the object URL when you do.
+
+   The node is client-side only until it has a reference_id -- canvas_nodes
+   requires one. A reload mid-ingest loses the placement but never the
+   reference, because the capture queue survives restarts. Say so in a comment
+   rather than building persistence for a five-second window.
+
+4. A DUPLICATE IS A PLACEMENT, NOT AN ERROR. ingest.py hashes content and
+   capture.py resolves a duplicate to the reference that already holds those
+   bytes. Dropping something already in your archive should quietly place the
+   existing reference at the drop point -- that is the behaviour you want, and
+   it is already computed for you.
+
+5. MULTI-FILE DROP cascades from the drop point rather than stacking at it --
+   dropping eight images must not produce one visible node with seven hidden
+   underneath.
+
+6. Non-images: PDFs and text go through the same path, since ingest handles
+   them. Refuse anything ingest does not support by name and extension, before
+   uploading, rather than after a failed round trip.
+
+Tests: a loose image drop creates a capture with the project attached; a folder
+drop is refused without touching webkitGetAsEntry; dropping a file already in
+the archive places the existing reference and creates no second row; an
+unsupported type is refused before upload; a failed capture removes its
+placeholder and says why.
+````
+
+**Exit criteria:** a Finder drag lands where you dropped it, is in the project, and a duplicate places rather than errors.
+
+---
+
+### Session A3 — Shapes on the canvas
+
+**Delivers:** rectangles and ellipses drawn directly on the canvas, with fill, stroke and stroke width.
+
+**Model:** Sonnet 5, `high` · 2.5–3.5 h · 200–300k tokens · ~0.75 window
+
+````
+Read static/project/canvas/nodes.js (its kind switch and gesture handling),
+canvas/store.js, canvas/palette.js, canvas/edges.js, and db.py's CANVAS_NODES
+schema first.
+
+Add shapes as a new canvas node kind.
+
+1. A NEW KIND, NOT A WIDGET. canvas_nodes.kind becomes
+   reference | text | widget | shape. A shape has no host contract, no
+   lifecycle and nothing to destroy, so routing it through the widget registry
+   would give it machinery it does not need and put a decorative ellipse in the
+   project grid's Add Widget dock, where it does not belong.
+
+   The one-table rationale in CLAUDE.md still holds and is the reason this
+   fits: a shape drags, locks, z-orders and connects exactly like everything
+   else. Only its body differs.
+
+   config: { shape: "rect" | "ellipse", fill, stroke, strokeWidth }. Fill and
+   stroke both accept a colour or none -- an outline-only shape and a fill-only
+   shape are both ordinary requests.
+
+2. DRAWING. Pick the tool, then drag on empty canvas to draw. Use the pointer
+   gestures nodes.js already uses; do not introduce native drag.
+
+   SHIFT CONSTRAINS WHILE DRAWING: held, a rectangle becomes a square and an
+   ellipse a circle. Released, free proportions.
+
+3. RESIZING AN EXISTING SHAPE INVERTS THAT, DELIBERATELY:
+     no modifier -- scales uniformly, keeping proportion
+     shift held -- changes one axis only
+
+   This is the opposite of Figma and most editors, and it is intended. Once a
+   shape exists you usually want to keep its proportion and occasionally to
+   stretch it; while drawing you usually want freedom and occasionally a true
+   square. Write that reasoning in a comment, or a later session will "fix" it
+   to match convention.
+
+4. Shapes sit behind by default -- they are usually grounds for other things.
+   Give z-order controls, at minimum send-to-back and bring-to-front, using the
+   z_index column that already exists.
+
+5. Shapes connect with edges like any other node, and lock like any other node.
+
+6. Colour here is free. The two-colour rule belongs to drafting.css and the
+   schedule surface; the project canvas is the neumorphic side of the app and a
+   shape is the user's own mark.
+
+Tests: shift while drawing gives an exact square; shift while resizing moves
+one axis and no modifier keeps the ratio; a shape persists its fill, stroke and
+width across a reload; send-to-back survives a reload; an edge can attach to a
+shape.
+````
+
+**Exit criteria:** shapes draw, resize by the stated convention, layer correctly and persist.
+
+---
+
+### Session A4 — Pages: laying out a portfolio on the canvas
+
+**Delivers:** a region of canvas given over to A4 pages, filled with images, arranged singly or as spreads, and exportable as a PDF.
+
+**Model:** Opus 5, `max` · 4–5 h · 350–500k tokens · 1–1.5 windows
+**Why Opus:** layout geometry, a new node type owning children, image fitting and PDF generation at once, with several decisions that are cheap now and expensive later.
+
+````
+Read static/project/canvas/nodes.js, canvas/store.js, db.py's CANVAS_NODES
+schema, capture.py and its routes, ingest.py (is_own_work especially), and
+app.py's existing PyMuPDF use in the thumbnail route first.
+
+Portfolio layout, on the canvas. The deliverables this app tracks are PDFs of
+roughly thirty pages, and there is currently nowhere to see them as pages.
+
+1. A SPREAD IS ONE NODE THAT OWNS ITS PAGES. Draw a rectangle on the canvas and
+   it fills with pages. Do not make each page its own node: the spread owns
+   count, orientation, spacing and order, and moving or resizing it must move
+   and rescale everything together.
+
+   kind = "pages". config holds the layout and an ordered array of page
+   entries, each { reference_id, fit }. A page with no reference is an empty
+   slot and must render as one -- a portfolio in progress is mostly empty
+   slots and that is the normal state, not an error.
+
+2. PAGE GEOMETRY. Pages are A4 proportioned -- 1 : 1.414 -- with orientation
+   chosen per spread, portrait by default. Pages size themselves to fit the
+   drawn region: the region sets the bounds, the count and orientation set how
+   many fit across, and the page size follows. Never distort the ratio to fill
+   the region; leave the slack.
+
+3. TWO LAYOUTS.
+     sequential -- pages evenly spaced in a grid, equal gaps throughout
+     booklet    -- pages paired, a TIGHT GUTTER inside a pair and a wider gap
+                  between pairs. The pages in a pair never touch; the gutter
+                  is what makes it read as a spread rather than one wide page.
+   Offer whether page 1 stands alone as a cover, which shifts every pair after
+   it. Getting that wrong silently renumbers the whole document.
+
+4. FILLING A PAGE. Click an empty page to upload an image.
+
+   Route it through capture.py as session A2 does -- accept fast, ingest on the
+   worker, place optimistically -- rather than adding a second upload path.
+
+   SET is_own_work = 1. These are portfolio outputs, not research, and that
+   column already exists and already drives the archive's Own work filter. Thirty
+   portfolio pages appearing in reference search would make the archive worse.
+
+5. FITTING. Most uploads will already be A4 proportioned and should land exactly.
+   For anything else:
+     contain -- default. The whole image, letterboxed, nothing lost.
+     cover   -- fills the page, crops the overflow, with the crop adjustable.
+     never distort. Stretching artwork to fit is not a mode.
+   Show the mismatch when there is one rather than silently choosing.
+
+   WARN ON RESOLUTION. An image that would print below roughly 150dpi at A4
+   looks fine on screen and bad on paper, and this is a print deliverable.
+   Say so at upload, do not block it.
+
+6. PDF EXPORT. Server-side with the PyMuPDF already in the stack -- no new
+   dependency. True A4 pages at the images' native resolution, in the spread's
+   page order, empty slots exported as blank pages rather than skipped so
+   pagination survives.
+
+   Stream it; do not build thirty full-resolution pages in memory.
+
+7. Pages are not separately draggable, do not take edges individually, and are
+   reordered within the spread rather than moved around the canvas. The spread
+   is the thing on the canvas; the pages are its contents.
+
+Tests: a drawn region produces correctly proportioned A4 pages; booklet pairs
+have a tighter gutter than the gap between pairs; a cover page shifts the
+pairing; a non-A4 image contains without distortion; an uploaded page is
+is_own_work and does not appear in a default reference search; export produces
+A4 pages in order with blanks preserved; a low-resolution upload warns.
+````
+
+**Exit criteria:** a spread lays out A4 pages correctly in both modes, images fit without distortion, uploads land as own work, and the PDF matches what is on screen.
+
+---
+
+### Session A5 — Split a PDF into pages on import
+
+**Delivers:** an option, when adding a PDF, to burst it into one image reference per page instead of storing it as a single document.
+
+**Model:** Sonnet 5, `high` · 2.5–3.5 h · 200–300k tokens · ~0.75 window
+
+````
+Read ingest.py (PDF_EXTS, _extract_pdf_content, add_reference), app.py's
+PDF_THUMB_DPI and its thumbnail route, capture.py in full, and the Add tab in
+static/index.html and static/app.js first.
+
+A PDF currently becomes one reference. A lookbook, a scanned magazine or an
+exhibition catalogue is more useful as its pages: each page is a reference that
+can be tagged, embedded, found by colour, put on a canvas and placed on a
+portfolio page. Add that as an option at import.
+
+1. THE CONTROL LIVES ON THE ADD TAB, beside the existing own-work checkbox, and
+   appears only when what is being added is a PDF. Default OFF -- storing the
+   document whole stays the normal case.
+
+2. RENDER WITH THE PyMuPDF ALREADY IN THE STACK. ingest.py imports fitz and
+   app.py already renders page one at PDF_THUMB_DPI = 72 for thumbnails.
+
+   72dpi is a thumbnail resolution and is far too low for a reference that will
+   be zoomed into, colour-analysed and possibly placed on a printed page.
+   Render pages at a genuinely useful resolution -- around 150 to 200dpi -- and
+   make it a named constant separate from the thumbnail one. Do not reuse
+   PDF_THUMB_DPI; they are answering different questions.
+
+3. LET THE USER CHOOSE PAGES. Most of the time a few pages out of forty are
+   wanted, not all forty. Offer a page range, defaulting to all, and show the
+   page count before committing. This is the single control that keeps this
+   feature from being expensive.
+
+4. SPLIT SYNCHRONOUSLY, INGEST THROUGH THE QUEUE. Rendering is fast -- tens of
+   milliseconds a page -- so do it in the request. Tagging and embedding are
+   not, so enqueue each rendered page as an ordinary capture through
+   capture.py rather than blocking or writing a second ingest path.
+
+   That also means a forty-page split reports progress and survives a restart,
+   both of which capture.py already provides.
+
+5. NAME AND ATTRIBUTE THE PAGES. One PDF becoming thirty references named alike
+   is a worse archive than the PDF was.
+     - title: the document's title with its page number, so sorting is natural
+     - source: carry the original filename through, so provenance survives
+       without a schema change -- the column already exists
+     - is_own_work follows whatever the user set for the import
+
+6. COST IS THE REAL CONSTRAINT. Every page gets a Claude tagging call and a
+   CLIP embedding. Forty pages is forty calls. Say so before starting -- show
+   the page count and what will be created -- and let the range control be the
+   answer. Do not silently start forty API calls because someone dragged in a
+   catalogue.
+
+7. Duplicate detection works for free and should be left alone: each rendered
+   page is hashed like any other file, so re-splitting the same PDF at the same
+   DPI resolves to the existing references rather than creating a second set.
+   That only holds while the DPI constant is stable -- note it beside the
+   constant.
+
+8. The original PDF is not kept when splitting, as requested. Out of scope, but
+   worth leaving room for: the extension's capture path and session A2's canvas
+   drop both take PDFs too, and would want the same option eventually.
+
+Tests: a three-page PDF produces three references with page-numbered titles and
+the original filename as source; a page range imports only those pages;
+re-splitting the same PDF creates no duplicates; the option does not appear for
+a non-PDF; splitting a forty-page document does not block the request.
+````
+
+**Exit criteria:** a PDF can be imported as pages at a useful resolution, the page count and cost are stated before it starts, and pages are named so the archive stays legible.
+
+---
+
+### Session A6 — Rotate a reference
+
+**Delivers:** a 90° rotate for a single reference, and the same across a multi-selection in the archive.
+
+**Model:** Sonnet 5, `high` · 2.5–3.5 h · 200–300k tokens · ~0.75 window
+
+````
+Read ingest.py (add_reference, _file_hash, IMAGE_EXTS), app.py's /media and
+/media/<id>/thumb routes, db.py's list_references_needing_colour and
+save_colour_analysis, embeddings.py, static/shared/carousel.js, and
+static/app.js's archive selection toolbar first.
+
+Scans arrive upside down. Add a rotate, working the way Preview's does: one
+button, 90° a press, four presses back to where you started.
+
+1. ROTATE THE BYTES, DO NOT STORE A DISPLAY ANGLE. A rotation flag applied at
+   render time would have to be honoured by every consumer -- the thumbnail
+   route, the media route, drag-out, the portfolio PDF, the canvas, the 3D
+   scenes' thumbnails -- and the first one missed sends an upside-down image
+   into InDesign. A scan that is wrong is simply wrong; there is nothing worth
+   preserving about its original orientation.
+
+   Rotate with Pillow, which is already a dependency, and write the file back
+   in place. Note in a comment that a JPEG round-trip re-encodes: save at high
+   quality and accept it, or the alternative is a lossless-rotate dependency
+   this project does not need.
+
+2. THE CONTENT HASH CHANGES, AND TWO THINGS HANG OFF IT.
+
+   Update reference_items.content_hash. Dedupe then correctly treats the
+   rotated file as different bytes, which it is.
+
+   CARRY THE COLOUR ANALYSIS FORWARD rather than letting it invalidate.
+   list_references_needing_colour re-queues anything where
+   `c.content_hash IS NOT r.content_hash`, so doing nothing means every
+   rotation schedules a re-analysis -- and rotation does not change a palette.
+   Update the stored analysis's content_hash alongside and the work is skipped
+   correctly.
+
+   RE-EMBED, though. Rotation genuinely changes a CLIP embedding, so the
+   vector must be recomputed or similarity search quietly degrades. That is
+   local CPU, no API call.
+
+   DO NOT RE-TAG automatically. Tags may well be poor if the image was tagged
+   upside down, but re-tagging is an API call each and a bulk rotate would fire
+   dozens. Offer it as a separate action.
+
+3. CACHE-BUST THE THUMBNAIL. /media/<id>/thumb serves the file straight off
+   disk with no cache headers, so the browser will happily show the old
+   orientation after a rotate. Append the content hash as a query parameter
+   wherever thumbnails are requested, so the URL changes when the bytes do.
+   This is the part most likely to look like "rotation didn't work".
+
+4. SINGLE REFERENCE. An "Edit reference" control in the viewer opens a small
+   editor with the image and a rotate button. It applies immediately and
+   saves; there is no confirm step, because four presses is the undo.
+
+5. MULTI-SELECTION. "Edit references" in the archive's selection toolbar, with
+   a rotate that turns every selected reference 90°. No preview, but every
+   selected thumbnail currently on screen must visibly turn as it is pressed --
+   that feedback is the whole interface.
+
+   Rotating twenty references is twenty file writes and twenty CLIP embeds.
+   Queue it, report progress, and let the thumbnails update as each completes
+   rather than at the end.
+
+6. IMAGES ONLY. The control does not appear for text, and does not appear for
+   PDFs -- rotating PDF pages is a different job with a different tool, and
+   this is not it. Say so rather than silently doing nothing.
+
+Tests: a rotated image has new bytes and a new content_hash; its colour
+analysis survives rather than being re-queued; its embedding is recomputed;
+four rotations restore the original orientation; a thumbnail URL changes after
+a rotation; the control is absent for a .txt and a .pdf.
+````
+
+**Exit criteria:** a rotate is one press and immediately visible, the file itself is correct wherever it goes, and a bulk rotate reports progress without re-tagging anything.
+
+---
+
+### Session A7 — Real thumbnails, and a canvas that stays smooth
+
+**Delivers:** generated thumbnails, lazy decoding and off-screen culling — the canvas and the archive grid both stop loading full-resolution originals.
+
+**Model:** Sonnet 5, `high` · 2.5–3.5 h · 200–300k tokens · ~0.75 window
+
+````
+Read app.py's media_thumb route, static/shared/cards.js's makeCard,
+static/project/canvas/nodes.js, db.py's COLOUR_ANALYSIS schema (the versioned
+derived-data pattern this copies), and config.py first.
+
+THE CANVAS IS SLOW BECAUSE /media/<id>/thumb DOES NOT MAKE A THUMBNAIL. For an
+image it calls send_file on the original:
+
+    if ext in ingest.IMAGE_EXTS:
+        return send_file(path, mimetype=...)
+
+Only PDFs get a rendered pixmap. So every card everywhere -- canvas nodes, the
+archive grid, project grids, the carousel's similar-items strip -- downloads
+and decodes the full-size original to draw it at a couple of hundred pixels.
+
+Measured on the real archive: 193 images, mean 1.2 MB, largest 11.9 MB, 231 MB
+on disk. Decoded is what costs: a 4000x3000 JPEG is roughly 48 MB of bitmap
+whatever it compresses to, so a canvas of forty references can hold hundreds of
+megabytes of pixels. Nothing about the canvas's own architecture is at fault --
+nodes already use translate3d and the world layer is a single transform.
+
+1. GENERATE AND CACHE THUMBNAILS. Resize with Pillow, which is already a
+   dependency, to a sensible longest edge -- around 400px for grid and canvas
+   use -- and cache the result on disk.
+
+   KEY THE CACHE BY CONTENT HASH, NOT REFERENCE ID. That makes it correct for
+   free in two places: identical bytes share one thumbnail, and session A6's
+   rotate changes content_hash, so a rotated reference gets a new thumbnail
+   rather than a stale one. Version the key the way colour_analysis does, so
+   the size or quality can change later and old entries fall out.
+
+   Derived data, recomputable, its own cache directory beside data/ -- hard
+   rule 8's shape. Deleting the directory must cost nothing but regeneration.
+
+   Generate on demand and serve, rather than a migration pass: the first load
+   of a big archive warms it, and a missing thumbnail is never an error.
+
+2. SERVE IT PROPERLY. The thumbnail route should set a long cache lifetime and
+   an ETag from the content hash -- the bytes for a given hash never change, so
+   this is safely cacheable, unlike today where the route has no headers at all
+   and the browser guesses.
+
+   Keep /media/<id> serving the original untouched. The carousel, the portfolio
+   pages and drag-out all want full resolution; only cards want thumbnails.
+
+3. LAZY AND ASYNC IN makeCard. Add loading="lazy" and decoding="async" to the
+   card image. Two attributes, no downside, and they stop a grid of 193 cards
+   decoding everything at once.
+
+   Give the image intrinsic dimensions -- width and height attributes or an
+   aspect-ratio -- so lazy loading does not collapse the layout and reflow as
+   each one arrives.
+
+4. CULL OFF-SCREEN NODES ON THE CANVAS. content-visibility: auto on a canvas
+   node lets the browser skip rendering work for anything outside the viewport,
+   which on a large canvas is most of it. It needs contain-intrinsic-size set
+   from the node's own w/h, or scrolling past unrendered nodes jumps.
+
+   Verify it does not break the marquee or the edge layer, both of which need
+   to reason about nodes they cannot see. If it does, cull by adding and
+   removing a class from the viewport subscription instead -- the node data is
+   already in memory either way.
+
+5. Leave the Three.js widget nodes alone. scene-host.js already pauses a scene
+   when its element leaves the viewport, which is the equivalent fix and is
+   working.
+
+Measure before and after on a real canvas with forty-odd references: total
+bytes transferred, decoded image memory, and frames during a pan. State the
+numbers in the commit message -- this is a performance change and a claim
+without a measurement is not one.
+
+Tests: a thumbnail is generated once and reused; two references with identical
+bytes share a cache entry; changing a file's content hash produces a new
+thumbnail; deleting the cache directory is harmless; /media/<id> still returns
+the original at full size.
+````
+
+**Exit criteria:** a forty-reference canvas pans smoothly, cards load lazily, and the archive grid stops pulling 231 MB of originals to draw thumbnails.
+
+---
+
+### Session A8 — Portfolio pages stage outside the archive
+
+**Delivers:** page uploads that cost nothing and pollute nothing, a homepage widget showing the document as it stands, a configurable export resolution, and archiving only what you choose.
+
+**Revises session A4**, which routed page uploads through `capture.py` into the archive as own work. That was the wrong call: a page being iterated on is not research, and it made every draft cost a Claude call and a row in reference search.
+
+**Model:** Sonnet 5, `high` · 3–4 h · 280–380k tokens · ~1 window
+
+````
+Read static/project/canvas/spread.js, spread-panel.js, spreads.py,
+canvas/captures.js, ingest.py's add_reference, db.py's schema constants, and
+config.py's directory layout first.
+
+A portfolio page currently goes through the capture queue, gets tagged by
+Claude, embedded by CLIP and inserted as a reference with is_own_work = 1.
+Seven already exist. Every revision of a page therefore costs an API call and
+leaves another near-duplicate in the archive. Stage them instead.
+
+1. A STAGING STORE, SEPARATE FROM THE ARCHIVE.
+
+     portfolio_pages   id, project_id, filepath, content_hash,
+                       width, height, uploaded_at
+
+   Files go in their own directory beside references/ and deleted/ -- they are
+   not archive material and should not live in the archive's tree.
+
+   Upload is DIRECT AND SYNCHRONOUS: store the bytes, hash them, read the
+   dimensions, return. No capture queue, no Claude call, no CLIP embedding.
+   That is the whole point, and it also makes placing a page feel instant
+   rather than pending.
+
+2. SPREAD PAGES POINT AT STAGED PAGES. Each entry becomes
+   { page_id, fit, crop? } rather than { reference_id, fit, crop?, capture_id? }.
+
+   MIGRATE THE SEVEN CAREFULLY. is_own_work is also set by the Add tab's own
+   checkbox, so not every own-work reference is a portfolio page. Migrate only
+   references actually named by a spread's config, and leave the rest alone.
+   Copy them into the staging store, repoint the spread, and do not delete the
+   archive rows -- the user may have come to rely on them.
+
+3. STAGE FIRST, PLACE SECOND. The store is project-scoped, not spread-scoped,
+   so a page can exist before it has a slot. Upload thirty pages in one go,
+   then fill slots from what is staged. That is how the work actually arrives.
+
+4. VERSIONS BELONG HERE. Replacing a slot's image leaves the previous page in
+   the store rather than discarding it -- in staging a draft is cheap,
+   deletable and invisible to search, which is exactly where versions should
+   accumulate. The problem was never having versions; it was versions reaching
+   the archive.
+
+5. A PORTFOLIO WIDGET THAT SHOWS THE PAGES, not just a door to them. On the
+   project homepage it displays the current pages as thumbnails, in page order,
+   so the state of the document is visible from the homepage without opening
+   anything. Clicking opens the full management view: which slot each page
+   fills if any, and per-page delete, replace and promote.
+
+   Thumbnails come from session A7's cache, which has shipped -- `thumbnails.py`
+   and `thumbnail_for(path, content_hash)`. Key staged pages the same way; it
+   does not care whether the bytes are a reference or a page.
+
+   Reuse the grid-page pattern where it fits, but do not force staged pages
+   through a component expecting reference objects -- they are not references
+   and pretending otherwise is how the archive got polluted in the first place.
+
+   EXPORT DPI LIVES IN THE WIDGET'S CONFIG, edited in homepage edit mode like
+   any other widget setting, per the widget contract. `config.exportDpi`, with
+   a sensible default.
+
+   What it does is DOWNSAMPLE, not upscale. An image already above the target
+   is resampled down on export; one below it is left alone and still warned
+   about, because resampling up invents detail that is not there. spreads.py
+   already computes an effective dpi per page against MIN_PRINT_DPI = 150 --
+   reuse that calculation rather than adding a second one.
+
+   This matters practically: a thirty-page portfolio of 600dpi scans makes a
+   PDF too large for most university submission portals, and 300dpi is the
+   submission standard. A draft at 150 exports in seconds and is small enough
+   to email.
+
+   Export offers the widget's value as its default and allows an override for
+   that one export -- a final submission should not require editing the
+   homepage to change.
+
+6. PROMOTION IS EXPLICIT. "Add to archive" runs a staged page through
+   ingest.add_reference with is_own_work = 1, tagging and embedding it then and
+   only then. Content hashing makes re-promotion a no-op for free.
+
+   Export may OFFER promotion when it finishes -- default OFF, so a working
+   export archives nothing, and a deliberate tick on a final one archives the
+   set. Do not archive on export automatically; three exports during a week
+   would be three sets.
+
+7. Thumbnails come from session A7's cache, which is keyed by content hash and
+   therefore does not care whether the bytes are a reference or a staged page.
+   If A7 has not run, serve the file and leave a comment pointing at it.
+
+8. Deleting a project deletes its staged pages and their files. Deleting a
+   staged page that a spread still uses empties that slot rather than breaking
+   it -- pagination is the document, as A4 already establishes.
+
+Tests: uploading a page makes no Claude call and creates no reference; the
+seven existing pages migrate and their spreads still render; a replaced page
+leaves its predecessor in the store; promotion creates exactly one reference
+and promoting twice creates none; deleting a staged page empties its slot;
+export renders from staging with no archive write.
+````
+
+**Exit criteria:** placing a page is instant and free, drafts accumulate where they are harmless, and nothing reaches the archive without being asked for.
+
+---
+
+### Session A9 — A watched inbox folder
+
+**Delivers:** drop anything into a synced folder from any app on the phone; the server ingests it next time it starts.
+
+**Complements the phone queue, does not replace it.** `offline-queue.js` and `photo-capture.js` already let the PWA capture with the Mac off. But both require opening the app, and the thing you want to keep is usually in Safari or Photos, not in a calendar.
+
+**Model:** Sonnet 5, `high` · 2.5–3.5 h · 200–300k tokens · ~0.75 window
+
+````
+Read capture.py in full (especially resume_pending and the worker), ingest.py's
+add_folder, app.py's startup block where resume_pending is called, and
+config.py first.
+
+Add an inbox: a folder the server watches and ingests from. Save to it from the
+iOS share sheet via iCloud Drive -- or Dropbox, or anything that syncs -- and
+the next time the server starts, everything in it becomes a reference.
+
+The shape already exists here. capture.py is a durable queue that survives
+restarts, resume_pending() already runs at boot, and ingest.add_folder already
+walks a directory. This is those three joined up.
+
+1. A CONFIGURED FOLDER, off by default. One path in config.py, unset until the
+   user sets it. Nothing happens if it is not configured, and the app behaves
+   exactly as it does now.
+
+2. SCAN AT STARTUP AND ON DEMAND. At boot, after resume_pending, walk the
+   folder and enqueue anything new. Add a control in Settings to scan now, so
+   the server does not need restarting to pick things up.
+
+   Do not add a filesystem watcher. A poll at startup plus a button is enough
+   for a tool that is opened deliberately, and a watcher is a background thread
+   whose failure modes are all silent.
+
+3. ENQUEUE, DO NOT INGEST DIRECTLY. Each file goes through capture.py so
+   tagging and embedding happen on the worker, progress is visible, and a crash
+   mid-batch resumes. Forty holiday photos should not block startup.
+
+4. MOVE WHAT IS PROCESSED. A file that has been enqueued moves to a `done`
+   subfolder inside the inbox, so the next scan does not see it again. Moving
+   rather than deleting means a mistake is recoverable, and it mirrors how
+   deleted references already go to `deleted/` rather than being unlinked.
+
+   Content hashing still protects you if a file is somehow seen twice -- a
+   duplicate resolves to the existing reference, as it already does.
+
+5. THE iCLOUD TRAP, which will otherwise waste an afternoon. iCloud Drive
+   leaves placeholder stubs for files it has not downloaded -- a tiny
+   `.<name>.icloud` file rather than the real bytes. Ingesting one gives you a
+   corrupt reference.
+
+   Skip anything whose name begins with a dot, and skip any file whose size
+   looks implausible for its type. Report them as "not downloaded yet" and
+   leave them for the next scan rather than failing them permanently.
+
+6. REPORT AT STARTUP the way resume_pending already does -- how many were
+   found, enqueued and skipped, and why anything was skipped. A silent inbox is
+   indistinguishable from a broken one.
+
+7. Unsupported file types are left in place and named in the report, not moved
+   and not failed. The user put them there for a reason, even if that reason
+   was a mistake.
+
+8. Everything the inbox creates carries a source recording that it came from
+   the inbox, so provenance survives -- the column exists.
+
+On the phone side there is nothing to build: the iOS share sheet already saves
+to iCloud Drive from any app. Document the setup in README.md, including that
+a Shortcut can make it one tap.
+
+Tests: a configured inbox ingests an image and moves it to done; a second scan
+does not re-ingest it; a `.icloud` placeholder is skipped and reported, not
+failed; an unsupported type stays put; an unconfigured inbox changes nothing;
+startup reports counts.
+````
+
+**Exit criteria:** a photo shared to the folder from any app on the phone becomes a tagged reference the next time the server starts, with nothing to open and nothing to remember.
+
+---
+
 ## Estimates
 
 | # | Session | Model / level | Hours | Tokens | Windows |
@@ -2072,11 +2992,22 @@ solves the size problem at the same time.
 | 15 | Brief import, concept analysis | Sonnet `high` | 3–4 | 250–350k | 1 |
 | 15b | Timetable groups, classification fallback | Sonnet `high` | 3–4 | 250–350k | 1 |
 | 15c | Brief provenance, diff re-import, reset | Sonnet `high` | 3–4 | 250–350k | 1 |
+| 15d | Year anchoring, ordering, supporting docs | Sonnet `high` | 3–4 | 280–380k | 1 |
+| 15e | Concept analysis as curation | Sonnet `high` | 3–4 | 250–350k | 1 |
 | 16 | Project integration, hardening | Sonnet `high` | 2.5–3.5 | 200–300k | 0.75 |
 | 16b | Migrate archive to drafting language | Sonnet `high` | 3–4 | 280–380k | 1 |
 | 17 | Remote access, phone day view | Sonnet `high` | 3–4 | 250–350k | 1 |
 | 18 | Offline cache and sync queue | Sonnet `high` | 3–4 | 250–350k | 1 |
 | 19 | Photo capture | Sonnet `medium` | 1.5–2.5 | 120–200k | 0.5 |
+| A1 | Getting files out of the archive | Sonnet `high` | 2.5–3.5 | 200–300k | 0.75 |
+| A2 | Drop files onto a canvas | Sonnet `high` | 2.5–3.5 | 200–300k | 0.75 |
+| A3 | Shapes on the canvas | Sonnet `high` | 2.5–3.5 | 200–300k | 0.75 |
+| A4 | Pages: portfolio layout | **Opus** `max` | 4–5 | 350–500k | 1–1.5 |
+| A5 | Split a PDF into pages | Sonnet `high` | 2.5–3.5 | 200–300k | 0.75 |
+| A6 | Rotate a reference | Sonnet `high` | 2.5–3.5 | 200–300k | 0.75 |
+| A7 | Real thumbnails, canvas performance | Sonnet `high` | 2.5–3.5 | 200–300k | 0.75 |
+| A8 | Portfolio pages stage outside the archive | Sonnet `high` | 3–4 | 280–380k | 1 |
+| A9 | A watched inbox folder | Sonnet `high` | 2.5–3.5 | 200–300k | 0.75 |
 | | **Total** | | **71–93 h** | **6.1–8.4M** | **22–24** |
 
 Roughly four weeks at a window a day. Sessions 1–8 are the product; 9–16 make it usable; 17–19 make it portable. Stopping after 16 leaves a complete desktop application.
