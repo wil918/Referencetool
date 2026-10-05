@@ -4893,13 +4893,17 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
 .widget-portfolio-spread + .widget-portfolio-spread { margin-top: 0.9rem; }
 .widget-portfolio-spread-label { margin: 0 0 0.3rem; font-size: 0.85em; }
 
+/* Two or three pages across, whatever the widget's width. The column minimum
+   is a third of the row (a touch under, so three plus their gaps fit), which
+   caps it at three; the rem floor makes a narrower widget fall to two rather
+   than shrink the pages back to stamps -- 10rem is the smallest a page can be
+   and still be read, so three across only happens from about 32rem up. Wider
+   widgets get bigger pages, not more of them, and a long portfolio scrolls,
+   which is what a document does. */
 .widget-portfolio-pages {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(calc(3.2rem * var(--content-scale, 1)), 1fr));
-  gap: 0.5rem;
-}
-.widget-portfolio-pages.is-landscape {
-  grid-template-columns: repeat(auto-fill, minmax(calc(4.6rem * var(--content-scale, 1)), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(max(calc(10rem * var(--content-scale, 1)), 31%), 1fr));
+  gap: 0.75rem;
 }
 
 .widget-portfolio-page {
@@ -4922,7 +4926,8 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
   user-select: none;
 }
 .widget-portfolio-page.is-empty {
-  box-shadow: inset 2px 2px 4px var(--dark), inset -2px -2px 4px var(--light);
+  box-shadow: var(--press-sm);
+  font-size: 1.1em;
 }
 
 .widget-portfolio-dpi {
@@ -4974,10 +4979,13 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
 .portfolio-group h3 { margin: 0 0 0.2rem; font-size: 1.05rem; }
 .portfolio-group-hint { margin: 0 0 0.9rem; font-size: 0.85rem; }
 
+/* Two or three cards across the page, for the same reason as the widget: these
+   exist so a page can be seen properly. */
 .portfolio-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
-  gap: 1.4rem;
+  grid-template-columns: repeat(auto-fill, minmax(max(15rem, 31%), 1fr));
+  gap: 1.6rem;
+  align-items: start;
 }
 
 .portfolio-card {
@@ -4996,7 +5004,7 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 11rem;
+  aspect-ratio: var(--ratio, 210 / 297);
   padding: 0.5rem;
   border-radius: 0.6rem;
   box-shadow: var(--press-sm);
@@ -5004,8 +5012,8 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
 }
 .portfolio-card-img {
   display: block;
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
 }
 

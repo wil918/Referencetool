@@ -28,18 +28,26 @@ THUMBNAIL_VERSION = 1
 # Long enough edge for a grid cell or canvas node at typical zoom; short
 # enough that decoding it costs nothing compared to the original.
 MAX_EDGE = 400
+# For views that exist to LOOK at a page -- the portfolio widget and its
+# management view show two or three across -- where 400px is a cell-sized copy
+# stretched soft. Still a fraction of a scan, and only ever generated for a
+# page someone has actually opened one of those views on.
+LARGE_EDGE = 1200
 JPEG_QUALITY = 82
 
 
-def _cache_path(content_hash, suffix):
-    return config.THUMBNAILS_DIR / f"{content_hash}_v{THUMBNAIL_VERSION}{suffix}"
+def _cache_path(content_hash, suffix, max_edge=MAX_EDGE):
+    # The default size keeps the name it has always had, so every thumbnail
+    # already cached stays valid; any other size is its own file beside it.
+    size = "" if max_edge == MAX_EDGE else f"_e{max_edge}"
+    return config.THUMBNAILS_DIR / f"{content_hash}_v{THUMBNAIL_VERSION}{size}{suffix}"
 
 
-def _existing(content_hash):
+def _existing(content_hash, max_edge=MAX_EDGE):
     """An already-cached thumbnail for this content, if one exists, as
     (path, mimetype). Checked before touching the original file at all."""
     for suffix, mimetype in ((".jpg", "image/jpeg"), (".png", "image/png")):
-        path = _cache_path(content_hash, suffix)
+        path = _cache_path(content_hash, suffix, max_edge)
         if path.exists():
             return path, mimetype
     return None
@@ -53,7 +61,7 @@ def _has_transparency(img):
     return False
 
 
-def thumbnail_for(path, content_hash=None):
+def thumbnail_for(path, content_hash=None, max_edge=MAX_EDGE):
     """A thumbnail of the image at `path`, generating and caching it first
     if this content hasn't been thumbnailed at the current version yet.
 
@@ -65,17 +73,20 @@ def thumbnail_for(path, content_hash=None):
     since ingest.add_reference started recording one. A row from before
     that column existed falls back to hashing the file itself here -- still
     correct, just without the free sharing a stored hash gives for nothing.
+
+    `max_edge` is the longest side to shrink to (never enlarged: an image
+    already smaller comes back at its own size). Each size is cached apart.
     """
     content_hash = content_hash or ingest._file_hash(path)
 
-    cached = _existing(content_hash)
+    cached = _existing(content_hash, max_edge)
     if cached:
         return cached
 
     with Image.open(path) as img:
         img = ImageOps.exif_transpose(img)  # bake in orientation before resizing
         has_alpha = _has_transparency(img)
-        img.thumbnail((MAX_EDGE, MAX_EDGE), Image.LANCZOS)
+        img.thumbnail((max_edge, max_edge), Image.LANCZOS)
 
         if has_alpha:
             suffix, mimetype = ".png", "image/png"
@@ -89,7 +100,7 @@ def thumbnail_for(path, content_hash=None):
     # asked for next, never a crash on the next request.
     config.THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
 
-    cache_path = _cache_path(content_hash, suffix)
+    cache_path = _cache_path(content_hash, suffix, max_edge)
     # Write beside the final name and rename into place -- a reader that
     # lands between the write and the rename sees either nothing or the
     # complete file, never a half-written one.

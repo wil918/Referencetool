@@ -586,6 +586,46 @@ def test_a_staged_page_thumbnail_comes_from_the_shared_content_hash_cache(client
     assert client.get("/api/portfolio/pages/nope/thumb").status_code == 404
 
 
+def test_the_large_thumbnail_is_a_bigger_separate_cache_entry(client):
+    """The widget and the management view show pages two or three across, so
+    they ask for a copy big enough not to go soft -- without disturbing the
+    small one every other view already has cached."""
+    project_id = new_project(client)
+    page = stage(client, project_id, image_bytes((2480, 3508), colour=(10, 80, 120)), "scan.png").get_json()["pages"][0]
+    content_hash = db.get_portfolio_page(page["id"])["content_hash"]
+
+    small = client.get(f"/api/portfolio/pages/{page['id']}/thumb")
+    large = client.get(f"/api/portfolio/pages/{page['id']}/thumb?size=large")
+
+    assert small.status_code == large.status_code == 200
+    with Image.open(io.BytesIO(small.data)) as a, Image.open(io.BytesIO(large.data)) as b:
+        assert max(a.size) == 400
+        assert max(b.size) == 1200 and b.size[1] > b.size[0]  # still the page's own shape
+    names = sorted(f.name for f in config.THUMBNAILS_DIR.glob(f"{content_hash}_v*"))
+    # The default keeps the name it has always had, so nothing cached is lost.
+    assert names == [f"{content_hash}_v1.jpg", f"{content_hash}_v1_e1200.jpg"]
+    assert small.headers["ETag"] != large.headers["ETag"]
+    assert "immutable" in large.headers["Cache-Control"]
+
+
+def test_a_large_thumbnail_never_enlarges_a_small_page(client):
+    project_id = new_project(client)
+    page = stage_id(client, project_id, data=image_bytes((620, 877)))
+    large = client.get(f"/api/portfolio/pages/{page}/thumb?size=large")
+    with Image.open(io.BytesIO(large.data)) as img:
+        assert img.size == (620, 877)
+
+
+def test_only_known_thumbnail_sizes_are_served(client):
+    project_id = new_project(client)
+    page = stage_id(client, project_id)
+    assert client.get(f"/api/portfolio/pages/{page}/thumb?size=huge").status_code == 400
+    assert client.get(f"/api/portfolio/pages/{page}/thumb?size=9999").status_code == 400
+    assert client.get(f"/api/portfolio/pages/{page}/thumb?size=").status_code == 400
+    # ...so the cache can't be made to grow a file per query string.
+    assert list(config.THUMBNAILS_DIR.glob("*_e*")) == []
+
+
 # --- 8. deleting ----------------------------------------------------------------------
 
 

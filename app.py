@@ -1263,16 +1263,25 @@ def api_portfolio_page_file(page_id):
     return send_file(path, mimetype=mime or "application/octet-stream")
 
 
+# The sizes a staged page's thumbnail comes in. A fixed set rather than a free
+# number, so a query string can't make the cache grow a file per value.
+PORTFOLIO_THUMB_SIZES = {None: thumbnails.MAX_EDGE, "large": thumbnails.LARGE_EDGE}
+
+
 @app.get("/api/portfolio/pages/<page_id>/thumb")
 def api_portfolio_page_thumb(page_id):
     """A staged page's thumbnail, from the same content-hash cache the archive
     uses (thumbnails.py) -- which does not care whether the bytes are a
-    reference or a page."""
+    reference or a page. ?size=large is the bigger copy the widget and the
+    management view show, where a page is meant to be looked at."""
+    size = request.args.get("size")
+    if size not in PORTFOLIO_THUMB_SIZES:
+        return jsonify({"error": "size must be left out or be 'large'"}), 400
     page = db.get_portfolio_page(page_id)
     path = portfolio.path_for(page) if page else None
     if not path or not path.exists():
         abort(404)
-    return _thumbnail_response(path, page["content_hash"])
+    return _thumbnail_response(path, page["content_hash"], PORTFOLIO_THUMB_SIZES[size])
 
 
 @app.delete("/api/portfolio/pages/<page_id>")
@@ -1624,12 +1633,12 @@ def media_download(ref_id):
     )
 
 
-def _thumbnail_response(path, content_hash):
+def _thumbnail_response(path, content_hash, max_edge=thumbnails.MAX_EDGE):
     """The cached thumbnail of an image file (thumbnails.py), as a response.
     Shared by an archive reference and a staged portfolio page: the cache is
     keyed by the bytes, so it does not care which of the two they belong to."""
     try:
-        thumb_path, mime = thumbnails.thumbnail_for(path, content_hash)
+        thumb_path, mime = thumbnails.thumbnail_for(path, content_hash, max_edge)
     except Exception:
         # A file Pillow can't decode is rare but not a 404 -- fall back
         # to the original exactly like before this cache existed.

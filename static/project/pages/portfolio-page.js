@@ -463,8 +463,11 @@ export function createPortfolioPage(container, { project }) {
     card.classList.toggle("is-busy", working);
 
     const frame = el("div", "portfolio-card-frame");
+    // The page's own proportions, so a card is as big as its page can be at
+    // this width instead of a small image floating in a fixed box.
+    frame.style.setProperty("--ratio", `${page.width} / ${page.height}`);
     const img = el("img", "portfolio-card-img");
-    img.src = thumbUrl(page.id);
+    img.src = thumbUrl(page.id, "large");
     img.alt = page.filename || "Staged page";
     img.loading = "lazy";
     img.decoding = "async";

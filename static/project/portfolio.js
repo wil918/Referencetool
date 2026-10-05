@@ -7,7 +7,10 @@
  * response is the page. Only promotePage() reaches the archive.
  */
 
-export const thumbUrl = (pageId) => `/api/portfolio/pages/${pageId}/thumb`;
+/** A staged page's thumbnail. Small (400px) by default, which is right for a
+ *  spread on the canvas; `large` for views that exist to look at a page. */
+export const thumbUrl = (pageId, size) =>
+  `/api/portfolio/pages/${pageId}/thumb${size === "large" ? "?size=large" : ""}`;
 export const fileUrl = (pageId) => `/api/portfolio/pages/${pageId}/file`;
 
 async function request(path, options) {

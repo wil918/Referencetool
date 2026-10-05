@@ -1,8 +1,9 @@
 /* The project's portfolio, shown rather than linked to.
  *
- * Draws the current pages as thumbnails in page order -- every slot of every
- * spread on the canvas, an empty one as the empty slot it is -- so the state
- * of the document is visible from the homepage without opening anything.
+ * Draws the current pages as large thumbnails in page order -- two or three
+ * across whatever the widget's width, every slot of every spread on the canvas,
+ * an empty one as the empty slot it is -- so the state of the document is
+ * visible, and legible, from the homepage without opening anything.
  * Clicking opens the management view (project/pages/portfolio-page.js): which
  * slot each page fills, and per-page delete, replace and promote.
  *
@@ -33,8 +34,10 @@ export default {
   container: false,
   permanent: false,
   canvasEligible: false,
-  defaultSize: { w: 8, h: 5 },
-  minSize: { w: 3, h: 3 },
+  // The width of the page: two or three pages across it is the point, and a
+  // narrow widget only gets small pages. Resize it in edit mode to taste.
+  defaultSize: { w: 24, h: 12 },
+  minSize: { w: 4, h: 4 },
 
   create(host) {
     const projectId = host.project.id;
@@ -118,7 +121,9 @@ export default {
           tile.className = "widget-portfolio-page";
           if (slot.page_id) {
             const img = document.createElement("img");
-            img.src = thumbUrl(slot.page_id);
+            // The large copy: a page here is meant to be looked at, two or
+            // three across, not recognised from a postage stamp.
+            img.src = thumbUrl(slot.page_id, "large");
             img.alt = `Page ${slot.number}`;
             img.loading = "lazy";
             img.decoding = "async";
