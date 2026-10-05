@@ -117,10 +117,20 @@ export function createSpreadPanel({ container }) {
   const gap = labelled("Spacing", gapInput);
 
   const exportBtn = button("Export PDF", "spread-panel-export");
-  exportBtn.title = "Download the spread as A4 pages, in order, blanks included";
+  exportBtn.title =
+    "Download the spread as A4 pages, in order, blanks included, at the resolution set on the Portfolio widget";
   exportBtn.addEventListener("click", call((s) => s.exportPdf()));
 
-  spreadRow.append(layout.el, cover, orientation.el, count, gap, exportBtn);
+  // The staged pages -- including earlier versions of a replaced one -- are
+  // managed from the project page, not here; this is the way there. A real
+  // link, like the back arrow: it is navigation (a hash route), not an action.
+  const stagedLink = document.createElement("a");
+  stagedLink.className = "spread-panel-btn spread-panel-staged";
+  stagedLink.href = "#page=portfolio";
+  stagedLink.textContent = "Staged pages";
+  stagedLink.title = "Every page uploaded for this project — place, replace, delete or add them to the archive";
+
+  spreadRow.append(layout.el, cover, orientation.el, count, gap, exportBtn, stagedLink);
 
   // --- the active page -------------------------------------------------------
 
@@ -144,7 +154,7 @@ export function createSpreadPanel({ container }) {
   replaceBtn.addEventListener("click", call((s) => s.replaceActive()));
 
   const clearBtn = button("Remove image");
-  clearBtn.title = "Empty this page, keeping it in place (the image stays in the archive)";
+  clearBtn.title = "Empty this page, keeping it in place (the image stays in the staged pages)";
   clearBtn.addEventListener("click", call((s) => s.clearActive()));
 
   const deleteBtn = button("Delete page", "spread-panel-danger");
@@ -194,7 +204,7 @@ export function createSpreadPanel({ container }) {
 
   function describe(active) {
     if (active.empty) return "Empty — click the page or drop an image on it.";
-    if (active.pending && !active.px) return "Being added to the archive…";
+    if (active.pending && !active.px) return "Uploading…";
     if (!active.px) return "";
     const size = `${active.px.w}×${active.px.h} px · ${Math.round(active.dpi)} dpi at A4`;
     if (!active.issues.length) return `${size} · A4 — lands exactly.`;

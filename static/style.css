@@ -4860,3 +4860,160 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
   .schedule-layout { flex-direction: column; }
   .schedule-at-risk-panel { flex: 1 1 auto; width: 100%; }
 }
+
+/* --- Portfolio: the homepage widget and its management view ---
+   Both draw staged pages (portfolio.py), which are not references and so do not
+   borrow the reference grid's cards. Depth comes from the paired shadows
+   alone, as everywhere here: no borders and no fills. */
+
+.spread-panel-staged {
+  display: inline-block;
+  text-decoration: none;
+  color: var(--muted);
+}
+.spread-panel-staged:hover { color: var(--ink-strong); }
+
+/* The widget. Flat at rest like every project widget, so the page tiles carry
+   the structure; an empty slot is a small pressed hollow, the same inversion
+   the canvas spread uses, in the shadow tokens at a size that suits a thumbnail. */
+.widget-portfolio {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  font-size: calc(0.82rem * var(--content-scale, 1));
+  line-height: 1.45;
+  cursor: pointer;
+  outline: none;
+}
+.widget-portfolio.is-editing { cursor: default; }
+.widget-portfolio:focus-visible .widget-portfolio-summary { color: var(--accent); }
+
+.widget-portfolio-summary { margin: 0 0 0.6rem; font-family: var(--serif); }
+.widget-portfolio-spread + .widget-portfolio-spread { margin-top: 0.9rem; }
+.widget-portfolio-spread-label { margin: 0 0 0.3rem; font-size: 0.85em; }
+
+.widget-portfolio-pages {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(3.2rem * var(--content-scale, 1)), 1fr));
+  gap: 0.5rem;
+}
+.widget-portfolio-pages.is-landscape {
+  grid-template-columns: repeat(auto-fill, minmax(calc(4.6rem * var(--content-scale, 1)), 1fr));
+}
+
+.widget-portfolio-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 210 / 297;
+  border-radius: 1px;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--serif);
+  font-size: 0.85em;
+}
+.widget-portfolio-pages.is-landscape .widget-portfolio-page { aspect-ratio: 297 / 210; }
+.widget-portfolio-page img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  user-select: none;
+}
+.widget-portfolio-page.is-empty {
+  box-shadow: inset 2px 2px 4px var(--dark), inset -2px -2px 4px var(--light);
+}
+
+.widget-portfolio-dpi {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.9rem;
+  cursor: default;
+}
+.widget-portfolio-dpi[hidden] { display: none; }
+.widget-portfolio-dpi-input { width: 4.8rem; }
+.widget-portfolio-dpi-note { flex-basis: 100%; font-size: 0.85em; }
+
+/* The management view. */
+.portfolio-page { padding-bottom: 4rem; }
+.portfolio-status { min-height: 1.4em; margin: 0 0 1.1rem; }
+
+.portfolio-spread { margin-bottom: 1.4rem; }
+.portfolio-spread-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+.portfolio-spread-head h3 { margin: 0; font-size: 1.05rem; }
+.portfolio-spread-tools { display: flex; gap: 0.6rem; }
+.portfolio-btn { padding: 0.4rem 0.95rem; font-size: 0.78rem; }
+
+.portfolio-export {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+  padding: 1.1rem 1.4rem;
+  border-radius: 1.2rem;
+  box-shadow: var(--press-sm);
+}
+.portfolio-export-field,
+.portfolio-export-archive { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
+.portfolio-export-dpi { width: 5rem; }
+.portfolio-export-hint { font-size: 0.8rem; }
+.portfolio-export-notes p { margin: 0 0 0.2rem; font-size: 0.82rem; }
+.portfolio-export-notes:empty { display: none; }
+
+.portfolio-group { margin-top: 1.8rem; }
+.portfolio-group h3 { margin: 0 0 0.2rem; font-size: 1.05rem; }
+.portfolio-group-hint { margin: 0 0 0.9rem; font-size: 0.85rem; }
+
+.portfolio-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  gap: 1.4rem;
+}
+
+.portfolio-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.9rem;
+  border-radius: 1rem;
+  background: var(--project-bg, var(--bg));
+  box-shadow: var(--raise-sm);
+  transition: opacity 0.18s ease;
+}
+.portfolio-card.is-busy { opacity: 0.55; }
+
+.portfolio-card-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 11rem;
+  padding: 0.5rem;
+  border-radius: 0.6rem;
+  box-shadow: var(--press-sm);
+  overflow: hidden;
+}
+.portfolio-card-img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.portfolio-card-name { margin: 0.35rem 0 0; font-size: 0.85rem; font-weight: 600; word-break: break-word; }
+.portfolio-card-facts,
+.portfolio-card-where,
+.portfolio-card-archived,
+.portfolio-card-warn { margin: 0; font-size: 0.78rem; }
+.portfolio-card-warn { color: var(--warn); }
+.portfolio-card-tools { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.55rem; }
+.portfolio-place { max-width: 100%; font-size: 0.78rem; }

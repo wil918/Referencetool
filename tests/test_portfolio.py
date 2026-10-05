@@ -7,8 +7,12 @@ archive. They are staged now (portfolio.py). These tests hold the line that
 matters: staging never touches Claude, CLIP or the archive; only an explicit
 promotion does, and only once.
 """
+import base64
 import io
 import json
+import shutil
+import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 import fitz
@@ -795,3 +799,40 @@ def test_an_export_that_is_abandoned_midway_is_not_reported_as_finished(client):
     assert portfolio.export_state("abandoned-job") == "running"
     stream.close()  # the browser stopped listening
     assert portfolio.export_state("abandoned-job") == "cancelled"
+
+
+# --- the sentences the UI says about an export --------------------------------------
+
+PORTFOLIO_JS = Path(__file__).resolve().parents[1] / "static" / "project" / "portfolio.js"
+
+
+def describe(plan, **options):
+    """describePlan from the browser's own module, run under node (it imports
+    nothing, so it loads from a data: URL like spread-layout.js does)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node isn't on PATH -- the wording is the browser's own JS module")
+    source = base64.b64encode(PORTFOLIO_JS.read_bytes()).decode()
+    script = (
+        f'const m = await import("data:text/javascript;base64,{source}");'
+        f"process.stdout.write(JSON.stringify(m.describePlan({json.dumps(plan)}, {json.dumps(options)})));"
+    )
+    out = subprocess.run([node, "--input-type=module", "-e", script], capture_output=True, text=True,
+                         timeout=30, check=True)
+    return json.loads(out.stdout)
+
+
+def test_the_export_wording_names_what_is_resampled_and_what_is_left_alone():
+    plan = {"dpi": 300, "downsampled": [1, 2, 4], "below_target": [3], "blank": []}
+    assert describe(plan) == [
+        "Pages 1, 2 and 4 were resampled down to 300 dpi.",
+        "Page 3 is below 300 dpi, so it was left as it came — enlarging would only invent detail.",
+    ]
+    assert describe(plan, future=True) == [
+        "Pages 1, 2 and 4 will be resampled down to 300 dpi.",
+        "Page 3 is below 300 dpi, so it will be left as it came — enlarging would only invent detail.",
+    ]
+    assert describe({"dpi": 150, "downsampled": [], "below_target": [2, 5], "blank": []}) == [
+        "Pages 2 and 5 are below 150 dpi, so they were left as they came — enlarging would only invent detail."
+    ]
+    assert describe({"dpi": 150, "downsampled": [], "below_target": [], "blank": [1]}) == []

@@ -61,6 +61,7 @@ import analysisWidget from "./widgets/analysis.js";
 import deliverablesWidget from "./widgets/deliverables.js";
 import upcomingWidget from "./widgets/upcoming.js";
 import briefWidget from "./widgets/brief.js";
+import portfolioWidget from "./widgets/portfolio.js";
 
 const MODULES = [
   titleWidget,
@@ -81,6 +82,7 @@ const MODULES = [
   deliverablesWidget,
   upcomingWidget,
   briefWidget,
+  portfolioWidget,
 ];
 
 // How long a widget's config sits before it is written. Config saves are the

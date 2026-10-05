@@ -12,6 +12,7 @@ import { createAppearancePanel } from "./appearance-panel.js";
 import { onActiveWidgetChange } from "./format-toolbar.js";
 import { createGridPage, projectGridDeleteBehaviour } from "./pages/grid-page.js";
 import { createCanvasPage } from "./pages/canvas-page.js";
+import { createPortfolioPage } from "./pages/portfolio-page.js";
 import * as folders from "./folders.js";
 
 const statusEl = document.getElementById("project-shell-status");
@@ -764,6 +765,16 @@ function showCanvasPage() {
   currentPage = createCanvasPage(pageContainerEl, { project });
 }
 
+/* The portfolio's management view, in place of the homepage grid: the pages
+ * staged for this project's spreads, and what to do with them. Reached from
+ * the Portfolio widget, and from a spread's own panel on the canvas. Every
+ * change it makes is its own request, so like the canvas there is nothing to
+ * save and nothing to warn about on the way out. */
+function showPortfolioPage() {
+  enterPage();
+  currentPage = createPortfolioPage(pageContainerEl, { project });
+}
+
 function routeFromHash() {
   navToken++;
   const params = new URLSearchParams(location.hash.slice(1));
@@ -772,6 +783,8 @@ function routeFromHash() {
     showGridPage();
   } else if (page === "canvas") {
     showCanvasPage();
+  } else if (page === "portfolio") {
+    showPortfolioPage();
   } else if (page === "folder" && params.get("id")) {
     showFolderPage(params.get("id"), navToken);
   } else {

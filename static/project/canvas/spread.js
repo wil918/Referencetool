@@ -10,20 +10,27 @@
  *
  * The config (db.py's canvas_nodes comment) is the document: layout,
  * orientation, cover and gap, plus an ordered list of pages, each
- * { reference_id, fit, crop?, capture_id? }. A page with no reference is an
- * empty slot -- a portfolio in progress is mostly empty slots, and that is the
- * normal state, drawn as a slot waiting to be filled, not as an error.
+ * { page_id, fit, crop? }. A page with no page_id is an empty slot -- a
+ * portfolio in progress is mostly empty slots, and that is the normal state,
+ * drawn as a slot waiting to be filled, not as an error.
  *
- * Uploads go through capture.py's queue (captures.js) exactly as a file
- * dropped from Finder does: accepted in a moment, ingested on the worker, and
- * shown on the page straight away from the file itself while that happens.
- * The capture's id is written into the page as soon as the server has it, so
- * a reload mid-ingest picks the wait back up rather than losing the page.
- * Pages are own work, not research, and deliberately not filed into the
- * project: a spread is where they live.
+ * A page_id points into the project's staging store (portfolio.py), not the
+ * archive. An upload is a plain request that stores the file and answers with
+ * the page -- no tagging, no embedding, nothing to wait on afterwards -- and
+ * the file itself is shown on the page while it travels. Replacing a page's
+ * image leaves the old page in the store as an earlier version; the store is
+ * where drafts belong, and the archive never sees them unless a page is
+ * promoted on purpose (the Portfolio widget's management view does that).
  */
 
-import { postCapture, pollCapture } from "./captures.js";
+import {
+  describePlan,
+  exportPdf as runExport,
+  exportPlan,
+  pageRegistry,
+  stagePage,
+  thumbUrl,
+} from "../portfolio.js";
 import { IMAGE_EXTS, extOf } from "./file-types.js";
 import {
   LAYOUTS,
@@ -73,6 +80,11 @@ export function createSpread({
   normaliseConfig();
 
   const config = () => entry.node.config;
+  // What the store knows about each page -- chiefly its true pixel size, which
+  // is what a print check has to be made from. The <img> on the page is a
+  // 400px thumbnail and can't say.
+  const projectId = store.projectId || entry.node.project_id;
+  const registry = pageRegistry(projectId);
 
   let layout = null;
   let activeIndex = null;
@@ -88,11 +100,10 @@ export function createSpread({
   // new ones and making every image load again.
   const elements = new Map();
   // Client-only state, keyed the same way and never persisted: the image an
-  // upload is showing while it ingests, and what a replaced page held before,
+  // upload is showing while it travels, and what a replaced page held before,
   // so a failed replacement can put it back.
   const previews = new WeakMap();
   const replaced = new WeakMap();
-  const waiting = new Set();
 
   body.classList.add("spread-body");
 
@@ -144,8 +155,10 @@ export function createSpread({
     onEdit(JSON.parse(JSON.stringify(entry.node.config)));
   }
 
-  const isPending = (page) => !page.reference_id && Boolean(page.capture_id || previews.has(page));
-  const isEmpty = (page) => !page.reference_id && !isPending(page);
+  // Pending is an upload still in flight: it has its file on screen and no
+  // page_id yet. Brief, now that nothing is ingested afterwards.
+  const isPending = (page) => !page.page_id && previews.has(page);
+  const isEmpty = (page) => !page.page_id && !previews.has(page);
 
   // --- drawing -------------------------------------------------------------
 
@@ -161,8 +174,8 @@ export function createSpread({
     img.hidden = true;
     img.addEventListener("load", () => onImageLoad(el, img));
     img.addEventListener("error", () => {
-      // A page whose file is gone (deleted from the archive in another tab,
-      // say) is drawn as the empty slot it effectively is, and says why.
+      // A page whose file is gone (deleted from the staged pages in another
+      // tab, say) is drawn as the empty slot it effectively is.
       if (!img.getAttribute("src")) return;
       img.hidden = true;
       el.classList.add("is-missing");
@@ -210,7 +223,7 @@ export function createSpread({
     el.querySelector(".spread-page-number").textContent = String(index + 1);
 
     // The server's copy once there is one; the file itself until then.
-    const src = page.reference_id ? `/media/${page.reference_id}/thumb` : previews.get(page) || null;
+    const src = page.page_id ? thumbUrl(page.page_id) : previews.get(page) || null;
     if (src) {
       if (img.getAttribute("src") !== src) {
         el.classList.remove("is-missing");
@@ -238,13 +251,20 @@ export function createSpread({
     el.title = isEmpty(page)
       ? `Page ${index + 1} — click to add an image`
       : isPending(page)
-        ? `Page ${index + 1} — being added to the archive`
+        ? `Page ${index + 1} — uploading`
         : `Page ${index + 1}`;
     updateFlags(page, el);
   }
 
-  function naturalSize(el) {
-    const img = el?.querySelector(".spread-page-img");
+  /** A page's real size in pixels. A staged page's comes from its record in
+   *  the store; an upload still travelling has only its own file on screen,
+   *  which is the full-size original, so that image can say. */
+  function pixelSize(page) {
+    if (page.page_id) {
+      const record = registry.get(page.page_id);
+      return record ? { w: record.width, h: record.height } : null;
+    }
+    const img = elements.get(page)?.querySelector(".spread-page-img");
     return img && !img.hidden && img.complete && img.naturalWidth
       ? { w: img.naturalWidth, h: img.naturalHeight }
       : null;
@@ -282,7 +302,7 @@ export function createSpread({
 
   function updateFlags(page, el) {
     const flags = el.querySelector(".spread-page-flags");
-    const issues = issuesFor(page, naturalSize(el));
+    const issues = issuesFor(page, pixelSize(page));
     flags.replaceChildren(
       ...issues.map((issue) => {
         const flag = document.createElement("span");
@@ -299,7 +319,7 @@ export function createSpread({
     const page = pageOf(el);
     if (!page) return;
     // The server's copy has arrived: the local preview it replaced can go.
-    if (page.reference_id && previews.has(page) && !img.src.startsWith("blob:")) {
+    if (page.page_id && previews.has(page) && !img.src.startsWith("blob:")) {
       URL.revokeObjectURL(previews.get(page));
       previews.delete(page);
     }
@@ -362,7 +382,7 @@ export function createSpread({
   function positionCropGhost() {
     const page = activePageEntry();
     const el = page && elements.get(page);
-    const px = naturalSize(el);
+    const px = page && pixelSize(page);
     const slot = layout?.pages[activeIndex];
     if (!cropping || !page || page.fit !== "cover" || !px || !slot) {
       cropGhost.hidden = true;
@@ -429,7 +449,7 @@ export function createSpread({
   }
 
   function beginCrop(event, page, el, local) {
-    const px = naturalSize(el);
+    const px = pixelSize(page);
     const slot = layout.pages[activeIndex];
     if (!px || !slot) return;
     const scale = Math.max(slot.w / px.w, slot.h / px.h);
@@ -595,9 +615,9 @@ export function createSpread({
       if (dropped) {
         const which = next + 1 === pages.length ? `page ${pages.length}` : `pages ${next + 1}–${pages.length}`;
         const images = dropped === 1 ? "an image" : `${dropped} images`;
-        // The images stay in the archive; it's their place in this document
-        // that would go.
-        if (!window.confirm(`Removing ${which} takes ${images} off this spread (they stay in the archive). Remove them?`)) {
+        // The images stay in the staged pages; it's their place in this
+        // document that would go.
+        if (!window.confirm(`Removing ${which} takes ${images} off this spread (they stay in the staged pages). Remove them?`)) {
           onChange();
           return;
         }
@@ -752,13 +772,12 @@ export function createSpread({
     return `Pages ${numbers.slice(0, -1).join(", ")} and ${numbers[numbers.length - 1]}`;
   }
 
-  /** One file onto one page. Resolves to { number, print } once the archive
-   *  has accepted it (the ingest carries on without it), or null if it
-   *  couldn't be uploaded at all. */
+  /** One file onto one page. Resolves to { number, print } once the store has
+   *  accepted it, or null if it couldn't be uploaded at all. */
   async function uploadInto(index, file) {
     const pages = config().pages;
     const previous = pages[index];
-    const page = { reference_id: null, fit: previous?.fit === "cover" ? "cover" : "contain" };
+    const page = { page_id: null, fit: previous?.fit === "cover" ? "cover" : "contain" };
     if (page.fit === "cover" && previous?.crop) page.crop = { ...previous.crop };
     previews.set(page, URL.createObjectURL(file));
     if (previous && !isEmpty(previous)) replaced.set(page, previous);
@@ -766,29 +785,25 @@ export function createSpread({
     releasePreview(previous);
     render();
 
-    let summary;
+    let staged;
     try {
-      summary = await postCapture(file, {
-        type: "image",
-        // Output, not research: kept out of reference search by default,
-        // and what the archive's Own work filter is for.
-        is_own_work: true,
-        // The filename is usually the most honest title a portfolio page
-        // has; ingest still prefers Claude's own if it's a camera name.
-        metadata: { title: stem(file.name) },
-        print: { orientation: config().orientation, fit: page.fit },
-      });
+      staged = await stagePage(projectId, file, { orientation: config().orientation, fit: page.fit });
     } catch (err) {
       const number = restore(page);
       onStatus(`Couldn't add "${file.name}"${number ? ` to page ${number}` : ""} — ${err.message}.`);
       return null;
     }
     const number = config().pages.indexOf(page) + 1;
-    if (destroyed || !number) return { number, print: summary.print };
-    page.capture_id = summary.capture_id;
+    // The page was moved off the spread while it travelled: the upload is
+    // staged and unplaced, which is where a page nobody has a slot for belongs.
+    if (destroyed || !number) return { number, print: staged.print };
+    registry.put(staged);
+    page.page_id = staged.id;
+    // Switches the image from the file on screen to the server's copy; the
+    // preview is let go once that has loaded (onImageLoad).
+    updatePage(page, number - 1);
     persist();
-    waitFor(summary.capture_id);
-    return { number, print: summary.print };
+    return { number, print: staged.print };
   }
 
   /** Put back whatever an upload replaced (or an empty slot), wherever the
@@ -804,44 +819,14 @@ export function createSpread({
     return index + 1;
   }
 
-  async function waitFor(captureId) {
-    if (waiting.has(captureId)) return;
-    waiting.add(captureId);
-    const result = await pollCapture(captureId, { isCancelled: () => destroyed });
-    waiting.delete(captureId);
-    if (destroyed || result.cancelled) return;
-
-    // Found by capture id, not by index: the page may have been moved while
-    // it was ingesting, or deleted -- in which case the reference simply
-    // stays in the archive, unplaced.
-    const pages = config().pages;
-    const index = pages.findIndex((page) => page.capture_id === captureId);
-    if (index === -1) return;
-    const page = pages[index];
-
-    if (result.ok) {
-      page.reference_id = result.referenceId;
-      delete page.capture_id;
-      updatePage(page, index);
-      persist();
-    } else if (result.timedOut) {
-      // Not a failure: the worker is still going. The capture id stays on
-      // the page, so the next visit to the canvas takes the wait back up.
-      onStatus(`Page ${index + 1} is still being added — it will appear once the archive has finished with it.`);
-    } else {
-      restore(page);
-      onStatus(`Page ${index + 1} couldn't be added — ${result.error}.`);
-    }
-  }
-
   // --- export ------------------------------------------------------------------
 
-  async function exportPdf() {
+  async function exportSpread() {
     const pending = config().pages.filter(isPending).length;
     if (
       pending &&
       !window.confirm(
-        `${pending === 1 ? "One page is" : `${pending} pages are`} still being added and will export blank. Export anyway?`
+        `${pending === 1 ? "One page is" : `${pending} pages are`} still uploading and will export blank. Export anyway?`
       )
     ) {
       return;
@@ -849,26 +834,42 @@ export function createSpread({
     // The server exports what it has, so it had better have the order that's
     // on screen: anything still in the debounce queue goes out first.
     await store.flush();
-    const link = document.createElement("a");
-    link.href = `/api/canvas/nodes/${entry.node.id}/export.pdf`;
-    link.download = "";
-    body.appendChild(link);
-    link.click();
-    link.remove();
+
+    // What the export will do to each page, asked before it starts so the
+    // warning lands with the download rather than after the file is in the
+    // wrong hands. Only a courtesy: the export doesn't depend on it.
+    let notes = [];
+    try {
+      notes = describePlan(await exportPlan(entry.node.id));
+    } catch {
+      /* the export itself will say if something's wrong */
+    }
+    onStatus("Exporting…");
+    const state = await runExport(entry.node.id);
+    if (destroyed) return;
+    const outcome = {
+      done: "Exported.",
+      cancelled: "The export was cancelled.",
+      failed: "The export failed.",
+      timeout: "The export is taking a while — it will land in your downloads.",
+    }[state];
+    onStatus([outcome, ...(state === "done" ? notes : [])].join(" "));
   }
 
   // --- boot --------------------------------------------------------------------
 
-  // An upload that was still ingesting when the page was last left (or when
-  // an undo brought back a config from before it finished).
-  function resumeUploads() {
-    for (const page of config().pages) {
-      if (page.capture_id && !page.reference_id) waitFor(page.capture_id);
-    }
-  }
-
   render();
-  resumeUploads();
+  // The pages' real sizes arrive a moment after the pages draw; the print
+  // flags follow them. Best effort -- a spread with no flags is still a spread.
+  registry
+    .load()
+    .then(() => {
+      if (destroyed) return;
+      config().pages.forEach((page, i) => updatePage(page, i));
+      positionCropGhost();
+      onChange();
+    })
+    .catch(() => {});
 
   return {
     /** nodes.js calls this on mount and on every frame of a resize. */
@@ -885,7 +886,7 @@ export function createSpread({
     activePage() {
       const page = activePageEntry();
       if (!page) return null;
-      const px = naturalSize(elements.get(page));
+      const px = pixelSize(page);
       return {
         index: activeIndex,
         page,
@@ -911,7 +912,7 @@ export function createSpread({
     replaceActive() {
       if (activeIndex !== null) openPicker(activeIndex);
     },
-    exportPdf,
+    exportPdf: exportSpread,
 
     /** A file dropped from Finder onto one of this spread's pages. */
     dropFiles(pageEl, files) {
@@ -951,7 +952,6 @@ export function createSpread({
       cropping = false;
       render();
       persist();
-      resumeUploads();
     },
 
     /** The spread stopped being the selection: nothing inside it stays active. */

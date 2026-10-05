@@ -1,11 +1,13 @@
 /* The canvas's side of capture.py's queue: hand a file over, then wait for
  * the worker to turn it into a reference.
  *
- * Two things put files on the canvas -- a drop from Finder (file-drop.js) and
- * an upload onto a spread's page (spread.js) -- and both go through the same
- * POST /api/captures the browser extension uses, rather than a second upload
- * path: the request returns as soon as the bytes are on disk, and tagging and
- * embedding happen on the worker afterwards.
+ * A file dropped from Finder onto the canvas (file-drop.js) goes through the
+ * same POST /api/captures the browser extension uses, rather than a second
+ * upload path: the request returns as soon as the bytes are on disk, and
+ * tagging and embedding happen on the worker afterwards. That is right for
+ * research, which belongs in the archive. A portfolio page does not -- it is a
+ * working file -- so a file dropped onto a spread's page does NOT come here: it
+ * is staged (portfolio.js), with no worker and nothing to wait for.
  */
 
 const POLL_INTERVAL_MS = 1200;

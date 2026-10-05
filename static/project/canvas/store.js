@@ -141,6 +141,9 @@ export function createStore(projectId) {
   window.addEventListener("pagehide", onPageHide);
 
   return {
+    // A spread needs its project to talk to the staging store, and the store
+    // is the one thing handed to every node that already knows it.
+    projectId,
     load,
     createNode,
     deleteNode,

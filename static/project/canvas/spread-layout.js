@@ -66,7 +66,7 @@ export function defaultSpreadConfig(count = DEFAULT_PAGE_COUNT) {
 }
 
 export function emptyPage() {
-  return { reference_id: null, fit: "contain" };
+  return { page_id: null, fit: "contain" };
 }
 
 /** Page height over page width for an orientation. */
