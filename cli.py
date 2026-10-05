@@ -12,6 +12,7 @@ from pathlib import Path
 
 import analyze
 import colour
+import config
 import db
 import embeddings
 import ingest
@@ -90,6 +91,9 @@ def cmd_show(args):
 
 
 def cmd_search(args):
+    if not config.embeddings_enabled():
+        print(embeddings.DISABLED_MESSAGE)
+        return
     model = embeddings.get_model()
     query_embedding = model.encode(args.query).tolist()
     matches = embeddings.query_index(query_embedding, n_results=args.n)
@@ -106,6 +110,9 @@ def cmd_search(args):
 
 
 def cmd_analyze(args):
+    if not config.claude_available():
+        print("Analysis needs Claude, and no ANTHROPIC_API_KEY is configured. Add one to .env.")
+        return
     print(f"Analyzing {len(args.ids)} reference(s) ...")
     try:
         writeup, messages, _ = analyze.start_conversation(args.ids)
@@ -154,6 +161,24 @@ def cmd_colour_backfill(args):
     analysed, failed = colour.backfill(limit=args.limit, progress=progress)
     after = colour.coverage()
     print(f"Analysed {analysed}, failed {failed}. Coverage: {after['analysed']}/{after['images']}.")
+
+
+def cmd_tag_backfill(args):
+    """Tag references that were added with no tags -- no API key at the time, or
+    Claude unreachable. Safe to re-run: a reference with tags is never touched."""
+    if not config.claude_available():
+        print("Tagging needs Claude, and no ANTHROPIC_API_KEY is configured. Add one to .env.")
+        return
+    pending = db.count_untagged_references()
+    if not pending:
+        print("Every reference already has tags.")
+        return
+    print(f"{pending} reference(s) have no tags.")
+    result = ingest.backfill_tags(limit=args.limit)
+    print(f"Tagged {result['tagged']}, failed {result['failed']}.")
+    if result["error"]:
+        print(f"  first failure: {result['error']}")
+    print(f"{db.count_untagged_references()} still untagged.")
 
 
 def main():
@@ -207,6 +232,13 @@ def main():
         "--limit", type=int, help="Only analyse this many (useful for a large archive)"
     )
     p_colour.set_defaults(func=cmd_colour_backfill)
+
+    p_tags = sub.add_parser(
+        "tag-backfill",
+        help="Tag references that have no tags yet (added with no API key, or while Claude was unreachable)",
+    )
+    p_tags.add_argument("--limit", type=int, help="Only tag this many (each is one Claude call)")
+    p_tags.set_defaults(func=cmd_tag_backfill)
 
     args = parser.parse_args()
     db.init_db()

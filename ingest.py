@@ -9,6 +9,7 @@ from pathlib import Path
 import fitz  # PyMuPDF
 from PIL import Image, ImageOps
 
+import config
 from config import IMAGES_DIR, TEXTS_DIR
 import colour
 import db
@@ -240,6 +241,49 @@ def render_pdf_pages(path, page_indices):
         doc.close()
 
 
+def _request_tags(path, ext, title, full_text=None, extracted_images=()):
+    """One Claude tagging call for one file, dispatched on what the file is.
+    Raises on any failure -- add_reference and backfill_tags each decide what a
+    failure means for them."""
+    if ext in IMAGE_EXTS:
+        return tagging.tag_image(path)
+    if extracted_images:
+        return tagging.tag_pdf(full_text, extracted_images, title=title)
+    return tagging.tag_text(full_text, title=title)
+
+
+def _claude_tags(path, ext, title, full_text=None, extracted_images=()):
+    """(title, tags, description) from Claude, or ("", [], "") when there is
+    none to be had -- and never an exception.
+
+    Tagging is an enrichment of a reference, not a condition of having one. A
+    missing key, a rate limit that outlasted the retries, a dropped connection,
+    a reply that wasn't the JSON asked for: every one of them used to fail the
+    whole add, and the upload's temp file was deleted on the way out. A stored
+    reference with no tags is recoverable (backfill_tags fills it in later); a
+    failed add is not. So all of them are the same outcome here.
+    """
+    if not config.claude_available():
+        print("  no API key -- adding without tags")
+        return "", [], ""
+    print("  tagging with Claude...")
+    try:
+        suggested_title, tags, description = _request_tags(
+            path, ext, title, full_text, extracted_images
+        )
+    except Exception as e:
+        print(f"  tagging failed ({type(e).__name__}: {e}) -- adding without tags")
+        return "", [], ""
+    # tagging._parse_response answers a reply that wasn't JSON with
+    # ("", [], <the model's prose>): a description that is really the model
+    # explaining itself, with nothing to search by. That is a failed tagging,
+    # and storing it would make the reference look tagged to backfill_tags.
+    if not tags:
+        print("  tagging returned no tags -- adding without tags")
+        return "", [], ""
+    return suggested_title or "", list(tags), description or ""
+
+
 def add_reference(source_path, title=None, source=None, notes=None, force=False, is_own_work=False):
     source_path = Path(source_path).expanduser().resolve()
     if not source_path.exists():
@@ -257,10 +301,11 @@ def add_reference(source_path, title=None, source=None, notes=None, force=False,
 
     if ext in IMAGE_EXTS:
         ref_type = "image"
-        print("  tagging image with Claude...")
-        suggested_title, tags, description = tagging.tag_image(source_path)
-        print("  generating embedding...")
-        embedding = embeddings.embed_image(source_path)
+        suggested_title, tags, description = _claude_tags(source_path, ext, title)
+        embedding = None
+        if config.embeddings_enabled():
+            print("  generating embedding...")
+            embedding = embeddings.embed_image(source_path)
         dest = IMAGES_DIR / f"{ref_id}{ext}"
 
     elif ext in TEXT_EXTS or ext in PDF_EXTS:
@@ -272,18 +317,20 @@ def add_reference(source_path, title=None, source=None, notes=None, force=False,
         else:
             full_text = source_path.read_text(encoding="utf-8", errors="ignore")
 
-        print("  tagging with Claude...")
-        if extracted_images:
-            print(f"  ({len(extracted_images)} embedded image(s) found, analyzing alongside the text)")
-            suggested_title, tags, description = tagging.tag_pdf(full_text, extracted_images, title=title)
-        else:
-            suggested_title, tags, description = tagging.tag_text(full_text, title=title)
+        embedding = None
+        try:
+            if extracted_images and config.claude_available():
+                print(f"  ({len(extracted_images)} embedded image(s) found, analyzing alongside the text)")
+            suggested_title, tags, description = _claude_tags(
+                source_path, ext, title, full_text, extracted_images
+            )
 
-        print("  generating embedding...")
-        embedding = embeddings.embed_combined(text=full_text, image_paths=extracted_images)
-
-        for p in extracted_images:
-            p.unlink(missing_ok=True)
+            if config.embeddings_enabled():
+                print("  generating embedding...")
+                embedding = embeddings.embed_combined(text=full_text, image_paths=extracted_images)
+        finally:
+            for p in extracted_images:
+                p.unlink(missing_ok=True)
 
         dest = TEXTS_DIR / f"{ref_id}{ext}"
 
@@ -319,15 +366,16 @@ def add_reference(source_path, title=None, source=None, notes=None, force=False,
         content_hash=content_hash,
         is_own_work=is_own_work,
     )
-    embeddings.add_to_index(
-        ref_id=ref_id,
-        embedding=embedding,
-        metadata={
-            "title": title,
-            "type": ref_type,
-            "tags": ", ".join(tags),
-        },
-    )
+    if embedding is not None:
+        embeddings.add_to_index(
+            ref_id=ref_id,
+            embedding=embedding,
+            metadata={
+                "title": title,
+                "type": ref_type,
+                "tags": ", ".join(tags),
+            },
+        )
 
     if ref_type == "image":
         # Derived data, not part of what "adding a reference" means to
@@ -395,7 +443,8 @@ def rotate_reference(ref_id):
     content_hash = _file_hash(path)
     # Genuinely new pixels, so the CLIP vector has to be recomputed -- local
     # CPU work, no API call, unlike the tagging this deliberately doesn't redo.
-    embedding = embeddings.embed_image(path)
+    # With embeddings switched off there is no vector to refresh.
+    embedding = embeddings.embed_image(path) if config.embeddings_enabled() else None
 
     db.update_reference_content_hash(ref_id, content_hash)
     # A rotation doesn't touch the palette, so the stored colour profile is
@@ -403,7 +452,8 @@ def rotate_reference(ref_id):
     # list_references_needing_colour would re-queue every rotated image for
     # an analysis whose result would come back identical.
     db.update_colour_analysis_content_hash(ref_id, content_hash)
-    embeddings.update_embedding(ref_id, embedding)
+    if embedding is not None:
+        embeddings.update_embedding(ref_id, embedding)
 
     return db.get_reference(ref_id)
 
@@ -411,15 +461,17 @@ def rotate_reference(ref_id):
 def add_folder(folder_path, source=None, notes=None, recursive=False, force=False, is_own_work=False):
     """Add every supported file in a folder. Returns (results, skipped, errors).
 
-    Fails fast (before touching any file) if the Claude API key isn't set,
-    rather than failing once per file in the folder. Files identical to ones
-    already in the library are skipped, not treated as errors.
+    Without an API key the files are still added -- untagged, titled by
+    filename -- and the note below says so once rather than once per file.
+    Files identical to ones already in the library are skipped, not treated
+    as errors.
     """
     folder_path = Path(folder_path).expanduser().resolve()
     if not folder_path.is_dir():
         raise NotADirectoryError(f"{folder_path} is not a folder")
 
-    tagging.get_client()  # raises immediately if ANTHROPIC_API_KEY is missing
+    if not config.claude_available():
+        print("No ANTHROPIC_API_KEY set -- adding without tags (titles come from filenames).")
 
     pattern = "**/*" if recursive else "*"
     files = sorted(
@@ -444,3 +496,54 @@ def add_folder(folder_path, source=None, notes=None, recursive=False, force=Fals
             print(f"  FAILED: {e}")
             errors.append((path, str(e)))
     return results, skipped, errors
+
+
+def backfill_tags(limit=None):
+    """Tag the references that have no tags -- the ones added with no key, or
+    while Claude was unreachable -- so supplying a key later fills them in
+    rather than needing a re-import. Returns {"tagged", "failed", "error"}.
+
+    Bounded by `limit` because each reference is a Claude call of a few
+    seconds, and idempotent so a caller simply runs it again to continue (the
+    same shape as colour.backfill). A reference that fails is counted and left
+    untagged for next time; the first failure's reason is returned so a rate
+    limit or a bad key is explained rather than silent.
+
+    Only tags and the description are written. The title is the user's -- it
+    may have been renamed since it was added -- and silently replacing it with
+    a caption is not this function's call to make.
+    """
+    if not config.claude_available():
+        raise tagging.ClaudeUnavailable("Tagging needs an ANTHROPIC_API_KEY.")
+
+    tagged = failed = 0
+    first_error = None
+    for ref in db.list_untagged_references(limit=limit):
+        path = config.REFERENCES_DIR / ref["filepath"]
+        ext = path.suffix.lower()
+        extracted_images = []
+        try:
+            if not path.exists():
+                raise FileNotFoundError(f"{ref['filepath']} is missing from the archive")
+            full_text = None
+            if ref["type"] == "text":
+                if ext in PDF_EXTS:
+                    full_text, extracted_images = _extract_pdf_content(path)
+                else:
+                    full_text = path.read_text(encoding="utf-8", errors="ignore")
+            _, tags, description = _request_tags(path, ext, ref["title"], full_text, extracted_images)
+            if not tags:
+                raise ValueError("Claude's reply had no tags in it")
+            db.update_reference_tags(ref["id"], tags, description)
+            embeddings.update_metadata(
+                ref["id"], {"title": ref["title"], "type": ref["type"], "tags": ", ".join(tags)}
+            )
+            tagged += 1
+        except Exception as e:
+            failed += 1
+            first_error = first_error or f"{type(e).__name__}: {e}"
+        finally:
+            for p in extracted_images:
+                p.unlink(missing_ok=True)
+
+    return {"tagged": tagged, "failed": failed, "error": first_error}

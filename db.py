@@ -1325,6 +1325,44 @@ def update_reference_title(ref_id, title):
         conn.execute("UPDATE reference_items SET title = ? WHERE id = ?", (title, ref_id))
 
 
+# "Untagged" means no tags -- the state ingest leaves a reference in when
+# there was no key, or Claude was unreachable (see ingest._claude_tags). Tags
+# are stored as a JSON list, so an empty one is the text "[]"; NULL and "" are
+# there for rows written by older code or by hand.
+_UNTAGGED = "(tags IS NULL OR tags IN ('', '[]'))"
+
+
+def list_untagged_references(limit=None):
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM reference_items WHERE {_UNTAGGED} ORDER BY date_added DESC"
+        ).fetchall()
+    out = [_row_to_dict(r) for r in rows]
+    return out[:limit] if limit else out
+
+
+def count_untagged_references():
+    with get_conn() as conn:
+        return conn.execute(
+            f"SELECT COUNT(*) AS c FROM reference_items WHERE {_UNTAGGED}"
+        ).fetchone()["c"]
+
+
+def update_reference_tags(ref_id, tags, description=None):
+    """Fill in tags, and the description too if one is given. A description is
+    never blanked by omission -- only replaced by a real one."""
+    with get_conn() as conn:
+        if description:
+            conn.execute(
+                "UPDATE reference_items SET tags = ?, description = ? WHERE id = ?",
+                (json.dumps(tags), description, ref_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE reference_items SET tags = ? WHERE id = ?", (json.dumps(tags), ref_id)
+            )
+
+
 def update_reference_content_hash(ref_id, content_hash):
     """Repoint a reference at new file bytes without touching anything else
     about it -- used when a reference's own file is rewritten in place

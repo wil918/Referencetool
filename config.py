@@ -38,6 +38,51 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 # You can swap this for any current Claude model via the .env file.
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5")
 
+
+def _env_flag(name):
+    """True when `name` is set to 1/true/yes/on in the environment or .env.
+    Unset, empty or anything else is False -- every flag below defaults to the
+    app's behaviour before the flag existed."""
+    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# --- What this copy of the app is configured to do ---------------------------
+#
+# Three capabilities, three different sources. Two are switches a person sets
+# in .env, and both default to "everything on" so an existing install is
+# unchanged by their existence. The third is not a switch at all: whether
+# Claude is available is a fact about the machine (is there a key?), and a
+# separate "demo" flag beside it could only ever disagree with that fact.
+
+# ARCHIVE_ONLY=1 turns the whole schedule off: its routes are not registered,
+# its pages are not served, and the nav drops its entries. What is left is the
+# archive, projects, folders, the canvas, portfolio spreads and the 3D views.
+# init_db() still creates the schedule's (empty) tables -- harmless, and it
+# keeps this reversible by editing one value.
+ARCHIVE_ONLY = _env_flag("ARCHIVE_ONLY")
+
+# SKIP_EMBEDDINGS=1 never loads the CLIP model or touches Chroma. An escape
+# hatch, not a recommendation: the model is a one-off ~600 MB download that then
+# runs locally with no per-use cost, and it is what powers semantic search, the
+# similarity graph and the constellation. Colour search and the colour space do
+# not need it.
+SKIP_EMBEDDINGS = _env_flag("SKIP_EMBEDDINGS")
+
+
+def schedule_enabled():
+    return not ARCHIVE_ONLY
+
+
+def embeddings_enabled():
+    return not SKIP_EMBEDDINGS
+
+
+def claude_available():
+    """True if a call to Claude can be made at all. Everything that would make
+    one -- tagging, analysis, brief import, task generation -- asks this, and
+    nothing else: one definition, derived from the key being present."""
+    return bool(ANTHROPIC_API_KEY)
+
 # Optional shared secret for the browser extension's capture API. Left unset
 # for the normal local setup, where the server only listens on 127.0.0.1 and
 # the only thing that can reach it is already on this machine. Set it in .env
@@ -87,4 +132,6 @@ def _detect_local_timezone():
 LOCAL_TIMEZONE = _detect_local_timezone()
 
 for _d in (IMAGES_DIR, TEXTS_DIR, DATA_DIR, CHROMA_DIR, BRIEFS_DIR, SUPPORTING_DOCS_DIR, THUMBNAILS_DIR, PORTFOLIO_DIR):
+    if _d == CHROMA_DIR and SKIP_EMBEDDINGS:
+        continue  # Chroma is never opened, so its folder is not made either
     _d.mkdir(parents=True, exist_ok=True)

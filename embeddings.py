@@ -6,23 +6,51 @@ or find an essay related to a photograph, later on.
 
 Uses Chroma in local persistent mode -- it's just a folder on disk, no
 server to run.
+
+SKIP_EMBEDDINGS (config.embeddings_enabled) turns all of this off. chromadb and
+sentence-transformers are therefore imported where they are first needed, not
+at the top: a copy running without embeddings never loads either, and does not
+need them installed. What happens to each function when they are off is chosen
+by what its caller can do about it -- writes that have nothing to write to are
+quiet no-ops (indexing a vector that was never made, removing one that never
+existed), and reads that cannot be answered raise EmbeddingsDisabled so the
+route in front of them can say why instead of returning a misleading empty
+result. Callers still check config.embeddings_enabled() first; the raise is the
+backstop that makes a missed one a clear message rather than a 600 MB download.
 """
 import statistics
 
 import numpy as np
 from PIL import Image
 
-import chromadb
-from sentence_transformers import SentenceTransformer
-
+import config
 from config import CHROMA_DIR
 
 _model = None
 
 
+class EmbeddingsDisabled(RuntimeError):
+    """Something asked for the CLIP model or the vector store while
+    SKIP_EMBEDDINGS is set."""
+
+
+DISABLED_MESSAGE = (
+    "Embeddings are switched off (SKIP_EMBEDDINGS is set in .env), so there are no "
+    "vectors to search or compare. Remove it and restart to turn them on."
+)
+
+
+def _require_enabled():
+    if not config.embeddings_enabled():
+        raise EmbeddingsDisabled(DISABLED_MESSAGE)
+
+
 def get_model():
     global _model
+    _require_enabled()
     if _model is None:
+        from sentence_transformers import SentenceTransformer
+
         # clip-ViT-B-32: general-purpose multimodal embedding model.
         # Downloads once (~600MB) on first use, then runs fully offline.
         _model = SentenceTransformer("clip-ViT-B-32")
@@ -80,7 +108,10 @@ _task_collection = None
 
 def _get_client():
     global _client
+    _require_enabled()
     if _client is None:
+        import chromadb
+
         _client = chromadb.PersistentClient(path=str(CHROMA_DIR))
     return _client
 
@@ -116,6 +147,8 @@ def clear_task_collection():
     rebuilds this wholesale from the tasks table before its next estimate, so
     emptying it here only stops stale neighbours surfacing in the meantime.
     The reference collection (get_collection) is left untouched."""
+    if not config.embeddings_enabled():
+        return 0  # nothing was ever indexed, and Chroma is not to be opened
     collection = get_task_collection()
     ids = collection.get(include=[])["ids"]
     if ids:
@@ -124,6 +157,8 @@ def clear_task_collection():
 
 
 def add_to_index(ref_id, embedding, metadata):
+    if not config.embeddings_enabled():
+        return
     collection = get_collection()
     collection.add(ids=[ref_id], embeddings=[embedding], metadatas=[metadata])
 
@@ -133,13 +168,30 @@ def update_embedding(ref_id, embedding):
     metadata -- used when a file's bytes changed (currently: rotation) but
     what it's tagged/titled as hasn't. An upsert rather than remove+add so
     the metadata survives without being re-supplied here."""
+    if not config.embeddings_enabled():
+        return
     collection = get_collection()
     collection.upsert(ids=[ref_id], embeddings=[embedding])
+
+
+def update_metadata(ref_id, metadata):
+    """Replace a reference's stored metadata, leaving its vector alone -- used
+    when tags arrive after the fact (ingest.backfill_tags). Quiet if the
+    reference has no vector to attach it to."""
+    if not config.embeddings_enabled():
+        return
+    collection = get_collection()
+    try:
+        collection.update(ids=[ref_id], metadatas=[metadata])
+    except Exception:
+        pass
 
 
 def remove_from_index(ref_id):
     """Drop a reference's vector from the index. Safe to call for an id that
     isn't there (e.g. a reference that never got embedded)."""
+    if not config.embeddings_enabled():
+        return
     collection = get_collection()
     try:
         collection.delete(ids=[ref_id])

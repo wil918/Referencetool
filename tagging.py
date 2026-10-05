@@ -13,7 +13,8 @@ from anthropic import (
 )
 from PIL import Image
 
-from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+import config
+from config import CLAUDE_MODEL
 
 _client = None
 
@@ -24,15 +25,27 @@ MAX_IMAGE_BYTES = 4_500_000  # stay comfortably under the API's per-image limit
 RETRYABLE_ERRORS = (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)
 
 
+class ClaudeUnavailable(RuntimeError):
+    """Raised when something needs Claude and no API key is configured.
+
+    A RuntimeError subclass so anything already catching the old bare
+    RuntimeError still does. Callers that can carry on without Claude (ingest)
+    check config.claude_available() first and never see it; the ones that
+    cannot (analysis, brief import) turn it into a plain message.
+    """
+
+
 def get_client():
     global _client
     if _client is None:
-        if not ANTHROPIC_API_KEY:
-            raise RuntimeError(
+        # config.ANTHROPIC_API_KEY, read at call time rather than bound at
+        # import, so the key being absent is decided in one place.
+        if not config.claude_available():
+            raise ClaudeUnavailable(
                 "ANTHROPIC_API_KEY is not set. Copy .env.example to .env "
                 "and add your key from console.anthropic.com."
             )
-        _client = Anthropic(api_key=ANTHROPIC_API_KEY)
+        _client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
     return _client
 
 

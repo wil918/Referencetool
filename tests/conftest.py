@@ -66,6 +66,13 @@ def archive(tmp_path, monkeypatch):
     for d in (images, texts):
         d.mkdir(parents=True)
 
+    # Claude is stubbed below, but whether it is *available* is now decided by
+    # config.claude_available() -- a developer's real key, or the lack of one on
+    # a clean machine, must not change what these tests see. A test about the
+    # keyless behaviour unsets it itself.
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(config, "ARCHIVE_ONLY", False)
+    monkeypatch.setattr(config, "SKIP_EMBEDDINGS", False)
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(ingest, "IMAGES_DIR", images)
     monkeypatch.setattr(ingest, "TEXTS_DIR", texts)

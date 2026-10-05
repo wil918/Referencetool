@@ -161,7 +161,7 @@ def classify_gaps(events):
     cached = db.get_commitment_classifications(set(representative), CLASSIFY_VERSION)
 
     missing = [h for h in representative if h not in cached]
-    if missing and config.ANTHROPIC_API_KEY:
+    if missing and config.claude_available():
         fresh = _call_model([representative[h] for h in missing])
         for index, description_hash in enumerate(missing):
             fields = _clean_fields(fresh.get(index))

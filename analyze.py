@@ -13,6 +13,7 @@ from datetime import date
 from html.parser import HTMLParser
 
 import colour
+import config
 import db
 import embeddings
 import graph_layout
@@ -51,6 +52,10 @@ def gather_context(references):
     """
     selected_ids = {r["id"] for r in references}
     related = {}
+    if not config.embeddings_enabled():
+        # No vectors to look neighbours up in: the write-up is about exactly
+        # the references chosen, which is also what it says it is shown.
+        return {ref["id"]: [] for ref in references}
     for ref in references:
         embedding = _get_embedding(ref["id"])
         if embedding is None:
@@ -349,6 +354,8 @@ def _cluster_analysis_context(references):
     that come closest to touching -- or None if there are fewer than two
     clusters, or no similarity scores have been computed yet.
     """
+    if not config.embeddings_enabled():
+        return [], None  # clusters are CLIP clusters; with no CLIP there are none to measure
     ids = [r["id"] for r in references]
     graph = graph_layout.build_graph(reference_ids=ids)
     if not graph["nodes"]:
