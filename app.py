@@ -38,6 +38,7 @@ import export
 import graph_layout
 import ics_import
 import ingest
+import portfolio
 import scheduling
 import spreads
 import style_gen
@@ -495,7 +496,12 @@ def api_delete_project(project_id):
     stay in the archive -- only the grouping goes."""
     if not db.get_project(project_id):
         abort(404)
+    # The staged pages' files are listed before their rows go with the project,
+    # and removed after: a crash in between leaves an orphan file, never a row
+    # pointing at nothing.
+    staged_files = portfolio.project_page_paths(project_id)
     db.delete_project(project_id)
+    portfolio.remove_files(staged_files)
     return jsonify({"ok": True, "id": project_id})
 
 
@@ -1095,40 +1101,83 @@ def api_delete_canvas_node(node_id):
     return jsonify({"ok": True, "id": node_id})
 
 
-@app.get("/api/canvas/nodes/<node_id>/export.pdf")
-def api_export_spread(node_id):
-    """A portfolio spread as a print-ready PDF: true A4 pages, in the spread's
-    order, streamed as it's built (spreads.export_pdf says how). An empty slot
-    -- or an upload that hasn't finished ingesting, or an image since deleted
-    from the archive -- is a blank page, never a skipped one."""
+def _exportable_spread(node_id):
+    """(node, None) for a spread with pages to export, else (None, response)."""
     node = db.get_canvas_node(node_id)
     if not node:
         abort(404)
     if node["kind"] != "pages":
-        return jsonify({"error": "only a spread of pages can be exported as a PDF"}), 400
-    config_ = node["config"] or {}
-    entries = config_.get("pages") or []
-    if not entries:
-        return jsonify({"error": "this spread has no pages"}), 400
+        return None, (jsonify({"error": "only a spread of pages can be exported as a PDF"}), 400)
+    if not (node["config"] or {}).get("pages"):
+        return None, (jsonify({"error": "this spread has no pages"}), 400)
+    return node, None
+
+
+def _export_dpi_for(node):
+    """The resolution an export request asks for: ?dpi= if given (a one-off
+    override), else the project's Portfolio widget setting, else the default."""
+    return spreads.parse_export_dpi(
+        request.args.get("dpi"), default=portfolio.export_dpi_default(node["project_id"])
+    )
+
+
+@app.get("/api/canvas/nodes/<node_id>/export.pdf")
+def api_export_spread(node_id):
+    """A portfolio spread as a print-ready PDF: true A4 pages, in the spread's
+    order, streamed as it's built (spreads.export_pdf says how). An empty slot
+    -- or a staged page since deleted -- is a blank page, never a skipped one.
+
+    Reads only the staging store: nothing is written to the archive, and no
+    page is tagged or embedded by being exported. Images above the export
+    resolution are resampled down to it; see spreads._plan_page. `job` names
+    the export so the client can ask whether it has finished
+    (api_export_status)."""
+    node, failure = _exportable_spread(node_id)
+    if failure:
+        return failure
+    dpi, error = _export_dpi_for(node)
+    if error:
+        return jsonify({"error": error}), 400
+    job = request.args.get("job")
+    if job and not portfolio.JOB_ID.match(job):
+        return jsonify({"error": "job must be 8-64 letters, digits, - or _"}), 400
 
     # Resolved up front, while the request is live: the generator below runs
     # after this view has returned.
-    pages = []
-    for entry in entries:
-        ref = db.get_reference(entry.get("reference_id")) if entry.get("reference_id") else None
-        path = _resolve_ref_path(ref) if ref else None
-        if path is not None and (path.suffix.lower() not in ingest.IMAGE_EXTS or not path.exists()):
-            path = None
-        pages.append({"path": path, "fit": entry.get("fit"), "crop": entry.get("crop")})
-
+    pages = portfolio.export_pages(node)
     project = db.get_project(node["project_id"])
     title = project["title"] if project else "Portfolio"
-    orientation = config_.get("orientation", "portrait")
+    orientation = (node["config"] or {}).get("orientation", "portrait")
+    stream = spreads.export_pdf(pages, orientation=orientation, title=title, dpi=dpi)
     return Response(
-        spreads.export_pdf(pages, orientation=orientation, title=title),
+        portfolio.track_export(job, stream),
         mimetype="application/pdf",
         headers={"Content-Disposition": _attachment_header(f"{title} - pages.pdf")},
     )
+
+
+@app.get("/api/canvas/nodes/<node_id>/export-plan")
+def api_export_plan(node_id):
+    """What exporting this spread at ?dpi= would do to each page -- resampled
+    down, left as it is, or below the target and flagged -- so the export
+    dialog can say so before anything is sent. Same resolution rules as
+    export.pdf."""
+    node, failure = _exportable_spread(node_id)
+    if failure:
+        return failure
+    dpi, error = _export_dpi_for(node)
+    if error:
+        return jsonify({"error": error}), 400
+    return jsonify(portfolio.export_plan(node, dpi))
+
+
+@app.get("/api/portfolio/exports/<job_id>")
+def api_export_status(job_id):
+    """Whether an export started with ?job=<job_id> has run to its last byte.
+    "unknown" until the download begins."""
+    if not portfolio.JOB_ID.match(job_id):
+        abort(404)
+    return jsonify({"state": portfolio.export_state(job_id)})
 
 
 def _attachment_header(filename):
@@ -1137,6 +1186,139 @@ def _attachment_header(filename):
     fallback for anything that can't read the encoded form."""
     fallback = "".join(c if c.isascii() and c not in '"\\' else "_" for c in filename)
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename)}"
+
+
+# --- Portfolio staging -----------------------------------------------------
+#
+# Thin wrappers over portfolio.py. Pages are staged here, not ingested: see
+# that module for why nothing below calls Claude or CLIP, except promote.
+
+
+@app.errorhandler(portfolio.PortfolioError)
+def _portfolio_error(exc):
+    return jsonify({"error": str(exc)}), exc.status
+
+
+def _staged_summary(page, created=None, orientation=None, fit=None):
+    summary = {
+        "id": page["id"],
+        "filename": page["filename"],
+        "width": page["width"],
+        "height": page["height"],
+        "uploaded_at": page["uploaded_at"],
+        # How the page would print where it is being put, so the canvas can
+        # warn the moment it is dropped rather than when the PDF comes back soft.
+        "print": spreads.print_check(
+            page["width"], page["height"],
+            orientation=orientation if orientation in spreads.ORIENTATIONS else "portrait",
+            fit=fit if fit in spreads.FITS else "contain",
+        ),
+    }
+    if created is not None:
+        summary["created"] = created
+    return summary
+
+
+@app.get("/api/projects/<project_id>/portfolio")
+def api_portfolio(project_id):
+    """The staged pages, where each sits, and each spread's slots in page
+    order -- what the Portfolio widget and its management view draw."""
+    _require_project(project_id)
+    return jsonify(portfolio.overview(project_id))
+
+
+@app.post("/api/projects/<project_id>/portfolio/pages")
+def api_stage_portfolio_pages(project_id):
+    """Stage one or more uploaded images (multipart, field `file`). Direct and
+    synchronous: the bytes are stored, hashed and measured and the response is
+    the pages -- no capture queue, no tagging, no embedding. `orientation` and
+    `fit` are optional and only decide which print check each page is given."""
+    _require_project(project_id)
+    uploads = request.files.getlist("file")
+    if not uploads:
+        return jsonify({"error": "no files were sent"}), 400
+    orientation, fit = request.form.get("orientation"), request.form.get("fit")
+
+    staged, errors = [], []
+    for upload in uploads:
+        try:
+            page, created = portfolio.stage_upload(project_id, upload)
+        except portfolio.PortfolioError as exc:
+            errors.append({"filename": upload.filename, "error": str(exc)})
+            continue
+        staged.append(_staged_summary(page, created, orientation, fit))
+    payload = {"pages": staged, "errors": errors}
+    if not staged:
+        payload["error"] = errors[0]["error"]
+    return jsonify(payload), (200 if staged else 400)
+
+
+@app.get("/api/portfolio/pages/<page_id>/file")
+def api_portfolio_page_file(page_id):
+    page = db.get_portfolio_page(page_id)
+    path = portfolio.path_for(page) if page else None
+    if not path or not path.exists():
+        abort(404)
+    mime, _ = mimetypes.guess_type(str(path))
+    return send_file(path, mimetype=mime or "application/octet-stream")
+
+
+@app.get("/api/portfolio/pages/<page_id>/thumb")
+def api_portfolio_page_thumb(page_id):
+    """A staged page's thumbnail, from the same content-hash cache the archive
+    uses (thumbnails.py) -- which does not care whether the bytes are a
+    reference or a page."""
+    page = db.get_portfolio_page(page_id)
+    path = portfolio.path_for(page) if page else None
+    if not path or not path.exists():
+        abort(404)
+    return _thumbnail_response(path, page["content_hash"])
+
+
+@app.delete("/api/portfolio/pages/<page_id>")
+def api_delete_portfolio_page(page_id):
+    """Delete a staged page and its file. A spread that used it keeps the slot,
+    emptied. The archive is untouched, including a reference this page was
+    promoted to."""
+    portfolio.delete_page(page_id)
+    return jsonify({"ok": True, "id": page_id})
+
+
+@app.post("/api/portfolio/pages/<page_id>/replace")
+def api_replace_portfolio_page(page_id):
+    """Stage a new file in this page's place. The old page stays in the store
+    as an earlier version."""
+    if "file" not in request.files:
+        return jsonify({"error": "no file was sent"}), 400
+    result = portfolio.replace_page(page_id, request.files["file"])
+    return jsonify({"page": _staged_summary(result["page"]), "slots": result["slots"]})
+
+
+@app.post("/api/portfolio/pages/<page_id>/promote")
+def api_promote_portfolio_page(page_id):
+    """Add a staged page to the archive as own work -- the one route here that
+    calls Claude and CLIP. A page whose bytes the archive already has comes
+    back with created: false and nothing is sent anywhere."""
+    try:
+        return jsonify(portfolio.promote(page_id))
+    except portfolio.PortfolioError:
+        raise
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.post("/api/portfolio/pages/<page_id>/place")
+def api_place_portfolio_page(page_id):
+    body = request.get_json(force=True, silent=True) or {}
+    return jsonify(portfolio.place(page_id, body.get("node_id"), body.get("index")))
+
+
+@app.post("/api/projects/<project_id>/portfolio/fill")
+def api_fill_portfolio_spread(project_id):
+    """Fill a spread's empty pages from the staged pages that are waiting."""
+    _require_project(project_id)
+    body = request.get_json(force=True, silent=True) or {}
+    return jsonify(portfolio.fill(project_id, body.get("node_id")))
 
 
 @app.post("/api/projects/<project_id>/canvas/edges")
@@ -1442,6 +1624,29 @@ def media_download(ref_id):
     )
 
 
+def _thumbnail_response(path, content_hash):
+    """The cached thumbnail of an image file (thumbnails.py), as a response.
+    Shared by an archive reference and a staged portfolio page: the cache is
+    keyed by the bytes, so it does not care which of the two they belong to."""
+    try:
+        thumb_path, mime = thumbnails.thumbnail_for(path, content_hash)
+    except Exception:
+        # A file Pillow can't decode is rare but not a 404 -- fall back
+        # to the original exactly like before this cache existed.
+        mime, _ = mimetypes.guess_type(str(path))
+        return send_file(path, mimetype=mime or "image/jpeg")
+    # The cache key already *is* the bytes' identity, so the ETag is
+    # free and exact -- no need for Flask's default stat-based one, and
+    # max-age can be a year: the file at this path never changes under
+    # it, only a new path (new hash, new version) replaces it.
+    response = make_response(
+        send_file(thumb_path, mimetype=mime, etag=False, conditional=False)
+    )
+    response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    response.set_etag(thumb_path.stem)
+    return response.make_conditional(request)
+
+
 @app.get("/media/<ref_id>/thumb")
 def media_thumb(ref_id):
     ref = _find_reference(ref_id)
@@ -1453,23 +1658,7 @@ def media_thumb(ref_id):
     ext = path.suffix.lower()
 
     if ext in ingest.IMAGE_EXTS:
-        try:
-            thumb_path, mime = thumbnails.thumbnail_for(path, ref.get("content_hash"))
-        except Exception:
-            # A file Pillow can't decode is rare but not a 404 -- fall back
-            # to the original exactly like before this cache existed.
-            mime, _ = mimetypes.guess_type(str(path))
-            return send_file(path, mimetype=mime or "image/jpeg")
-        # The cache key already *is* the bytes' identity, so the ETag is
-        # free and exact -- no need for Flask's default stat-based one, and
-        # max-age can be a year: the file at this path never changes under
-        # it, only a new path (new hash, new version) replaces it.
-        response = make_response(
-            send_file(thumb_path, mimetype=mime, etag=False, conditional=False)
-        )
-        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-        response.set_etag(thumb_path.stem)
-        return response.make_conditional(request)
+        return _thumbnail_response(path, ref.get("content_hash"))
 
     if ext == ".pdf":
         try:
@@ -3786,6 +3975,15 @@ def bootstrap():
             "ARCHIVE_HOST to go back to localhost-only."
         )
     db.init_db()
+    # Spreads that still name archive references get staged copies. A failure
+    # here must not stop the app starting: the unmigrated slots just read as
+    # empty until the next start, and the archive rows are untouched either way.
+    try:
+        migrated = portfolio.migrate_spread_references()
+        if migrated["migrated"] or migrated["emptied"] or migrated["left"]:
+            print(f"portfolio pages staged: {migrated}")
+    except Exception as exc:
+        print(f"portfolio migration failed (will retry next start): {exc}")
     # Pick up anything a previous run left mid-flight before serving.
     resumed, lost = capture.resume_pending()
     if resumed or lost:

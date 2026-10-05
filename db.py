@@ -271,10 +271,11 @@ CREATE TABLE IF NOT EXISTS layouts (
 # kind = "pages" is a portfolio spread: one node that owns its pages, so
 # moving or resizing it carries every page with it. Its config holds the
 # layout and the page order -- { layout, orientation, cover, gap, pages: [
-# { reference_id, fit, crop?, capture_id? } ] } -- and a page is never a node
-# of its own. reference_id stays NULL on the node itself; the references are
-# inside config, one per page, and null there is an empty slot. See
-# spreads.py.
+# { page_id, fit, crop? } ] } -- and a page is never a node of its own.
+# reference_id stays NULL on the node itself; page_id points into
+# portfolio_pages (below), one per page, and null there is an empty slot. See
+# spreads.py. Spreads used to name archive references instead; portfolio.py's
+# migrate_spread_references rewrites any that still do.
 #
 # x/y/w/h are REAL world coordinates, never screen coordinates -- a screen
 # position stops meaning anything the moment the canvas is panned or zoomed.
@@ -307,6 +308,45 @@ CREATE TABLE IF NOT EXISTS canvas_edges (
 );
 """
 
+# Pages staged for a project's portfolio spreads.
+#
+# A page is a working file, not an archive record: it is not tagged, not
+# embedded, not searchable, and costs nothing to upload, replace or delete. That
+# is the point of the table -- every revision of a page used to go through the
+# capture queue and leave another near-duplicate reference behind. A page only
+# reaches the archive by being promoted (portfolio.promote), which is explicit.
+#
+# Project-scoped, not spread-scoped: a page can exist before it has a slot, and
+# a replaced page stays here as its own row, which is how versions accumulate
+# somewhere cheap. A spread's page entry points at one of these by id.
+#
+# width/height are the image as DISPLAYED (spreads.image_size applies EXIF
+# orientation), because that is the shape that prints. filepath is relative to
+# config.PORTFOLIO_DIR. content_hash is the sha256 of the file's bytes, the
+# same as reference_items.content_hash -- it keys the thumbnail cache
+# (thumbnails.py) and is how a page is recognised as already promoted, so no
+# "promoted" column exists to drift out of step with the archive.
+#
+# filename is the name the file arrived with: shown in the management view and
+# the title a promoted page starts with (the stored file is named by id).
+# ever_placed is set by db.py itself whenever any spread's config names the
+# page, and never cleared. It is what tells an upload that is still waiting for
+# a slot from a page that was on the document and came off it -- an earlier
+# version -- which a bulk "fill empty pages" must not put back.
+PORTFOLIO_PAGES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS portfolio_pages (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    filepath TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    uploaded_at TEXT NOT NULL,
+    filename TEXT,
+    ever_placed INTEGER NOT NULL DEFAULT 0
+);
+"""
+
 PROJECT_SPACE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_folders_project ON folders(project_id)",
     # The reverse lookup: which folders a given reference is filed in, and the
@@ -315,6 +355,8 @@ PROJECT_SPACE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_widgets_project ON widgets(project_id)",
     "CREATE INDEX IF NOT EXISTS idx_canvas_nodes_project ON canvas_nodes(project_id)",
     "CREATE INDEX IF NOT EXISTS idx_canvas_edges_project ON canvas_edges(project_id)",
+    # Upload looks a page up by (project, hash) to recognise one it already has.
+    "CREATE INDEX IF NOT EXISTS idx_portfolio_pages_project ON portfolio_pages(project_id, content_hash)",
 )
 
 # What a brand new project starts with. The folder names are the six lenses
@@ -987,6 +1029,7 @@ def init_db():
         conn.execute(LAYOUTS_SCHEMA)
         conn.execute(CANVAS_NODES_SCHEMA)
         conn.execute(CANVAS_EDGES_SCHEMA)
+        conn.execute(PORTFOLIO_PAGES_SCHEMA)
         for ddl in PROJECT_SPACE_INDEXES:
             conn.execute(ddl)
         conn.execute(DELIVERABLES_SCHEMA)
@@ -1339,14 +1382,19 @@ def delete_reference(ref_id):
         conn.execute("DELETE FROM canvas_nodes WHERE reference_id = ?", (ref_id,))
         # A page on a spread is different: the slot stays, empty, because the
         # spread's pagination is the document. Removing the page would quietly
-        # renumber everything after it.
-        _empty_spread_pages(conn, ref_id)
+        # renumber everything after it. Only a spread not yet migrated to
+        # staged pages (portfolio.migrate_spread_references) still names a
+        # reference, but when one does this is still the right thing to do.
+        _empty_spread_pages(conn, "reference_id", ref_id)
 
 
-def _empty_spread_pages(conn, ref_id):
+def _empty_spread_pages(conn, field, value):
+    """Empty every spread slot whose `field` (reference_id for an archive
+    reference, page_id for a staged page) is `value`, keeping the slot -- and
+    its fit, but not a crop chosen for an image that is no longer there."""
     rows = conn.execute(
         "SELECT id, config FROM canvas_nodes WHERE kind = 'pages' AND config LIKE ?",
-        (f"%{ref_id}%",),
+        (f"%{value}%",),
     ).fetchall()
     for row in rows:
         try:
@@ -1355,8 +1403,8 @@ def _empty_spread_pages(conn, ref_id):
             continue
         changed = False
         for page in (config or {}).get("pages") or []:
-            if isinstance(page, dict) and page.get("reference_id") == ref_id:
-                page["reference_id"] = None
+            if isinstance(page, dict) and page.get(field) == value:
+                page[field] = None
                 page.pop("crop", None)
                 changed = True
         if changed:
@@ -1426,6 +1474,9 @@ def delete_project(project_id):
         conn.execute("DELETE FROM project_settings WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM canvas_nodes WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM canvas_edges WHERE project_id = ?", (project_id,))
+        # The rows only; the files are the caller's to remove (portfolio.
+        # delete_project_pages), since this module never touches the disk.
+        conn.execute("DELETE FROM portfolio_pages WHERE project_id = ?", (project_id,))
         # Schedule: deliverables and briefs only ever meant anything inside this
         # project, so they go with it -- same reasoning as the project space
         # above. Tasks are different (see TASKS_SCHEMA): the work may still
@@ -2525,6 +2576,10 @@ def update_canvas_node(node_id, **fields):
         conn.execute(
             f"UPDATE canvas_nodes SET {', '.join(sets)} WHERE id = ?", [*params, node_id]
         )
+        if "config" in fields:
+            row = conn.execute("SELECT kind FROM canvas_nodes WHERE id = ?", (node_id,)).fetchone()
+            if row and row["kind"] == "pages":
+                _note_placed_pages(conn, fields["config"])
 
 
 def delete_canvas_node(node_id):
@@ -2629,6 +2684,8 @@ def _insert_canvas_node(conn, node_id, project_id, kind, reference_id, x, y, w, 
             z_index or 0,
         ),
     )
+    if kind == "pages":
+        _note_placed_pages(conn, config)
 
 
 def _insert_canvas_edge(conn, edge_id, project_id, source_node_id, target_node_id, style):
@@ -2656,6 +2713,121 @@ def _canvas_node_to_dict(row):
 def _canvas_edge_to_dict(row):
     d = dict(row)
     d["style"] = json.loads(d["style"]) if d["style"] else None
+    return d
+
+
+# --- Portfolio pages ----------------------------------------------------
+#
+# The staging store behind a spread's pages. See PORTFOLIO_PAGES_SCHEMA, and
+# portfolio.py for everything that happens to the files.
+
+
+def _note_placed_pages(conn, config):
+    """Record that the pages a spread's config names have been on a document.
+
+    Done here, on the canvas-node writers, rather than in the routes: a spread
+    is written by the canvas's debounced PATCH, the bulk PUT, the management
+    view's place/fill and the migration, and the only thing they all share is
+    this module. One hook is a guarantee; four route-side calls are a hope.
+    """
+    entries = config.get("pages") if isinstance(config, dict) else None
+    ids = [
+        page["page_id"]
+        for page in entries or []
+        if isinstance(page, dict) and isinstance(page.get("page_id"), str) and page["page_id"]
+    ]
+    if ids:
+        marks = ", ".join("?" for _ in ids)
+        conn.execute(
+            f"UPDATE portfolio_pages SET ever_placed = 1 WHERE ever_placed = 0 AND id IN ({marks})",
+            ids,
+        )
+
+
+def insert_portfolio_page(page_id, project_id, filepath, content_hash, width, height,
+                          filename=None, uploaded_at=None):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO portfolio_pages
+                   (id, project_id, filepath, content_hash, width, height, uploaded_at, filename)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                page_id,
+                project_id,
+                filepath,
+                content_hash,
+                width,
+                height,
+                uploaded_at or datetime.now(timezone.utc).isoformat(),
+                filename,
+            ),
+        )
+
+
+def get_portfolio_page(page_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM portfolio_pages WHERE id = ?", (page_id,)).fetchone()
+        return _portfolio_page_to_dict(row) if row else None
+
+
+def list_portfolio_pages(project_id):
+    """Oldest first, which is the order a batch was uploaded in (rowid breaks
+    the tie between files that arrived in the same instant)."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM portfolio_pages WHERE project_id = ? ORDER BY uploaded_at, rowid",
+            (project_id,),
+        ).fetchall()
+        return [_portfolio_page_to_dict(r) for r in rows]
+
+
+def find_portfolio_page_by_hash(project_id, content_hash):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM portfolio_pages WHERE project_id = ? AND content_hash = ? "
+            "ORDER BY uploaded_at, rowid",
+            (project_id, content_hash),
+        ).fetchone()
+        return _portfolio_page_to_dict(row) if row else None
+
+
+def delete_portfolio_page(page_id):
+    """Remove a staged page, and empty the slot of every spread that used it.
+
+    One transaction, so a spread is never left naming a page that is gone. The
+    slot stays -- pagination is the document, and dropping it would quietly
+    renumber every page after it (the same rule delete_reference follows for a
+    reference on an unmigrated spread). Returns the deleted row so the caller
+    can remove its file, or None if there was no such page.
+    """
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM portfolio_pages WHERE id = ?", (page_id,)).fetchone()
+        if not row:
+            return None
+        conn.execute("DELETE FROM portfolio_pages WHERE id = ?", (page_id,))
+        _empty_spread_pages(conn, "page_id", page_id)
+        return _portfolio_page_to_dict(row)
+
+
+def list_spread_nodes(project_id=None):
+    """Every portfolio spread, in canvas order -- of one project, or (for the
+    migration, which must reach all of them) of every project."""
+    with get_conn() as conn:
+        if project_id is None:
+            rows = conn.execute(
+                "SELECT * FROM canvas_nodes WHERE kind = 'pages' ORDER BY project_id, z_index, id"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM canvas_nodes WHERE kind = 'pages' AND project_id = ? ORDER BY z_index, id",
+                (project_id,),
+            ).fetchall()
+        return [_canvas_node_to_dict(r) for r in rows]
+
+
+def _portfolio_page_to_dict(row):
+    d = dict(row)
+    d["ever_placed"] = bool(d["ever_placed"])
     return d
 
 

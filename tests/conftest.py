@@ -83,6 +83,10 @@ def archive(tmp_path, monkeypatch):
     thumbnails_dir = tmp_path / "thumbnails"
     thumbnails_dir.mkdir()
     monkeypatch.setattr(config, "THUMBNAILS_DIR", thumbnails_dir)
+    # Staged portfolio pages are the user's working files: a test that stages
+    # one must never leave it in the real store. Created lazily by
+    # portfolio.py, so a test that never stages a page leaves nothing behind.
+    monkeypatch.setattr(config, "PORTFOLIO_DIR", tmp_path / "portfolio")
     db.init_db()
 
     stubs = [

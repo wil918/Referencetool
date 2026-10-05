@@ -11,5 +11,7 @@ data/
 references/images/*
 references/texts/*
 deleted/
+# Staged portfolio pages (portfolio.py) -- working files, not archive material.
+portfolio/
 !references/images/.gitkeep
 !references/texts/.gitkeep

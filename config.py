@@ -15,6 +15,13 @@ CHROMA_DIR = DATA_DIR / "chroma_db"
 # Generated thumbnails, keyed by content hash -- see thumbnails.py. Derived
 # and recomputable like CHROMA_DIR; deleting it costs nothing but regeneration.
 THUMBNAILS_DIR = DATA_DIR / "thumbnails"
+# Portfolio pages staged for the spreads on a project's canvas -- see
+# portfolio.py. Beside references/ and deleted/ rather than inside either:
+# these are working files and their drafts, not archive material, and nothing
+# that walks the archive's tree (export, backup, a future re-index) should ever
+# meet them. Unlike THUMBNAILS_DIR this is NOT derived data -- it is the only
+# copy of a page until it is promoted -- so deleting it loses work.
+PORTFOLIO_DIR = BASE_DIR / "portfolio"
 # Original assignment-brief PDFs, kept so a re-import can be re-read and so the
 # review sheet can link "view original". Not references -- a brief is the source
 # a project's deliverables were built from, not an item in the library.
@@ -79,5 +86,5 @@ def _detect_local_timezone():
 
 LOCAL_TIMEZONE = _detect_local_timezone()
 
-for _d in (IMAGES_DIR, TEXTS_DIR, DATA_DIR, CHROMA_DIR, BRIEFS_DIR, SUPPORTING_DOCS_DIR, THUMBNAILS_DIR):
+for _d in (IMAGES_DIR, TEXTS_DIR, DATA_DIR, CHROMA_DIR, BRIEFS_DIR, SUPPORTING_DOCS_DIR, THUMBNAILS_DIR, PORTFOLIO_DIR):
     _d.mkdir(parents=True, exist_ok=True)

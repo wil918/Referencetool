@@ -351,8 +351,12 @@ def spread_config(pages, **overrides):
     return config
 
 
-def make_spread(client, pages, **overrides):
-    project_id = client.post("/api/projects", json={"title": "Portfolio"}).get_json()["id"]
+def new_project(client, title="Portfolio"):
+    return client.post("/api/projects", json={"title": title}).get_json()["id"]
+
+
+def make_spread(client, pages, project_id=None, **overrides):
+    project_id = project_id or new_project(client)
     response = client.post(
         f"/api/projects/{project_id}/canvas/nodes",
         json={"kind": "pages", "x": 10, "y": 20, "w": 900, "h": 500, "config": spread_config(pages, **overrides)},
@@ -361,8 +365,25 @@ def make_spread(client, pages, **overrides):
     return project_id, response.get_json()
 
 
+def stage_image(client, project_id, colour, size=(2480, 3508), fmt="PNG", name="page.png", **save_kwargs):
+    """Stage a generated image through the real upload route and return its page id."""
+    buf = io.BytesIO()
+    Image.new("RGB", size, colour).save(buf, fmt, **save_kwargs)
+    response = client.post(
+        f"/api/projects/{project_id}/portfolio/pages",
+        data={"file": (io.BytesIO(buf.getvalue()), name)},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200, response.get_json()
+    return response.get_json()["pages"][0]["id"]
+
+
+def empty(**extra):
+    return {"page_id": None, "fit": "contain", **extra}
+
+
 def test_a_spread_is_one_node_that_owns_its_pages(client):
-    pages = [{"reference_id": None, "fit": "contain"} for _ in range(30)]
+    pages = [empty() for _ in range(30)]
     project_id, node = make_spread(client, pages)
     nodes = client.get(f"/api/projects/{project_id}/canvas").get_json()["nodes"]
     assert len(nodes) == 1  # thirty pages, one node
@@ -372,8 +393,8 @@ def test_a_spread_is_one_node_that_owns_its_pages(client):
 
 
 def test_stretch_is_not_a_fit(client):
-    project_id, node = make_spread(client, [{"reference_id": None, "fit": "contain"}])
-    bad = spread_config([{"reference_id": None, "fit": "stretch"}])
+    project_id, node = make_spread(client, [empty()])
+    bad = spread_config([{"page_id": None, "fit": "stretch"}])
 
     created = client.post(f"/api/projects/{project_id}/canvas/nodes", json={"kind": "pages", "config": bad})
     assert created.status_code == 400
@@ -387,29 +408,17 @@ def test_stretch_is_not_a_fit(client):
 
 
 def test_a_spread_needs_a_page_list(client):
-    project_id = client.post("/api/projects", json={"title": "P"}).get_json()["id"]
+    project_id = new_project(client, "P")
     response = client.post(f"/api/projects/{project_id}/canvas/nodes", json={"kind": "pages", "config": {}})
     assert response.status_code == 400
 
 
-def add_image(archive, colour, size=(2480, 3508), fmt="PNG", name="page.png", **save_kwargs):
-    path = archive / name
-    Image.new("RGB", size, colour).save(path, fmt, **save_kwargs)
-    return ingest.add_reference(path, is_own_work=True, force=True)["id"]
-
-
-def test_deleting_a_placed_image_empties_its_slot_and_keeps_pagination(client, archive):
-    ref_id = add_image(archive, (200, 30, 30))
-    project_id, node = make_spread(client, [
-        {"reference_id": None, "fit": "contain"},
-        {"reference_id": ref_id, "fit": "cover", "crop": {"x": 0.2, "y": 0.5}},
-        {"reference_id": None, "fit": "contain"},
-    ])
-    assert client.delete(f"/api/references/{ref_id}").status_code == 200
-
-    pages = db.get_canvas_node(node["id"])["config"]["pages"]
-    assert len(pages) == 3
-    assert pages[1] == {"reference_id": None, "fit": "cover"}
+def test_a_page_id_has_to_be_an_id_or_null(client):
+    project_id = new_project(client)
+    bad = spread_config([{"page_id": 7, "fit": "contain"}])
+    assert client.post(
+        f"/api/projects/{project_id}/canvas/nodes", json={"kind": "pages", "config": bad}
+    ).status_code == 400
 
 
 # --- export -----------------------------------------------------------------
@@ -420,22 +429,23 @@ def centre_colour(page):
     return pix.pixel(pix.width // 2, pix.height // 2)
 
 
-def export(client, node_id):
-    response = client.get(f"/api/canvas/nodes/{node_id}/export.pdf")
+def export(client, node_id, query=""):
+    response = client.get(f"/api/canvas/nodes/{node_id}/export.pdf{query}")
     assert response.status_code == 200, response.data[:200]
     assert response.mimetype == "application/pdf"
     return fitz.open(stream=response.get_data(), filetype="pdf")
 
 
-def test_export_is_a4_pages_in_order_with_blanks_preserved(client, archive):
-    red = add_image(archive, (220, 20, 20), name="red.png")
-    blue = add_image(archive, (20, 20, 220), name="blue.png")
+def test_export_is_a4_pages_in_order_with_blanks_preserved(client):
+    project_id = new_project(client)
+    red = stage_image(client, project_id, (220, 20, 20), name="red.png")
+    blue = stage_image(client, project_id, (20, 20, 220), name="blue.png")
     _, node = make_spread(client, [
-        {"reference_id": red, "fit": "contain"},
-        {"reference_id": None, "fit": "contain"},
-        {"reference_id": blue, "fit": "contain"},
-        {"reference_id": None, "fit": "contain"},
-    ])
+        {"page_id": red, "fit": "contain"},
+        empty(),
+        {"page_id": blue, "fit": "contain"},
+        empty(),
+    ], project_id=project_id)
     doc = export(client, node["id"])
 
     assert len(doc) == 4  # the blanks are pages, not gaps
@@ -447,43 +457,54 @@ def test_export_is_a4_pages_in_order_with_blanks_preserved(client, archive):
     assert doc[3].get_images() == []
 
 
-def test_export_follows_the_spreads_order_after_a_reorder(client, archive):
-    red = add_image(archive, (220, 20, 20), name="red.png")
-    blue = add_image(archive, (20, 20, 220), name="blue.png")
+def test_export_follows_the_spreads_order_after_a_reorder(client):
+    project_id = new_project(client)
+    red = stage_image(client, project_id, (220, 20, 20), name="red.png")
+    blue = stage_image(client, project_id, (20, 20, 220), name="blue.png")
     _, node = make_spread(client, [
-        {"reference_id": red, "fit": "contain"},
-        {"reference_id": blue, "fit": "contain"},
-    ])
+        {"page_id": red, "fit": "contain"},
+        {"page_id": blue, "fit": "contain"},
+    ], project_id=project_id)
     client.patch(f"/api/canvas/nodes/{node['id']}", json={"config": spread_config([
-        {"reference_id": blue, "fit": "contain"},
-        {"reference_id": red, "fit": "contain"},
+        {"page_id": blue, "fit": "contain"},
+        {"page_id": red, "fit": "contain"},
     ])})
     doc = export(client, node["id"])
     assert centre_colour(doc[0])[2] > 200
     assert centre_colour(doc[1])[0] > 200
 
 
-def test_a_landscape_spread_exports_landscape_a4(client, archive):
-    ref = add_image(archive, (50, 50, 50), size=(3508, 2480))
-    _, node = make_spread(client, [{"reference_id": ref, "fit": "contain"}], orientation="landscape")
+def test_a_landscape_spread_exports_landscape_a4(client):
+    project_id = new_project(client)
+    page = stage_image(client, project_id, (50, 50, 50), size=(3508, 2480))
+    _, node = make_spread(client, [{"page_id": page, "fit": "contain"}], project_id=project_id,
+                          orientation="landscape")
     doc = export(client, node["id"])
     assert (doc[0].rect.width, doc[0].rect.height) == pytest.approx(A4_PT[::-1], abs=0.01)
 
 
-def test_export_embeds_images_at_native_resolution_and_jpegs_untouched(client, archive):
-    ref = add_image(archive, (120, 60, 30), size=(1754, 2480), fmt="JPEG", name="page.jpg", quality=90)
-    source = (archive / "page.jpg").read_bytes()
-    _, node = make_spread(client, [{"reference_id": ref, "fit": "contain"}])
+def test_export_embeds_images_at_native_resolution_and_jpegs_untouched(client):
+    """Below the 300dpi default, so nothing is resampled -- a JPEG's own bytes
+    go into the PDF exactly as they were uploaded."""
+    project_id = new_project(client)
+    buf = io.BytesIO()
+    Image.new("RGB", (1754, 2480), (120, 60, 30)).save(buf, "JPEG", quality=90)
+    source = buf.getvalue()
+    page = client.post(
+        f"/api/projects/{project_id}/portfolio/pages",
+        data={"file": (io.BytesIO(source), "page.jpg")}, content_type="multipart/form-data",
+    ).get_json()["pages"][0]["id"]
+    _, node = make_spread(client, [{"page_id": page, "fit": "contain"}], project_id=project_id)
     doc = export(client, node["id"])
-    xref = doc[0].get_images()[0][0]
-    embedded = doc.extract_image(xref)
+    embedded = doc.extract_image(doc[0].get_images()[0][0])
     assert (embedded["width"], embedded["height"]) == (1754, 2480)
     assert embedded["image"] == source
 
 
-def test_a_non_a4_image_exports_contained_without_distortion(client, archive):
-    ref = add_image(archive, (0, 150, 0), size=(1600, 1200))
-    _, node = make_spread(client, [{"reference_id": ref, "fit": "contain"}])
+def test_a_non_a4_image_exports_contained_without_distortion(client):
+    project_id = new_project(client)
+    page = stage_image(client, project_id, (0, 150, 0), size=(1600, 1200))
+    _, node = make_spread(client, [{"page_id": page, "fit": "contain"}], project_id=project_id)
     doc = export(client, node["id"])
     rect = doc[0].get_image_rects(doc[0].get_images()[0][0])[0]
     assert rect.width / rect.height == pytest.approx(1600 / 1200, rel=1e-3)
@@ -491,9 +512,12 @@ def test_a_non_a4_image_exports_contained_without_distortion(client, archive):
     assert rect.y0 > 0 and rect.y1 < A4_PT[1]  # letterboxed, inside the page
 
 
-def test_a_cover_page_exports_cropped_where_the_canvas_cropped_it(client, archive):
-    ref = add_image(archive, (0, 150, 0), size=(1600, 1200))
-    _, node = make_spread(client, [{"reference_id": ref, "fit": "cover", "crop": {"x": 0, "y": 0.5}}])
+def test_a_cover_page_exports_cropped_where_the_canvas_cropped_it(client):
+    project_id = new_project(client)
+    page = stage_image(client, project_id, (0, 150, 0), size=(1600, 1200))
+    _, node = make_spread(
+        client, [{"page_id": page, "fit": "cover", "crop": {"x": 0, "y": 0.5}}], project_id=project_id
+    )
     doc = export(client, node["id"])
     rect = doc[0].get_image_rects(doc[0].get_images()[0][0])[0]
     assert rect.x0 == pytest.approx(0, abs=0.01)  # left edge kept
@@ -501,13 +525,14 @@ def test_a_cover_page_exports_cropped_where_the_canvas_cropped_it(client, archiv
     assert rect.height == pytest.approx(A4_PT[1], abs=0.01)
 
 
-def test_an_exif_rotated_photo_exports_upright(client, archive):
+def test_an_exif_rotated_photo_exports_upright(client):
     exif = Image.Exif()
     exif[0x0112] = 6
-    ref = add_image(
-        archive, (90, 90, 90), size=(3508, 2480), fmt="JPEG", name="phone.jpg", exif=exif.tobytes()
+    project_id = new_project(client)
+    page = stage_image(
+        client, project_id, (90, 90, 90), size=(3508, 2480), fmt="JPEG", name="phone.jpg", exif=exif.tobytes()
     )
-    _, node = make_spread(client, [{"reference_id": ref, "fit": "contain"}])
+    _, node = make_spread(client, [{"page_id": page, "fit": "contain"}], project_id=project_id)
     doc = export(client, node["id"])
     rect = doc[0].get_image_rects(doc[0].get_images()[0][0])[0]
     # Portrait, filling the page -- not a landscape strip across its middle.
@@ -515,9 +540,10 @@ def test_an_exif_rotated_photo_exports_upright(client, archive):
     assert rect.width == pytest.approx(A4_PT[0], abs=0.5)
 
 
-def test_a_webp_page_still_exports(client, archive):
-    ref = add_image(archive, (20, 20, 220), size=(1240, 1754), fmt="WEBP", name="page.webp")
-    _, node = make_spread(client, [{"reference_id": ref, "fit": "contain"}])
+def test_a_webp_page_still_exports(client):
+    project_id = new_project(client)
+    page = stage_image(client, project_id, (20, 20, 220), size=(1240, 1754), fmt="WEBP", name="page.webp")
+    _, node = make_spread(client, [{"page_id": page, "fit": "contain"}], project_id=project_id)
     doc = export(client, node["id"])
     assert centre_colour(doc[0])[2] > 180
 
@@ -534,13 +560,13 @@ def test_the_export_streams_page_by_page(archive):
 
 
 def test_only_a_spread_can_be_exported(client):
-    project_id = client.post("/api/projects", json={"title": "P"}).get_json()["id"]
+    project_id = new_project(client, "P")
     note = client.post(f"/api/projects/{project_id}/canvas/nodes", json={"kind": "text"}).get_json()
     assert client.get(f"/api/canvas/nodes/{note['id']}/export.pdf").status_code == 400
     assert client.get("/api/canvas/nodes/nope/export.pdf").status_code == 404
 
 
 def test_the_download_is_named_after_the_project(client):
-    _, node = make_spread(client, [{"reference_id": None, "fit": "contain"}])
+    _, node = make_spread(client, [empty()])
     disposition = client.get(f"/api/canvas/nodes/{node['id']}/export.pdf").headers["Content-Disposition"]
     assert "attachment" in disposition and "Portfolio - pages.pdf" in disposition
