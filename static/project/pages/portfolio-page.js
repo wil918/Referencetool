@@ -36,6 +36,7 @@ import {
   thumbUrl,
 } from "../portfolio.js";
 import { IMAGE_EXTS, extOf } from "../canvas/file-types.js";
+import { openReview, reviewPages } from "../portfolio-review.js";
 
 const ACCEPT = [...IMAGE_EXTS].join(",");
 const PLAN_DELAY = 300;
@@ -68,8 +69,11 @@ export function createPortfolioPage(container, { project }) {
   const row = el("div", "project-detail-heading-row");
   row.appendChild(el("h2", "", "Portfolio"));
   const actions = el("div", "project-detail-actions");
+  const reviewBtn = button("Review", "", "Read the portfolio one page at a time");
+  reviewBtn.disabled = true;
+  reviewBtn.addEventListener("click", () => openReview(overview));
   const uploadBtn = button("Upload pages…", "primary", "Stage images without putting them on a page yet");
-  actions.appendChild(uploadBtn);
+  actions.append(reviewBtn, uploadBtn);
   row.appendChild(actions);
   head.append(
     row,
@@ -504,6 +508,12 @@ export function createPortfolioPage(container, { project }) {
     const tools = el("div", "portfolio-card-tools");
 
     if (page.placements.length) {
+      // From this page, not from the top. A page on two slots opens at the first.
+      const [at] = page.placements;
+      const reviewHere = button("Review", "", "Read the portfolio from this page");
+      reviewHere.addEventListener("click", () => openReview(overview, { start: { nodeId: at.node_id, index: at.index } }));
+      tools.appendChild(reviewHere);
+
       const fileInput = el("input");
       fileInput.type = "file";
       fileInput.accept = ACCEPT;
@@ -557,6 +567,7 @@ export function createPortfolioPage(container, { project }) {
 
   function render() {
     if (!overview) return;
+    reviewBtn.disabled = !reviewPages(overview).length;
     spreadsEl.replaceChildren(...overview.spreads.map(renderSpread));
     if (!overview.spreads.length) {
       spreadsEl.replaceChildren(

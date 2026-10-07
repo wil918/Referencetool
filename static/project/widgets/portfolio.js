@@ -5,7 +5,10 @@
  * an empty one as the empty slot it is -- so the state of the document is
  * visible, and legible, from the homepage without opening anything.
  * Clicking opens the management view (project/pages/portfolio-page.js): which
- * slot each page fills, and per-page delete, replace and promote.
+ * slot each page fills, and per-page delete, replace and promote. "Review"
+ * opens the document instead, to be read a page at a time
+ * (project/portfolio-review.js) -- over the same overview this widget draws,
+ * so the two walk the spreads in the same order.
  *
  * The thumbnails are the staged pages' (portfolio.py), served from the same
  * content-hash cache the archive's cards use. Staged pages are not references
@@ -24,6 +27,7 @@
  */
 
 import { loadPortfolio, thumbUrl } from "../portfolio.js";
+import { openReview, reviewPages } from "../portfolio-review.js";
 
 const FALLBACK_RANGE = [72, 1200];
 const FALLBACK_DEFAULT_DPI = 300;
@@ -49,8 +53,17 @@ export default {
     wrap.setAttribute("aria-label", "Open the portfolio");
     wrap.title = "Open the portfolio";
 
+    const head = document.createElement("div");
+    head.className = "widget-portfolio-head";
     const summary = document.createElement("p");
     summary.className = "widget-portfolio-summary muted";
+    const reviewBtn = document.createElement("button");
+    reviewBtn.type = "button";
+    reviewBtn.className = "btn portfolio-btn widget-portfolio-review";
+    reviewBtn.textContent = "Review";
+    reviewBtn.title = "Read the portfolio one page at a time";
+    reviewBtn.hidden = true;
+    head.append(summary, reviewBtn);
 
     const strip = document.createElement("div");
     strip.className = "widget-portfolio-strip";
@@ -73,14 +86,17 @@ export default {
     dpiNote.textContent = "Images above it are resampled down on export, never up.";
     dpiRow.append(dpiText, dpiInput, dpiUnit, dpiNote);
 
-    wrap.append(summary, strip, dpiRow);
+    wrap.append(head, strip, dpiRow);
     host.el.appendChild(wrap);
 
     let range = FALLBACK_RANGE;
     let defaultDpi = FALLBACK_DEFAULT_DPI;
     let cancelled = false;
+    let latest = null;
 
     function render(overview) {
+      latest = overview;
+      reviewBtn.hidden = host.editMode.isEditing() || !reviewPages(overview).length;
       range = overview.dpi_range || FALLBACK_RANGE;
       defaultDpi = overview.default_dpi || FALLBACK_DEFAULT_DPI;
       dpiInput.min = String(range[0]);
@@ -160,13 +176,17 @@ export default {
       location.hash = "#page=portfolio";
     }
     wrap.addEventListener("click", (event) => {
-      if (event.target.closest(".widget-portfolio-dpi")) return;
+      if (event.target.closest(".widget-portfolio-dpi, .widget-portfolio-review")) return;
       open();
     });
     wrap.addEventListener("keydown", (event) => {
       if (event.target !== wrap || (event.key !== "Enter" && event.key !== " ")) return;
       event.preventDefault();
       open();
+    });
+
+    reviewBtn.addEventListener("click", () => {
+      if (latest) openReview(latest);
     });
 
     dpiInput.addEventListener("change", () => {
@@ -184,6 +204,8 @@ export default {
 
     const unsubscribeEditMode = host.editMode.subscribe((editing) => {
       dpiRow.hidden = !editing;
+      // A press on the widget is the grid's while arranging; reading is for after.
+      reviewBtn.hidden = editing || !latest || !reviewPages(latest).length;
       wrap.classList.toggle("is-editing", editing);
       // A link to the management view out of edit mode; in it, just a box on the grid.
       if (editing) wrap.removeAttribute("role");

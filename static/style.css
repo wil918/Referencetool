@@ -4889,7 +4889,16 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
 .widget-portfolio.is-editing { cursor: default; }
 .widget-portfolio:focus-visible .widget-portfolio-summary { color: var(--accent); }
 
-.widget-portfolio-summary { margin: 0 0 0.6rem; font-family: var(--serif); }
+.widget-portfolio-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0 0 0.6rem;
+}
+.widget-portfolio-summary { margin: 0; font-family: var(--serif); }
+.widget-portfolio-review { flex: none; }
+.widget-portfolio-review[hidden] { display: none; }
 .widget-portfolio-spread + .widget-portfolio-spread { margin-top: 0.9rem; }
 .widget-portfolio-spread-label { margin: 0 0 0.3rem; font-size: 0.85em; }
 
@@ -5025,3 +5034,118 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
 .portfolio-card-warn { color: var(--warn); }
 .portfolio-card-tools { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.55rem; }
 .portfolio-place { max-width: 100%; font-size: 0.78rem; }
+
+/* --- Portfolio review (project/portfolio-review.js) ---
+   Deliberately outside the soft-UI system, like the carousel: a dark full-bleed
+   viewer is the one place its surfaces don't belong, so it reuses the
+   carousel's own two colours and nothing else. The page is the only thing on
+   it; the chrome (page number, fullscreen, close) is drawn only while the
+   pointer is moving. */
+
+.portfolio-review {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgb(20, 18, 15);
+  color: #f2efe9;
+  outline: none;
+  overscroll-behavior: contain;
+}
+.portfolio-review[hidden] { display: none; }
+.portfolio-review:not(.is-awake) { cursor: none; }
+
+.portfolio-review-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: e-resize;
+  user-select: none;
+}
+.portfolio-review-stage.is-back { cursor: w-resize; }
+
+/* The sheet at the proportions it prints in, as large as fits the screen on
+   whichever axis runs out first. White is the paper a contained image is
+   letterboxed on, as in the exported PDF. */
+.portfolio-review-page {
+  position: relative;
+  width: min(100vw, calc(100vh * 210 / 297));
+  aspect-ratio: 210 / 297;
+  background: #fff;
+  overflow: hidden;
+}
+.portfolio-review-page.is-landscape {
+  width: min(100vw, calc(100vh * 297 / 210));
+  aspect-ratio: 297 / 210;
+}
+.portfolio-review-page.is-empty,
+.portfolio-review-page.is-loading { background: rgba(255, 255, 255, 0.06); }
+
+.portfolio-review-img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.portfolio-review-blank {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #c9c3ba;
+  font-family: var(--serif);
+  font-size: 22vmin;
+  opacity: 0.55;
+}
+
+.portfolio-review-counter,
+.portfolio-review-tools {
+  position: absolute;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+.portfolio-review.is-awake .portfolio-review-counter,
+.portfolio-review.is-awake .portfolio-review-tools { opacity: 1; }
+.portfolio-review.is-awake .portfolio-review-tools { pointer-events: auto; }
+
+.portfolio-review-counter {
+  left: 50%;
+  bottom: 1.25rem;
+  transform: translateX(-50%);
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  background: rgba(20, 18, 15, 0.72);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.portfolio-review-tools {
+  top: 1rem;
+  right: 1.25rem;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.portfolio-review-btn {
+  width: 2.4rem;
+  height: 2.4rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(20, 18, 15, 0.72);
+  box-shadow: none;
+  color: #f2efe9;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.portfolio-review-btn[hidden] { display: none; }
+.portfolio-review-btn:hover,
+.portfolio-review-btn:focus-visible { background: rgba(60, 55, 48, 0.9); }
