@@ -50,6 +50,7 @@ export default {
   container: false,
   permanent: false,
   canvasEligible: true,
+  requires: ["schedule"],  // its data is the schedule's API -- see registry.js
   defaultSize: { w: 4, h: 4 },
   minSize: { w: 2, h: 2 },
 

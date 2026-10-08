@@ -18,6 +18,7 @@ import {
   describeRule,
   rulesById as loadRulesById,
 } from "./schedule/recurrence.js";
+import { capabilities } from "./shared/capabilities.js";
 
 // --- Elements ---
 
@@ -26,6 +27,10 @@ const saveBtn = document.getElementById("task-save-btn");
 const saveStatus = document.getElementById("task-save-status");
 const advanced = document.querySelector(".task-advanced");
 const titleInput = document.getElementById("task-title-input");
+// The page's placeholder promises a Claude-written title, which only a key can
+// deliver; without one a blank title is simply the start of the description
+// (see the fallback in the save handler).
+if (!capabilities.claude) titleInput.placeholder = "Leave blank to use the start of the description";
 const projectSelect = document.getElementById("task-project-select");
 const deliverableSelect = document.getElementById("task-deliverable-select");
 const deadlineInput = document.getElementById("task-deadline-input");
@@ -156,15 +161,17 @@ saveBtn.addEventListener("click", async () => {
   // generated" rather than blocking the save: the one required field is the
   // sentence, and that alone must always be enough to save a task.
   let generated = { title: "", est_minutes: null, importance: null, difficulty: null, measurable_goal: "" };
-  try {
-    const res = await fetch("/api/tasks/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ description }),
-    });
-    if (res.ok) generated = await res.json();
-  } catch {
-    // offline or the API key is missing -- fall through with nothing generated
+  if (capabilities.claude) {
+    try {
+      const res = await fetch("/api/tasks/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description }),
+      });
+      if (res.ok) generated = await res.json();
+    } catch {
+      // offline or Claude unreachable -- fall through with nothing generated
+    }
   }
 
   const userTitle = titleInput.value.trim();

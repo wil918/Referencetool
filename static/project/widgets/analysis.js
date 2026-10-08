@@ -50,6 +50,10 @@ export default {
   // analysis_id means nothing outside the project it was set in -- see
   // registry.js's projectScopedConfig.
   projectScopedConfig: ["analysis_id"],
+  // Not offered without a Claude key (registry.js's offered()). A saved
+  // analysis already on a page still renders either way: displaying one is a
+  // database read.
+  requires: ["claude"],
 
   create(host) {
     const projectId = host.project.id;

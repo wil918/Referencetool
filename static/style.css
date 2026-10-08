@@ -5025,3 +5025,24 @@ main:has(#tab-schedule.active) { max-width: 1600px; }
 .portfolio-card-warn { color: var(--warn); }
 .portfolio-card-tools { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.55rem; }
 .portfolio-place { max-width: 100%; font-size: 0.78rem; }
+
+/* --- Capability gating (shared/capabilities.js) ----------------------------
+ * /capabilities.js marks <html data-X="off"> for a capability that is off, and
+ * only then. Anything tagged data-requires="X" is hidden while X is off --
+ * hidden, never greyed out. data-when-off="X" is the reverse: a note that
+ * exists only to explain the absence, shown nowhere else. No colours, borders
+ * or shadows here; this only decides what is displayed at all. */
+html[data-schedule="off"] [data-requires~="schedule"],
+html[data-claude="off"] [data-requires~="claude"],
+html[data-embeddings="off"] [data-requires~="embeddings"] {
+  display: none !important;
+}
+
+[data-when-off] {
+  display: none;
+}
+
+html[data-claude="off"] [data-when-off~="claude"],
+html[data-embeddings="off"] [data-when-off~="embeddings"] {
+  display: block;
+}

@@ -2,6 +2,7 @@ import { makeCard, markSelectable, makeBarThumb, attachDownload, refreshThumbnai
 import * as carousel from "./shared/carousel.js";
 import * as folders from "./project/folders.js";
 import { downloadZip } from "./shared/export.js";
+import { capabilities } from "./shared/capabilities.js";
 
 const SUPPORTED_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".txt", ".md", ".pdf"];
 
@@ -21,8 +22,9 @@ function activateTab(name) {
   if (name === "archive") refreshArchive();
   if (name === "projects") showProjectsList();
   if (name === "settings") {
-    refreshSimilarityStatus();
+    if (capabilities.embeddings) refreshSimilarityStatus();
     refreshColourCoverageStatus();
+    refreshTaggingStatus();
   }
   return true;
 }
@@ -1031,6 +1033,64 @@ colourBackfillBtn.addEventListener("click", async () => {
     colourCoverageStatus.textContent = `Error: ${err}`;
   } finally {
     colourBackfillBtn.disabled = false;
+  }
+});
+
+// --- Settings: tags ---
+//
+// For references added with no key (or while Claude was unreachable). The whole
+// section stays hidden unless there is a key AND at least one reference to tag,
+// so an install where everything is tagged sees nothing new here.
+
+const taggingSection = document.getElementById("tagging-section");
+const taggingStatus = document.getElementById("tagging-status");
+const taggingBtn = document.getElementById("tagging-backfill-btn");
+
+function describeTagging(data) {
+  return `${data.untagged} of ${data.total} reference${data.total === 1 ? "" : "s"} ha${data.untagged === 1 ? "s" : "ve"} no tags.`;
+}
+
+async function refreshTaggingStatus({ keepVisible = false } = {}) {
+  if (!capabilities.claude) return;
+  const res = await fetch("/api/tagging/coverage");
+  if (!res.ok) return;
+  const data = await res.json();
+  taggingSection.hidden = data.untagged === 0 && !keepVisible;
+  // After a run the result message is the thing to read, not the count.
+  if (!keepVisible && data.untagged > 0) taggingStatus.textContent = describeTagging(data);
+}
+
+taggingBtn.addEventListener("click", async () => {
+  taggingBtn.disabled = true;
+  let tagged = 0;
+  let failed = 0;
+  let firstError = null;
+  let data;
+  try {
+    do {
+      taggingStatus.textContent = tagged ? `Tagging… ${tagged} done so far.` : "Tagging…";
+      const res = await fetch("/api/tagging/backfill", { method: "POST" });
+      data = await res.json();
+      if (!res.ok) {
+        taggingStatus.textContent = `Error: ${data.error}`;
+        return;
+      }
+      tagged += data.tagged;
+      failed += data.failed;
+      firstError = firstError || data.error;
+      // A batch that tagged nothing (every reference in it failed) would
+      // otherwise be asked for again forever.
+    } while (data.untagged > 0 && data.tagged > 0);
+
+    taggingStatus.textContent =
+      `Tagged ${tagged} reference${tagged === 1 ? "" : "s"}.` +
+      (failed ? ` ${failed} could not be tagged${firstError ? ` (${firstError})` : ""}.` : "") +
+      (data.untagged ? ` ${data.untagged} still untagged.` : "");
+    await refreshTaggingStatus({ keepVisible: true });
+  } catch (err) {
+    taggingStatus.textContent = `Error: ${err}`;
+  } finally {
+    taggingBtn.disabled = false;
   }
 });
 

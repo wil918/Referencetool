@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fashion Reference Library</title>
 <script src="/theme.js"></script>
+<script src="/capabilities.js"></script>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -16,7 +17,7 @@
       <button class="tab-btn" data-tab="projects">Projects</button>
       <button class="tab-btn" data-tab="settings">Settings</button>
       <a class="nav-link" href="/connections.html">Archive Connections</a>
-      <a class="nav-link" href="/schedule.html">Schedule</a>
+      <a class="nav-link" href="/schedule.html" data-requires="schedule">Schedule</a>
       <a class="nav-link" href="/graph.html">3D Graph</a>
     </nav>
   </header>
@@ -168,15 +169,49 @@
         </label>
       </div>
 
+      <!-- The one place that says Claude is off, and what it would add. Shown
+           only when no API key is configured (style.css's data-when-off); every
+           control that would start a Claude call is simply absent elsewhere. -->
+      <div class="settings-section" data-when-off="claude">
+        <h3>Claude features</h3>
+        <p class="muted">
+          Claude features are off because no API key is configured. With one, new references are
+          tagged and described automatically (and any added without are filled in afterwards), you
+          can ask for a written analysis of selected references or of a project's concept on its
+          canvas<span data-requires="schedule">, and in the schedule you can import an assignment
+          brief and have task estimates suggested</span>. Add <code>ANTHROPIC_API_KEY</code> to the
+          <code>.env</code> file and restart the app to turn them on.
+        </p>
+      </div>
+
+      <!-- Only when there is a key AND something for it to do (app.js decides). -->
+      <div class="settings-section" id="tagging-section" data-requires="claude" hidden>
+        <h3>Tags</h3>
+        <p class="muted">
+          Some references have no tags -- they were added without an API key, or while Claude
+          couldn't be reached. This tags them now, a few at a time, one Claude call each. Titles
+          you have set are left alone.
+        </p>
+        <p id="tagging-status" class="muted"></p>
+        <button id="tagging-backfill-btn" class="btn primary">Tag Untagged References</button>
+      </div>
+
       <div class="settings-section">
         <h3>Similarity scores</h3>
-        <p class="muted">
+        <p class="muted" data-requires="embeddings">
           Computes a pairwise similarity score between every reference in your library, using the
           CLIP embeddings already generated for each one -- no additional Claude API calls. Saved
           for later use (e.g. a 3D similarity graph); nothing in the app reads these yet.
         </p>
-        <p id="similarity-status" class="muted"></p>
-        <button id="similarity-calculate-btn" class="btn primary">Calculate Similarity Scores</button>
+        <p class="muted" data-when-off="embeddings">
+          Embeddings are switched off (<code>SKIP_EMBEDDINGS</code> in <code>.env</code>), so there
+          are no vectors to compare: similarity scores can't be calculated, search matches words
+          rather than meaning, and the similarity graph and constellation stay empty. Colour search
+          and the colour space don't use embeddings and work as normal. Remove the setting and
+          restart to turn them on.
+        </p>
+        <p id="similarity-status" class="muted" data-requires="embeddings"></p>
+        <button id="similarity-calculate-btn" class="btn primary" data-requires="embeddings">Calculate Similarity Scores</button>
       </div>
 
       <div class="settings-section">

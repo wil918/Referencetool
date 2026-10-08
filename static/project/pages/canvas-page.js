@@ -24,6 +24,7 @@ import { createNodes } from "../canvas/nodes.js";
 import { createPalette } from "../canvas/palette.js";
 import { createFileDrop } from "../canvas/file-drop.js";
 import { createConceptPanel } from "./concept-panel.js";
+import { capabilities } from "../../shared/capabilities.js";
 import { ensureOverlays, setActiveReferences } from "./overlays.js";
 
 const ZOOM_STEP = 1.25;
@@ -122,6 +123,10 @@ export function createCanvasPage(el, { project }) {
   // that are only views of data (colourspace, similarity, ...) are dropped.
   // An empty selection runs against the whole project -- its references and
   // its canvas text. The critique comes back onto the canvas as a text node.
+  //
+  // Neither the panel nor its button exists without a Claude key: this is the
+  // one control on the canvas that starts a call. (A saved critique that was
+  // placed on the canvas is just a text node and stays.)
 
   function worldCentre() {
     const rect = viewport.container.getBoundingClientRect();
@@ -129,34 +134,38 @@ export function createCanvasPage(el, { project }) {
     return { x: point.x - NOTE_NUDGE.x, y: point.y - NOTE_NUDGE.y };
   }
 
-  const concept = createConceptPanel({
-    project,
-    placeNote: (text) => nodes?.addNode({ kind: "text", content: text, ...worldCentre() }),
-  });
+  const concept = capabilities.claude
+    ? createConceptPanel({
+        project,
+        placeNote: (text) => nodes?.addNode({ kind: "text", content: text, ...worldCentre() }),
+      })
+    : null;
 
-  const conceptBtn = document.createElement("button");
-  conceptBtn.type = "button";
-  conceptBtn.className = "canvas-concept-btn";
-  conceptBtn.textContent = "Concept analysis";
-  conceptBtn.title = "Critique the selected research against the brief (whole project if nothing is selected)";
-  conceptBtn.addEventListener("click", () => {
-    const selected = nodes ? nodes.selection() : [];
-    const widgetType = (n) => (n.kind === "widget" ? n.config?.type : null);
-    concept.run({
-      referenceIds: selected
-        .filter((n) => n.kind === "reference" && n.reference_id)
-        .map((n) => n.reference_id),
-      notes: selected.filter((n) => n.kind === "text").map((n) => n.content || ""),
-      noteHtml: selected
-        .filter((n) => widgetType(n) === "notepad")
-        .map((n) => n.config?.widget?.content || ""),
-      priorAnalysisIds: selected
-        .filter((n) => widgetType(n) === "analysis")
-        .map((n) => n.config?.widget?.analysis_id)
-        .filter(Boolean),
+  if (concept) {
+    const conceptBtn = document.createElement("button");
+    conceptBtn.type = "button";
+    conceptBtn.className = "canvas-concept-btn";
+    conceptBtn.textContent = "Concept analysis";
+    conceptBtn.title = "Critique the selected research against the brief (whole project if nothing is selected)";
+    conceptBtn.addEventListener("click", () => {
+      const selected = nodes ? nodes.selection() : [];
+      const widgetType = (n) => (n.kind === "widget" ? n.config?.type : null);
+      concept.run({
+        referenceIds: selected
+          .filter((n) => n.kind === "reference" && n.reference_id)
+          .map((n) => n.reference_id),
+        notes: selected.filter((n) => n.kind === "text").map((n) => n.content || ""),
+        noteHtml: selected
+          .filter((n) => widgetType(n) === "notepad")
+          .map((n) => n.config?.widget?.content || ""),
+        priorAnalysisIds: selected
+          .filter((n) => widgetType(n) === "analysis")
+          .map((n) => n.config?.widget?.analysis_id)
+          .filter(Boolean),
+      });
     });
-  });
-  root.appendChild(conceptBtn);
+    root.appendChild(conceptBtn);
+  }
 
   // --- boot ----------------------------------------------------------------
 
@@ -219,7 +228,7 @@ export function createCanvasPage(el, { project }) {
   return {
     destroy() {
       destroyed = true;
-      concept.destroy();
+      concept?.destroy();
       fileDrop?.destroy();
       palette?.destroy();
       nodes?.destroy();

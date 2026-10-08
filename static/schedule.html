@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Schedule</title>
 <script src="/theme.js"></script>
+<script src="/capabilities.js"></script>
 <link rel="stylesheet" href="/style.css">
 <!-- The drafting language, loaded AFTER style.css and scoped entirely under
      .drafting on <body> below. See CLAUDE.md hard rule 6's schedule
@@ -221,8 +222,8 @@
           <select id="deliverable-project-select"></select>
         </label>
         <button id="deliverable-new-btn" class="btn primary">New deliverable</button>
-        <button id="brief-import-btn" class="btn">Import brief</button>
-        <button id="supporting-doc-import-btn" class="btn">Add supporting document</button>
+        <button id="brief-import-btn" class="btn" data-requires="claude">Import brief</button>
+        <button id="supporting-doc-import-btn" class="btn" data-requires="claude">Add supporting document</button>
       </div>
       <p id="deliverable-project-hint" class="muted" hidden>
         Deliverables belong to one project — switch project above to see another's.

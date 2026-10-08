@@ -20,7 +20,7 @@
  * config: { label, side: "left"|"right", width }
  */
 
-import { definitionFor, mountWidget, all as allWidgetDefinitions } from "../registry.js";
+import { definitionFor, mountWidget, offered as offeredWidgetDefinitions } from "../registry.js";
 
 const DEFAULT_WIDTH = 340;
 
@@ -229,7 +229,7 @@ export default {
     // way to supply; the main grid's dock expands it into one card per
     // existing folder instead (project/main.js's shell.addableTypes).
     function eligibleChildTypes() {
-      return allWidgetDefinitions().filter(
+      return offeredWidgetDefinitions().filter(
         (definition) => !definition.container && !definition.permanent && definition.type !== "folder"
       );
     }

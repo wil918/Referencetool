@@ -33,7 +33,7 @@
  */
 
 import { makeBarThumb } from "../../shared/cards.js";
-import { all as allWidgetDefinitions } from "../registry.js";
+import { offered as offeredWidgetDefinitions } from "../registry.js";
 
 // Roughly half a default node, so a click-to-add lands centred on the view
 // rather than with its corner at the middle of the screen. Approximate on
@@ -297,7 +297,7 @@ export function createPalette({
   // Notepad is the rich one. Do not add rich text to Simple text -- having
   // one plain option and one rich option is the point, not something to fix.
   addRow.appendChild(addButton("Simple text", { kind: "text" }));
-  for (const definition of allWidgetDefinitions()) {
+  for (const definition of offeredWidgetDefinitions()) {
     if (!definition.canvasEligible) continue;
     addRow.appendChild(
       addDraggableButton(definition.label, { kind: "widget", config: { type: definition.type } })

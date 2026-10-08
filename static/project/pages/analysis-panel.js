@@ -11,6 +11,7 @@
 
 import { makeCard, thumbSrc } from "../../shared/cards.js";
 import * as carousel from "../../shared/carousel.js";
+import { capabilities } from "../../shared/capabilities.js";
 
 function escapeHtml(str) {
   const div = document.createElement("div");
@@ -86,7 +87,7 @@ export function createAnalysisPanel({ project, getReferences }) {
     <div class="analysis-sidebar-list-view">
       <div class="analysis-list"></div>
       <p class="muted analysis-sidebar-empty" hidden>
-        No saved analyses yet. Run Analyze and save the conversation to see it here.
+        ${capabilities.claude ? "No saved analyses yet. Run Analyze and save the conversation to see it here." : "No saved analyses."}
       </p>
     </div>
     <div class="analysis-sidebar-detail" hidden>
@@ -193,7 +194,7 @@ export function createAnalysisPanel({ project, getReferences }) {
       </div>
     </div>
   `;
-  document.body.appendChild(modeOverlay);
+  if (capabilities.claude) document.body.appendChild(modeOverlay);
 
   modeOverlay.addEventListener("click", (e) => {
     if (e.target === modeOverlay) modeOverlay.hidden = true;
@@ -229,7 +230,7 @@ export function createAnalysisPanel({ project, getReferences }) {
       </div>
     </div>
   `;
-  document.body.appendChild(analyzeOverlay);
+  if (capabilities.claude) document.body.appendChild(analyzeOverlay);
 
   const transcriptEl = analyzeOverlay.querySelector(".analyze-live-transcript");
   const inputEl = analyzeOverlay.querySelector(".analyze-followup-input");
@@ -355,7 +356,7 @@ export function createAnalysisPanel({ project, getReferences }) {
       showAnalysisList();
     },
     startAnalysis(ids) {
-      if (!ids.length) return;
+      if (!ids.length || !capabilities.claude) return;
       pendingIds = ids;
       modeOverlay.hidden = false;
     },

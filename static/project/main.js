@@ -6,7 +6,7 @@
 // when the layout is written back (only on an explicit Save).
 
 import { createGrid } from "./grid.js";
-import { all as allWidgetDefinitions, definitionFor, mountWidget } from "./registry.js";
+import { offered as offeredWidgetDefinitions, definitionFor, mountWidget } from "./registry.js";
 import { createWidgetDock } from "./widget-dock.js";
 import { createAppearancePanel } from "./appearance-panel.js";
 import { onActiveWidgetChange } from "./format-toolbar.js";
@@ -575,7 +575,7 @@ const shell = {
   // error, just nothing to expand.
   addableTypes: () => {
     const entries = [];
-    for (const definition of allWidgetDefinitions()) {
+    for (const definition of offeredWidgetDefinitions()) {
       if (definition.permanent) continue;
       if (definition.type === "folder") {
         for (const folder of folderRows) {

@@ -13,6 +13,9 @@
  *     projectScopedConfig, // config keys that point at ids meaningful only
  *                          // within the project they were set in -- see
  *                          // below. Optional; defaults to none.
+ *     requires,       // capabilities this type needs: any of "claude",
+ *                     // "schedule", "embeddings" (shared/capabilities.js).
+ *                     // Optional; defaults to none. See offered() below.
  *     create(host) { ...; return { destroy() {} }; },
  *   }
  *
@@ -62,6 +65,7 @@ import deliverablesWidget from "./widgets/deliverables.js";
 import upcomingWidget from "./widgets/upcoming.js";
 import briefWidget from "./widgets/brief.js";
 import portfolioWidget from "./widgets/portfolio.js";
+import { capabilities } from "../shared/capabilities.js";
 
 const MODULES = [
   titleWidget,
@@ -104,6 +108,7 @@ function normalise(definition) {
     defaultSize: { w: 3, h: 2, ...definition.defaultSize },
     minSize: { w: 1, h: 1, ...definition.minSize },
     projectScopedConfig: definition.projectScopedConfig || [],
+    requires: definition.requires || [],
     isPlaceholder: false,
   };
 }
@@ -152,14 +157,55 @@ export function get(type) {
   return REGISTRY.get(type) || null;
 }
 
-/** Every real widget definition -- what an Add Widget list is built from. */
+/** Every real widget definition, whether or not this copy can offer it. */
 export function all() {
   return [...REGISTRY.values()];
 }
 
+/* Every Add Widget list (the homepage dock, the canvas palette, a sidebar's own
+ * list) is built from this, not from all(): a type whose `requires` is not met
+ * is not offered at all -- not greyed out. The analysis widget needs "claude"
+ * (the widget itself only displays a saved analysis, but the only reason to
+ * add one is to have run one); the three schedule tiles need "schedule".
+ *
+ * Offering is all this decides. A widget already stored in a project is still
+ * rendered by definitionFor() below, so nothing a person made disappears when a
+ * key lapses.
+ */
+export function offered(caps = capabilities) {
+  return all().filter((definition) => definition.requires.every((name) => caps[name]));
+}
+
+/* What a stored schedule widget renders as when the schedule is switched off:
+ * its data comes from routes that are not registered, so it says so rather than
+ * fail a fetch. The row is left alone, so switching the schedule back on brings
+ * the widget back exactly as it was. A "claude" widget needs no stand-in --
+ * viewing a stored result is a database read. */
+const SWITCHED_OFF = new Map();
+
+function switchedOff(definition) {
+  if (!SWITCHED_OFF.has(definition.type)) {
+    SWITCHED_OFF.set(definition.type, {
+      ...definition,
+      create(host) {
+        const note = document.createElement("p");
+        note.className = "muted widget-missing";
+        note.textContent = `${definition.label} — the schedule is switched off`;
+        host.el.appendChild(note);
+        return { destroy: () => note.remove() };
+      },
+    });
+  }
+  return SWITCHED_OFF.get(definition.type);
+}
+
 /** The definition to render a stored widget row with, real or stand-in. */
-export function definitionFor(type) {
-  return get(type) || placeholderFor(type);
+export function definitionFor(type, caps = capabilities) {
+  const definition = get(type);
+  if (definition && definition.requires.includes("schedule") && !caps.schedule) {
+    return switchedOff(definition);
+  }
+  return definition || placeholderFor(type);
 }
 
 /* Instantiate one widget into an element, building the host it is given.

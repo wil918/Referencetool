@@ -17,6 +17,7 @@ import { ensureOverlays, setActiveReferences } from "./overlays.js";
 import { createAnalysisPanel } from "./analysis-panel.js";
 import { createColourPanel } from "./colour-panel.js";
 import { downloadZip } from "../../shared/export.js";
+import { capabilities } from "../../shared/capabilities.js";
 
 /* Delete means "remove from the project" here -- and, since a folder is only
  * ever a view over its project's references (CLAUDE.md), that has to take
@@ -84,7 +85,7 @@ export function createGridPage(el, options) {
     <div class="project-detail-heading-row">
       <h2></h2>
       <div class="project-detail-actions">
-        <button type="button" class="btn analysis-sidebar-btn">Previous Analysis</button>
+        <button type="button" class="btn analysis-sidebar-btn"${capabilities.claude ? "" : " hidden"}>Previous Analysis</button>
         <button type="button" class="btn select-btn">Select</button>
       </div>
     </div>
@@ -106,7 +107,7 @@ export function createGridPage(el, options) {
       <button type="button" class="btn export-btn" disabled>Export as ZIP</button>
       <button type="button" class="btn delete-btn" disabled></button>
       <button type="button" class="btn colour-btn" disabled>Colour Similarity</button>
-      <button type="button" class="btn primary analyze-btn" disabled>Analyze</button>
+      ${capabilities.claude ? '<button type="button" class="btn primary analyze-btn" disabled>Analyze</button>' : ""}
     </div>
   `;
   toolbar.querySelector(".delete-btn").textContent = deleteBehaviour.label;
@@ -234,7 +235,7 @@ export function createGridPage(el, options) {
     deleteBtn.disabled = n === 0;
     exportBtn.disabled = n === 0;
     colourBtn.disabled = n === 0;
-    analyzeBtn.disabled = n === 0;
+    if (analyzeBtn) analyzeBtn.disabled = n === 0;
     folderSelect.disabled = n === 0;
     colourPanel.syncSelection([...selectedIds]);
   }
@@ -321,8 +322,22 @@ export function createGridPage(el, options) {
 
   // --- Analyze / Colour Similarity toolbar buttons --------------------------
 
-  header.querySelector(".analysis-sidebar-btn").addEventListener("click", () => analysisPanel.openSidebar());
-  analyzeBtn.addEventListener("click", () => analysisPanel.startAnalysis([...selectedIds]));
+  const previousBtn = header.querySelector(".analysis-sidebar-btn");
+  previousBtn.addEventListener("click", () => analysisPanel.openSidebar());
+  analyzeBtn?.addEventListener("click", () => analysisPanel.startAnalysis([...selectedIds]));
+
+  // With no key nothing here can start an analysis, and "Previous Analysis"
+  // would open an empty list whose empty state tells the reader to run one.
+  // But a saved analysis is the user's own record and reading it costs nothing,
+  // so the button comes back if this project has any -- it is the only way in.
+  if (!capabilities.claude) {
+    fetch(`/api/projects/${project.id}/analyses`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((saved) => {
+        if (saved.length) previousBtn.hidden = false;
+      })
+      .catch(() => {});
+  }
   colourBtn.addEventListener("click", () => {
     if (selectedIds.size === 0) return;
     colourPanel.open([...selectedIds]);
