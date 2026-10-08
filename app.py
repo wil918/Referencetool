@@ -13,6 +13,7 @@ import functools
 import json
 import mimetypes
 import os
+import posixpath
 import tempfile
 import threading
 import uuid
@@ -24,7 +25,8 @@ from urllib.parse import quote
 
 import fitz  # PyMuPDF
 from flask import (
-    Flask, Response, abort, jsonify, make_response, request, send_file, send_from_directory,
+    Blueprint, Flask, Response, abort, jsonify, make_response, request, send_file,
+    send_from_directory,
 )
 
 import analyze
@@ -48,6 +50,18 @@ import thumbnails
 from config import ARCHIVE_API_TOKEN
 
 app = Flask(__name__, static_folder="static", static_url_path="")
+
+# Every route that belongs to the schedule -- tasks, deliverables, briefs,
+# commitments, locations, hours, recurrence, resources, the planner itself and
+# the phone's /day -- is declared on this blueprint rather than on `app`, and
+# the blueprint is registered at the bottom of the file only when the schedule
+# is switched on (config.ARCHIVE_ONLY). With it off those routes do not exist,
+# which is a stronger thing than refusing them: there is no handler to leak
+# through, and the answer is exactly what any path that never existed gets (a
+# 404, or a 405 for a non-GET under /api/ because of the CORS preflight
+# catch-all). Endpoint names gain a "schedule." prefix; nothing in the app or
+# its tests uses url_for, so that is invisible.
+schedule_api = Blueprint("schedule", __name__)
 
 # 5050 by default; PORT in the environment overrides it, so a second instance
 # (a preview server, a worktree) can run alongside the one the user keeps open.
@@ -187,6 +201,111 @@ def _guard_api_when_exposed():
         return jsonify({"error": "unauthorized"}), 401
 
 
+# --- What this copy is configured to do ------------------------------------
+#
+# config.py says where the three answers come from. They are exposed to the
+# pages as one small object so the frontend never has to guess: it is read by
+# the synchronous <script src="/capabilities.js"> in each page's <head> (the
+# same trick theme.js uses to avoid a flash), which sets window.capabilities and
+# marks <html data-schedule/claude/embeddings="off"> for the ones that are off.
+# The attribute is only ever set when something is off, so an install with
+# everything on sees no change at all.
+
+
+def _capabilities():
+    return {
+        # Whether the blueprint is actually mounted, not whether the flag is
+        # set: the answer is a fact about the routes that exist, and cannot
+        # disagree with them.
+        "schedule": "schedule" in app.blueprints,
+        "claude": config.claude_available(),
+        "embeddings": config.embeddings_enabled(),
+    }
+
+
+@app.get("/api/capabilities")
+def api_capabilities():
+    return jsonify(_capabilities())
+
+
+@app.get("/capabilities.js")
+def capabilities_script():
+    body = (
+        f"window.capabilities = Object.freeze({json.dumps(_capabilities())});\n"
+        "for (const [name, on] of Object.entries(window.capabilities)) {\n"
+        '  if (!on) document.documentElement.dataset[name] = "off";\n'
+        "}\n"
+    )
+    response = make_response(body)
+    response.mimetype = "text/javascript"
+    # Read fresh every page load: it is the answer to "what is on right now",
+    # and a cached copy would outlive an edit to .env.
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+CLAUDE_UNAVAILABLE = (
+    "Claude features are off because no ANTHROPIC_API_KEY is configured. "
+    "Add one to .env and restart."
+)
+
+
+def requires_claude(view):
+    """Answer plainly, instead of failing deep inside the client, when a route
+    would call Claude and no key is configured.
+
+    The pages hide whatever initiates these calls, but a hidden control is not a
+    secured endpoint -- the extension, a stale tab, or curl can still reach the
+    route. Reading a saved result never needs this; only starting a call does.
+    """
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        if not config.claude_available():
+            return jsonify({"error": CLAUDE_UNAVAILABLE, "reason": "claude_unavailable"}), 503
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def requires_embeddings(view):
+    """The same, for the views that are built from CLIP vectors: with
+    SKIP_EMBEDDINGS set there are none, and an honest "switched off" beats
+    "no similarity scores yet" -- the fix for that one would be to run a
+    calculation that can only produce nothing."""
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        if not config.embeddings_enabled():
+            return jsonify({"error": embeddings.DISABLED_MESSAGE, "reason": "embeddings_disabled"}), 503
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+# With the schedule off its pages must not be served either. Flask's static
+# handler is one catch-all route, so unlike the API this cannot be "not
+# registered" -- it is a list of what the schedule owns, checked before the
+# static handler runs. The filename compared is the one the handler is about
+# to open, normalised and case-folded: `/./schedule.html` and, on a
+# case-insensitive volume, `/Schedule.html` would otherwise walk straight past
+# an exact-match list. tests/test_archive_only.py walks static/ to check that
+# nothing the schedule's pages load is left out.
+SCHEDULE_ASSET_FILES = {
+    "schedule.html", "day.html", "sw.js", "manifest.webmanifest", "drafting.css",
+    "tasks.js", "commitments.js", "locations.js", "calendar-import.js",
+}
+SCHEDULE_ASSET_DIRS = ("schedule/", "icons/")
+
+if not config.schedule_enabled():
+
+    @app.before_request
+    def _hide_schedule_assets():
+        if request.endpoint != "static":
+            return
+        name = posixpath.normpath(request.view_args["filename"]).lower()
+        if name in SCHEDULE_ASSET_FILES or name.startswith(SCHEDULE_ASSET_DIRS):
+            abort(404)
+
+
 # --- Idempotent mutations for the phone's offline queue ------------------
 #
 # The phone queues completions, edits and new tasks made with no connection
@@ -275,6 +394,25 @@ def _require_project(project_id):
         abort(404)
 
 
+def _keyword_matches(query, search_by):
+    """Search with no vectors (SKIP_EMBEDDINGS): the same three signals, with
+    the semantic one replaced by what is left of it -- a plain match on the
+    words a person would call the reference's name. Unranked, and with no
+    match label, because there is no distance to label."""
+    q = query.lower()
+    refs = []
+    for ref in db.list_references():
+        name = " ".join(filter(None, [ref["title"], ref["source"], ref["notes"]])).lower()
+        matched = (
+            ("distance" in search_by and q in name)
+            or ("tags" in search_by and q in ", ".join(ref["tags"]).lower())
+            or ("description" in search_by and q in (ref["description"] or "").lower())
+        )
+        if matched:
+            refs.append(_ref_summary(ref))
+    return refs
+
+
 def _find_reference(ref_id):
     ref = db.get_reference(ref_id)
     if ref:
@@ -292,16 +430,22 @@ def _file_kind(ext):
     return "text"
 
 
+# The schedule (tasks + calendar) is the homepage -- it's what opening the
+# app is for day to day. With the schedule switched off the archive is what is
+# left, and it was the homepage before the schedule existed. Chosen once, at
+# import, alongside whether the schedule's routes are registered at all.
+HOME_PAGE = "schedule.html" if config.schedule_enabled() else "index.html"
+
+
 @app.get("/")
 def index():
-    # The schedule (tasks + calendar) is the homepage -- it's what opening the
-    # app is for day to day. The archive and the 3D graph are still reachable
-    # (static serving already exposes every file under static/ at its own
-    # path, so /index.html and /graph.html work with no extra route).
-    return send_from_directory(app.static_folder, "schedule.html")
+    # The archive and the 3D graph are reachable either way (static serving
+    # already exposes every file under static/ at its own path, so /index.html
+    # and /graph.html work with no extra route).
+    return send_from_directory(app.static_folder, HOME_PAGE)
 
 
-@app.get("/day")
+@schedule_api.get("/day")
 def mobile_day():
     """The phone day view -- today's tasks, the day's calendar and completion,
     built for one thumb. Its own route (not a tab of schedule.html) so Add to
@@ -336,7 +480,9 @@ def api_list_references():
     file_types = {t for t in request.args.get("type", "").split(",") if t}
     search_by = {s for s in request.args.get("search_by", "distance").split(",") if s}
 
-    if query:
+    if query and not config.embeddings_enabled():
+        refs = _keyword_matches(query, search_by)
+    elif query:
         model = embeddings.get_model()
         query_embedding = model.encode(query).tolist()
         total = embeddings.get_collection().count()
@@ -377,11 +523,12 @@ def api_get_reference(ref_id):
         abort(404)
 
     similar = []
-    collection = embeddings.get_collection()
-    embedded = collection.get(ids=[ref["id"]], include=["embeddings"])
-    if embedded["ids"]:
-        for m in embeddings.query_index(embedded["embeddings"][0], n_results=6, exclude_ids=[ref["id"]]):
-            similar.append({"id": m["id"], **m["metadata"]})
+    if config.embeddings_enabled():
+        collection = embeddings.get_collection()
+        embedded = collection.get(ids=[ref["id"]], include=["embeddings"])
+        if embedded["ids"]:
+            for m in embeddings.query_index(embedded["embeddings"][0], n_results=6, exclude_ids=[ref["id"]]):
+                similar.append({"id": m["id"], **m["metadata"]})
 
     data = dict(ref)
     data["ext"] = Path(ref["filepath"]).suffix.lower()
@@ -1369,6 +1516,7 @@ def api_delete_canvas_edge(edge_id):
 
 
 @app.post("/api/analyze")
+@requires_claude
 def api_analyze():
     """Start an analysis conversation over a chosen set of references (the
     same underlying feature as `cli.py analyze`, just driven from the GUI's
@@ -1392,6 +1540,7 @@ def api_analyze():
 
 
 @app.post("/api/analyze/<analysis_id>/reply")
+@requires_claude
 def api_analyze_reply(analysis_id):
     messages = _analysis_sessions.get(analysis_id)
     if messages is None:
@@ -1408,6 +1557,7 @@ def api_analyze_reply(analysis_id):
 
 
 @app.post("/api/projects/<project_id>/concept-analysis")
+@requires_claude
 def api_concept_analysis(project_id):
     """Critique the project's concept against its brief, from a canvas selection.
 
@@ -1513,6 +1663,7 @@ def api_similarity_estimate():
 
 
 @app.post("/api/similarity/calculate")
+@requires_embeddings
 def api_similarity_calculate():
     pairs = embeddings.compute_all_pairwise_similarities()
     db.save_similarity_scores(pairs)
@@ -1528,6 +1679,7 @@ def api_similarity_list():
 
 
 @app.get("/api/similarity/graph")
+@requires_embeddings
 def api_similarity_graph():
     if not db.list_similarity_scores():
         return jsonify({"error": NO_SIMILARITY_SCORES}), 400
@@ -1535,6 +1687,7 @@ def api_similarity_graph():
 
 
 @app.get("/api/projects/<project_id>/similarity/graph")
+@requires_embeddings
 def api_project_similarity_graph(project_id):
     """The same graph as /api/similarity/graph, over one project's own
     references -- clustered among themselves, and threaded only by the scores
@@ -1552,6 +1705,7 @@ def api_project_similarity_graph(project_id):
 
 
 @app.get("/api/similarity/constellation")
+@requires_embeddings
 def api_similarity_constellation():
     """Every reference placed by CLIP similarity alone, via the force-directed
     layout in graph_layout.build_constellation() -- a third archive-wide 3D
@@ -1565,6 +1719,7 @@ def api_similarity_constellation():
 
 
 @app.get("/api/projects/<project_id>/similarity/constellation")
+@requires_embeddings
 def api_project_similarity_constellation(project_id):
     """The same map as /api/similarity/constellation, over one project's own
     references -- see api_project_similarity_graph on why the emptiness check
@@ -1902,6 +2057,37 @@ def api_colour_backfill():
     return jsonify({"analysed": analysed, "failed": failed, **colour.coverage()})
 
 
+@app.get("/api/tagging/coverage")
+def api_tagging_coverage():
+    """How many references have no tags -- the ones added with no key, or while
+    Claude was unreachable. The Settings tab shows its backfill control only
+    when there is something for it to do."""
+    return jsonify({
+        "total": len(db.list_references()),
+        "untagged": db.count_untagged_references(),
+        "claude": config.claude_available(),
+    })
+
+
+# Each reference is a Claude call of a few seconds (more if it is retrying a
+# rate limit), so a request does a handful and the page asks again -- the same
+# shape as the colour backfill above, which is bounded for the opposite reason.
+TAG_BACKFILL_BATCH = 5
+
+
+@app.post("/api/tagging/backfill")
+@requires_claude
+def api_tagging_backfill():
+    """Tag references that have no tags. Idempotent: a reference with tags is
+    never touched, so the page simply calls it again until `untagged` stops
+    dropping."""
+    body = request.get_json(force=True, silent=True) or {}
+    limit = body.get("limit")
+    limit = limit if isinstance(limit, int) and limit > 0 else TAG_BACKFILL_BATCH
+    result = ingest.backfill_tags(limit=limit)
+    return jsonify({**result, "untagged": db.count_untagged_references()})
+
+
 @app.get("/api/colour/map")
 def api_colour_map():
     """Every analysed reference positioned in the LCh cylinder the Colour mode
@@ -2075,7 +2261,7 @@ def _accept_one(envelope, upload=None):
 # this file.
 
 
-@app.get("/api/tasks")
+@schedule_api.get("/api/tasks")
 def api_list_tasks():
     """List tasks, optionally narrowed by project, deliverable and/or status
     -- any combination given at once is an AND, same as list_tasks."""
@@ -2089,7 +2275,7 @@ def api_list_tasks():
     )
 
 
-@app.post("/api/tasks")
+@schedule_api.post("/api/tasks")
 @idempotent
 def api_create_task():
     body = request.get_json(force=True, silent=True) or {}
@@ -2132,7 +2318,7 @@ def api_create_task():
     return jsonify(db.get_task(task_id))
 
 
-@app.get("/api/tasks/<task_id>")
+@schedule_api.get("/api/tasks/<task_id>")
 def api_get_task(task_id):
     task = db.get_task(task_id)
     if not task:
@@ -2140,7 +2326,7 @@ def api_get_task(task_id):
     return jsonify(task)
 
 
-@app.put("/api/tasks/<task_id>")
+@schedule_api.put("/api/tasks/<task_id>")
 @idempotent
 def api_update_task(task_id):
     if not db.get_task(task_id):
@@ -2159,7 +2345,7 @@ def api_update_task(task_id):
     return jsonify(db.get_task(task_id))
 
 
-@app.delete("/api/tasks/<task_id>")
+@schedule_api.delete("/api/tasks/<task_id>")
 def api_delete_task(task_id):
     if not db.get_task(task_id):
         abort(404)
@@ -2167,7 +2353,7 @@ def api_delete_task(task_id):
     return jsonify({"ok": True, "id": task_id})
 
 
-@app.post("/api/tasks/<task_id>/dependencies")
+@schedule_api.post("/api/tasks/<task_id>/dependencies")
 def api_add_task_dependency(task_id):
     """Add a dependency edge, refusing anything that would close a cycle."""
     if not db.get_task(task_id):
@@ -2192,7 +2378,7 @@ def api_add_task_dependency(task_id):
     return jsonify({"ok": True, "depends_on": db.list_task_dependencies(task_id)})
 
 
-@app.delete("/api/tasks/<task_id>/dependencies")
+@schedule_api.delete("/api/tasks/<task_id>/dependencies")
 def api_remove_task_dependency(task_id):
     if not db.get_task(task_id):
         abort(404)
@@ -2204,14 +2390,14 @@ def api_remove_task_dependency(task_id):
     return jsonify({"ok": True})
 
 
-@app.get("/api/tasks/<task_id>/resources")
+@schedule_api.get("/api/tasks/<task_id>/resources")
 def api_list_task_resources(task_id):
     if not db.get_task(task_id):
         abort(404)
     return jsonify(db.list_resources_for_task(task_id))
 
 
-@app.post("/api/tasks/<task_id>/resources")
+@schedule_api.post("/api/tasks/<task_id>/resources")
 def api_add_task_resource(task_id):
     """Link a resource to a task. The task inherits the resource's location if
     it has none of its own -- see db.add_task_resource."""
@@ -2225,7 +2411,7 @@ def api_add_task_resource(task_id):
     return jsonify(db.list_resources_for_task(task_id))
 
 
-@app.delete("/api/tasks/<task_id>/resources")
+@schedule_api.delete("/api/tasks/<task_id>/resources")
 def api_remove_task_resource(task_id):
     if not db.get_task(task_id):
         abort(404)
@@ -2237,7 +2423,8 @@ def api_remove_task_resource(task_id):
     return jsonify(db.list_resources_for_task(task_id))
 
 
-@app.post("/api/tasks/generate")
+@schedule_api.post("/api/tasks/generate")
+@requires_claude
 def api_generate_task_fields():
     """Given the one sentence a quick-added task requires, ask Claude to
     suggest whatever else the entry form left blank. Pure generation -- this
@@ -2255,7 +2442,7 @@ def api_generate_task_fields():
         return jsonify({"error": str(e)}), 500
 
 
-@app.get("/api/tasks/<task_id>/actual")
+@schedule_api.get("/api/tasks/<task_id>/actual")
 def api_get_task_actual(task_id):
     """The recorded actuals for a done task, so the Tasks tab can render them
     as the same editable chips the estimate started as. None (not 404) when
@@ -2266,7 +2453,7 @@ def api_get_task_actual(task_id):
     return jsonify(db.get_task_actual(task_id))
 
 
-@app.get("/api/tasks/<task_id>/blocks")
+@schedule_api.get("/api/tasks/<task_id>/blocks")
 def api_get_task_blocks(task_id):
     """Every scheduled block this task has ever had, oldest first -- what the
     calendar's task panel (schedule/task-panel.js) reads to find the task's
@@ -2282,7 +2469,7 @@ def api_get_task_blocks(task_id):
     return jsonify(blocks)
 
 
-@app.post("/api/tasks/<task_id>/complete")
+@schedule_api.post("/api/tasks/<task_id>/complete")
 @idempotent
 def api_complete_task(task_id):
     """One-tap completion -- the COMPLETED outcome (see
@@ -2330,7 +2517,7 @@ def api_complete_task(task_id):
     return jsonify(result)
 
 
-@app.post("/api/tasks/<task_id>/partial")
+@schedule_api.post("/api/tasks/<task_id>/partial")
 @idempotent
 def api_partial_task(task_id):
     """The PARTIALLY COMPLETED outcome (see scheduling.resolve_partial): the
@@ -2375,7 +2562,7 @@ def api_partial_task(task_id):
     return jsonify(result)
 
 
-@app.post("/api/tasks/<task_id>/not-completed")
+@schedule_api.post("/api/tasks/<task_id>/not-completed")
 @idempotent
 def api_not_completed_task(task_id):
     """The NOT COMPLETED outcome (see scheduling.resolve_not_completed): the
@@ -2410,13 +2597,13 @@ def _default_actual_minutes(task):
 # --- Schedule: deliverables ---------------------------------------------------
 
 
-@app.get("/api/projects/<project_id>/deliverables")
+@schedule_api.get("/api/projects/<project_id>/deliverables")
 def api_list_deliverables(project_id):
     _require_project(project_id)
     return jsonify(db.list_deliverables(project_id))
 
 
-@app.post("/api/projects/<project_id>/deliverables")
+@schedule_api.post("/api/projects/<project_id>/deliverables")
 def api_create_deliverable(project_id):
     _require_project(project_id)
     body = request.get_json(force=True, silent=True) or {}
@@ -2436,7 +2623,7 @@ def api_create_deliverable(project_id):
     return jsonify(db.get_deliverable(deliverable_id))
 
 
-@app.put("/api/deliverables/<deliverable_id>")
+@schedule_api.put("/api/deliverables/<deliverable_id>")
 def api_update_deliverable(deliverable_id):
     if not db.get_deliverable(deliverable_id):
         abort(404)
@@ -2448,7 +2635,7 @@ def api_update_deliverable(deliverable_id):
     return jsonify(db.get_deliverable(deliverable_id))
 
 
-@app.delete("/api/deliverables/<deliverable_id>")
+@schedule_api.delete("/api/deliverables/<deliverable_id>")
 def api_delete_deliverable(deliverable_id):
     if not db.get_deliverable(deliverable_id):
         abort(404)
@@ -2470,7 +2657,8 @@ def _brief_pdf_path(brief_id):
     return config.BRIEFS_DIR / f"{brief_id}.pdf"
 
 
-@app.post("/api/projects/<project_id>/briefs")
+@schedule_api.post("/api/projects/<project_id>/briefs")
+@requires_claude
 def api_import_brief(project_id):
     _require_project(project_id)
     if "file" not in request.files:
@@ -2539,13 +2727,13 @@ def _restore_or_remove(path, prior_bytes):
         path.write_bytes(prior_bytes)
 
 
-@app.get("/api/projects/<project_id>/briefs")
+@schedule_api.get("/api/projects/<project_id>/briefs")
 def api_list_briefs(project_id):
     _require_project(project_id)
     return jsonify(db.list_briefs(project_id))
 
 
-@app.get("/api/briefs/<brief_id>")
+@schedule_api.get("/api/briefs/<brief_id>")
 def api_get_brief(brief_id):
     brief = db.get_brief(brief_id)
     if not brief:
@@ -2553,7 +2741,7 @@ def api_get_brief(brief_id):
     return jsonify(brief)
 
 
-@app.get("/api/briefs/<brief_id>/file")
+@schedule_api.get("/api/briefs/<brief_id>/file")
 def api_brief_file(brief_id):
     if not db.get_brief(brief_id):
         abort(404)
@@ -2563,7 +2751,7 @@ def api_brief_file(brief_id):
     return send_file(path, mimetype="application/pdf")
 
 
-@app.delete("/api/briefs/<brief_id>")
+@schedule_api.delete("/api/briefs/<brief_id>")
 def api_delete_brief(brief_id):
     """Delete the brief and undo what it created.
 
@@ -2582,7 +2770,7 @@ def api_delete_brief(brief_id):
     return jsonify({"ok": True, "id": brief_id, **result})
 
 
-@app.post("/api/briefs/<brief_id>/reset")
+@schedule_api.post("/api/briefs/<brief_id>/reset")
 def api_reset_brief(brief_id):
     """Undo what this brief created without deleting the brief itself -- the
     scoped, per-brief cousin of POST /api/schedule/reset.
@@ -2599,7 +2787,7 @@ def api_reset_brief(brief_id):
     return jsonify({"ok": True, "id": brief_id, **result})
 
 
-@app.get("/api/briefs/<brief_id>/diff")
+@schedule_api.get("/api/briefs/<brief_id>/diff")
 def api_brief_diff(brief_id):
     """The four-group comparison of the brief's current extraction against the
     deliverable rows it has already created: unchanged / changed / new / gone.
@@ -2619,7 +2807,7 @@ def _date_only(value):
     return value[:10] if isinstance(value, str) and len(value) >= 10 else None
 
 
-@app.post("/api/briefs/<brief_id>/apply")
+@schedule_api.post("/api/briefs/<brief_id>/apply")
 def api_apply_brief(brief_id):
     """Turn the reviewed, accepted subset of a brief into real rows.
 
@@ -2836,7 +3024,8 @@ def _supporting_doc_path(doc_id, filename):
     return config.SUPPORTING_DOCS_DIR / f"{doc_id}{suffix}"
 
 
-@app.post("/api/projects/<project_id>/supporting-documents")
+@schedule_api.post("/api/projects/<project_id>/supporting-documents")
+@requires_claude
 def api_import_supporting_document(project_id):
     _require_project(project_id)
     if "file" not in request.files:
@@ -2879,13 +3068,13 @@ def api_import_supporting_document(project_id):
     return jsonify(db.get_supporting_document(doc_id))
 
 
-@app.get("/api/projects/<project_id>/supporting-documents")
+@schedule_api.get("/api/projects/<project_id>/supporting-documents")
 def api_list_supporting_documents(project_id):
     _require_project(project_id)
     return jsonify(db.list_supporting_documents(project_id))
 
 
-@app.get("/api/supporting-documents/<doc_id>")
+@schedule_api.get("/api/supporting-documents/<doc_id>")
 def api_get_supporting_document(doc_id):
     doc = db.get_supporting_document(doc_id)
     if not doc:
@@ -2893,7 +3082,7 @@ def api_get_supporting_document(doc_id):
     return jsonify(doc)
 
 
-@app.get("/api/supporting-documents/<doc_id>/file")
+@schedule_api.get("/api/supporting-documents/<doc_id>/file")
 def api_supporting_document_file(doc_id):
     doc = db.get_supporting_document(doc_id)
     if not doc:
@@ -2904,7 +3093,7 @@ def api_supporting_document_file(doc_id):
     return send_file(path)
 
 
-@app.delete("/api/supporting-documents/<doc_id>")
+@schedule_api.delete("/api/supporting-documents/<doc_id>")
 def api_delete_supporting_document(doc_id):
     doc = db.get_supporting_document(doc_id)
     if not doc:
@@ -2914,7 +3103,7 @@ def api_delete_supporting_document(doc_id):
     return jsonify({"ok": True, "id": doc_id})
 
 
-@app.post("/api/supporting-documents/<doc_id>/apply")
+@schedule_api.post("/api/supporting-documents/<doc_id>/apply")
 def api_apply_supporting_document(doc_id):
     """Turn the reviewed, accepted preparation tasks into real tasks.
 
@@ -2962,12 +3151,12 @@ def api_apply_supporting_document(doc_id):
 # --- Schedule: locations -------------------------------------------------------
 
 
-@app.get("/api/locations")
+@schedule_api.get("/api/locations")
 def api_list_locations():
     return jsonify(db.list_locations())
 
 
-@app.post("/api/locations")
+@schedule_api.post("/api/locations")
 def api_create_location():
     body = request.get_json(force=True, silent=True) or {}
     name = (body.get("name") or "").strip()
@@ -2989,7 +3178,7 @@ def api_create_location():
     return jsonify(db.get_location(location_id))
 
 
-@app.put("/api/locations/<location_id>")
+@schedule_api.put("/api/locations/<location_id>")
 def api_update_location(location_id):
     if not db.get_location(location_id):
         abort(404)
@@ -3012,7 +3201,7 @@ def api_update_location(location_id):
     return jsonify(db.get_location(location_id))
 
 
-@app.delete("/api/locations/<location_id>")
+@schedule_api.delete("/api/locations/<location_id>")
 def api_delete_location(location_id):
     if not db.get_location(location_id):
         abort(404)
@@ -3020,14 +3209,14 @@ def api_delete_location(location_id):
     return jsonify({"ok": True, "id": location_id})
 
 
-@app.get("/api/locations/<location_id>/hours")
+@schedule_api.get("/api/locations/<location_id>/hours")
 def api_get_location_hours(location_id):
     if not db.get_location(location_id):
         abort(404)
     return jsonify(db.get_location_hours(location_id))
 
 
-@app.put("/api/locations/<location_id>/hours")
+@schedule_api.put("/api/locations/<location_id>/hours")
 def api_save_location_hours(location_id):
     """Replace a location's whole weekly schedule at once -- see
     db.save_location_hours for why this is wholesale, not per-day."""
@@ -3041,14 +3230,14 @@ def api_save_location_hours(location_id):
     return jsonify(db.get_location_hours(location_id))
 
 
-@app.get("/api/locations/<location_id>/overrides")
+@schedule_api.get("/api/locations/<location_id>/overrides")
 def api_list_location_overrides(location_id):
     if not db.get_location(location_id):
         abort(404)
     return jsonify(db.list_location_overrides(location_id))
 
 
-@app.post("/api/locations/<location_id>/overrides")
+@schedule_api.post("/api/locations/<location_id>/overrides")
 def api_create_location_override(location_id):
     if not db.get_location(location_id):
         abort(404)
@@ -3068,7 +3257,7 @@ def api_create_location_override(location_id):
     return jsonify(db.list_location_overrides(location_id))
 
 
-@app.delete("/api/locations/<location_id>/overrides")
+@schedule_api.delete("/api/locations/<location_id>/overrides")
 def api_delete_location_override(location_id):
     """Deletes one override, named by id in the body -- there's no override id
     in the URL, since an override only ever makes sense in the context of the
@@ -3086,12 +3275,12 @@ def api_delete_location_override(location_id):
 # --- Schedule: travel -----------------------------------------------------------
 
 
-@app.get("/api/travel")
+@schedule_api.get("/api/travel")
 def api_list_travel():
     return jsonify(db.list_travel())
 
 
-@app.put("/api/travel")
+@schedule_api.put("/api/travel")
 def api_save_travel():
     """Replace the whole location-to-location travel matrix at once -- see
     db.save_travel."""
@@ -3106,12 +3295,12 @@ def api_save_travel():
 # --- Schedule: commitments -------------------------------------------------------
 
 
-@app.get("/api/commitments")
+@schedule_api.get("/api/commitments")
 def api_list_commitments():
     return jsonify(db.list_commitments())
 
 
-@app.post("/api/commitments")
+@schedule_api.post("/api/commitments")
 def api_create_commitment():
     body = request.get_json(force=True, silent=True) or {}
     title = (body.get("title") or "").strip()
@@ -3143,7 +3332,7 @@ def api_create_commitment():
     return jsonify(db.get_commitment(commitment_id))
 
 
-@app.put("/api/commitments/<commitment_id>")
+@schedule_api.put("/api/commitments/<commitment_id>")
 def api_update_commitment(commitment_id):
     if not db.get_commitment(commitment_id):
         abort(404)
@@ -3157,7 +3346,7 @@ def api_update_commitment(commitment_id):
     return jsonify(db.get_commitment(commitment_id))
 
 
-@app.delete("/api/commitments/<commitment_id>")
+@schedule_api.delete("/api/commitments/<commitment_id>")
 def api_delete_commitment(commitment_id):
     if not db.get_commitment(commitment_id):
         abort(404)
@@ -3165,7 +3354,7 @@ def api_delete_commitment(commitment_id):
     return jsonify({"ok": True, "id": commitment_id})
 
 
-@app.put("/api/commitments/classify")
+@schedule_api.put("/api/commitments/classify")
 def api_classify_commitments():
     """Reclassify several commitments' support_level and/or location_id at
     once -- import can't know either reliably from a title (see
@@ -3202,7 +3391,7 @@ def api_classify_commitments():
     return jsonify(updated)
 
 
-@app.post("/api/commitments/import")
+@schedule_api.post("/api/commitments/import")
 def api_import_commitments():
     """Import, or re-sync, commitments from an ICS feed -- an uploaded .ics
     file (multipart, field "file") or a feed URL (JSON body {"feed_url": ...}).
@@ -3244,7 +3433,7 @@ def api_import_commitments():
     return jsonify(summary)
 
 
-@app.get("/api/commitments/feed")
+@schedule_api.get("/api/commitments/feed")
 def api_get_ics_feed():
     """The last feed URL the user configured, if any -- lets the calendar
     import UI prefill the field and offer Re-sync without asking the user to
@@ -3255,12 +3444,12 @@ def api_get_ics_feed():
 # --- Schedule: working hours and daily capacity -------------------------------
 
 
-@app.get("/api/working-hours")
+@schedule_api.get("/api/working-hours")
 def api_get_working_hours():
     return jsonify(db.get_working_hours())
 
 
-@app.put("/api/working-hours")
+@schedule_api.put("/api/working-hours")
 def api_save_working_hours():
     """Replace the whole weekly working-hours template at once -- see
     db.save_working_hours for why this is wholesale, not per-day."""
@@ -3272,12 +3461,12 @@ def api_save_working_hours():
     return jsonify(db.get_working_hours())
 
 
-@app.get("/api/domestic-hours")
+@schedule_api.get("/api/domestic-hours")
 def api_get_domestic_hours():
     return jsonify(db.get_domestic_hours())
 
 
-@app.put("/api/domestic-hours")
+@schedule_api.put("/api/domestic-hours")
 def api_save_domestic_hours():
     """Replace the whole weekly domestic-hours template at once -- same
     wholesale contract as working hours, and a separate band from it."""
@@ -3289,7 +3478,7 @@ def api_save_domestic_hours():
     return jsonify(db.get_domestic_hours())
 
 
-@app.get("/api/hours-overrides")
+@schedule_api.get("/api/hours-overrides")
 def api_list_hours_overrides():
     """Every per-date resize on file, optionally narrowed to one band via
     ?band=working|domestic -- the week/month views (session 9) read this to
@@ -3300,7 +3489,7 @@ def api_list_hours_overrides():
     return jsonify(db.list_hours_overrides(band))
 
 
-@app.post("/api/hours-overrides")
+@schedule_api.post("/api/hours-overrides")
 def api_create_hours_override():
     body = request.get_json(force=True, silent=True) or {}
     date_str = body.get("date")
@@ -3321,7 +3510,7 @@ def api_create_hours_override():
     return jsonify(next(o for o in db.list_hours_overrides(band) if o["id"] == override_id))
 
 
-@app.delete("/api/hours-overrides/<override_id>")
+@schedule_api.delete("/api/hours-overrides/<override_id>")
 def api_delete_hours_override(override_id):
     db.delete_hours_override(override_id)
     return jsonify({"ok": True, "id": override_id})
@@ -3364,12 +3553,12 @@ def _recurrence_rule_fields(body):
     return fields, None
 
 
-@app.get("/api/recurrence-rules")
+@schedule_api.get("/api/recurrence-rules")
 def api_list_recurrence_rules():
     return jsonify(db.list_recurrence_rules(active_only=request.args.get("active_only") == "1"))
 
 
-@app.post("/api/recurrence-rules")
+@schedule_api.post("/api/recurrence-rules")
 def api_create_recurrence_rule():
     body = request.get_json(force=True, silent=True) or {}
     fields, error = _recurrence_rule_fields(body)
@@ -3388,7 +3577,7 @@ def api_create_recurrence_rule():
     return jsonify(db.get_recurrence_rule(rule_id))
 
 
-@app.get("/api/recurrence-rules/<rule_id>")
+@schedule_api.get("/api/recurrence-rules/<rule_id>")
 def api_get_recurrence_rule(rule_id):
     rule = db.get_recurrence_rule(rule_id)
     if not rule:
@@ -3396,7 +3585,7 @@ def api_get_recurrence_rule(rule_id):
     return jsonify(rule)
 
 
-@app.put("/api/recurrence-rules/<rule_id>")
+@schedule_api.put("/api/recurrence-rules/<rule_id>")
 def api_update_recurrence_rule(rule_id):
     if not db.get_recurrence_rule(rule_id):
         abort(404)
@@ -3408,7 +3597,7 @@ def api_update_recurrence_rule(rule_id):
     return jsonify(db.get_recurrence_rule(rule_id))
 
 
-@app.delete("/api/recurrence-rules/<rule_id>")
+@schedule_api.delete("/api/recurrence-rules/<rule_id>")
 def api_delete_recurrence_rule(rule_id):
     if not db.get_recurrence_rule(rule_id):
         abort(404)
@@ -3424,12 +3613,12 @@ def _is_valid_date(date_str):
         return False
 
 
-@app.get("/api/schedule-settings")
+@schedule_api.get("/api/schedule-settings")
 def api_get_schedule_settings():
     return jsonify(db.get_schedule_settings())
 
 
-@app.put("/api/schedule-settings")
+@schedule_api.put("/api/schedule-settings")
 def api_save_schedule_settings():
     """Whole-object replace, same convention as the hours endpoints -- the
     settings panel (session 9's bedtime section) always submits all fields
@@ -3465,7 +3654,7 @@ def api_save_schedule_settings():
     return jsonify(db.get_schedule_settings())
 
 
-@app.get("/api/schedule/bedtimes")
+@schedule_api.get("/api/schedule/bedtimes")
 def api_list_suggested_bedtimes():
     """The suggested-bedtime marker (see scheduling.suggested_bedtime) for
     every evening in [start, end] -- one calendar fetch for a whole visible
@@ -3488,7 +3677,7 @@ def api_list_suggested_bedtimes():
     return jsonify(markers)
 
 
-@app.get("/api/capacity/<date_str>")
+@schedule_api.get("/api/capacity/<date_str>")
 def api_get_daily_capacity(date_str):
     if not _is_valid_date(date_str):
         return jsonify({"error": "date must be YYYY-MM-DD"}), 400
@@ -3497,7 +3686,7 @@ def api_get_daily_capacity(date_str):
     return jsonify(row)
 
 
-@app.put("/api/capacity/<date_str>")
+@schedule_api.put("/api/capacity/<date_str>")
 def api_set_manual_energy(date_str):
     """Set, or clear, the manual energy override for one day -- send
     manual_energy: null to clear it back to the inferred value. Always wins
@@ -3523,7 +3712,7 @@ def api_set_manual_energy(date_str):
 # --- Schedule: the plan --------------------------------------------------------
 
 
-@app.post("/api/schedule/plan")
+@schedule_api.post("/api/schedule/plan")
 def api_run_schedule_plan():
     """Resolve whatever's lapsed, then run the scheduler and replace the
     future of scheduled_blocks with what it placed (see scheduling.replan).
@@ -3550,7 +3739,7 @@ def api_run_schedule_plan():
         return jsonify({"error": str(e)}), 400
 
 
-@app.put("/api/schedule/blocks/<block_id>/lock")
+@schedule_api.put("/api/schedule/blocks/<block_id>/lock")
 def api_lock_scheduled_block(block_id):
     """Pin a scheduled block to its slot, or release it -- the only property
     of a block mutable outside a replan (see SCHEDULE_SCOPE.md's "Pinning").
@@ -3574,7 +3763,7 @@ def api_lock_scheduled_block(block_id):
     return jsonify(db.get_scheduled_block(block_id))
 
 
-@app.put("/api/schedule/blocks/<block_id>/move")
+@schedule_api.put("/api/schedule/blocks/<block_id>/move")
 def api_move_scheduled_block(block_id):
     """Reposition a task block by dragging it on the calendar (week.js) --
     sets a new start (its length carries over unchanged) and always locks it
@@ -3606,7 +3795,7 @@ def api_move_scheduled_block(block_id):
     return jsonify(db.get_scheduled_block(block_id))
 
 
-@app.get("/api/schedule")
+@schedule_api.get("/api/schedule")
 def api_get_schedule():
     """The scheduled blocks in a date range, plus the at-risk list.
 
@@ -3675,7 +3864,7 @@ def _schedule_range_payload(start=None, end=None):
     }
 
 
-@app.get("/api/schedule/today")
+@schedule_api.get("/api/schedule/today")
 def api_schedule_today():
     """Everything the phone day view needs, in ONE request.
 
@@ -3744,7 +3933,7 @@ def api_schedule_today():
 RESET_SCHEDULE_CONFIRMATION = "clear-schedule"
 
 
-@app.post("/api/schedule/reset")
+@schedule_api.post("/api/schedule/reset")
 def api_reset_schedule():
     """Empty the schedule back to nothing, for clearing out test data.
 
@@ -3791,19 +3980,19 @@ def api_reset_schedule():
 # --- Schedule: resources -----------------------------------------------------------
 
 
-@app.get("/api/resources")
+@schedule_api.get("/api/resources")
 def api_list_resources():
     return jsonify(db.list_resources())
 
 
-@app.get("/api/resources/search")
+@schedule_api.get("/api/resources/search")
 def api_search_resources():
     """One box over the whole library -- matches resource name/notes and any
     item's text or tags. Blank query returns nothing rather than everything."""
     return jsonify(db.search_resource_items(request.args.get("q", "")))
 
 
-@app.post("/api/resources")
+@schedule_api.post("/api/resources")
 def api_create_resource():
     body = request.get_json(force=True, silent=True) or {}
     name = (body.get("name") or "").strip()
@@ -3820,7 +4009,7 @@ def api_create_resource():
     return jsonify(db.get_resource(resource_id))
 
 
-@app.put("/api/resources/<resource_id>")
+@schedule_api.put("/api/resources/<resource_id>")
 def api_update_resource(resource_id):
     if not db.get_resource(resource_id):
         abort(404)
@@ -3832,7 +4021,7 @@ def api_update_resource(resource_id):
     return jsonify(db.get_resource(resource_id))
 
 
-@app.delete("/api/resources/<resource_id>")
+@schedule_api.delete("/api/resources/<resource_id>")
 def api_delete_resource(resource_id):
     if not db.get_resource(resource_id):
         abort(404)
@@ -3840,7 +4029,7 @@ def api_delete_resource(resource_id):
     return jsonify({"ok": True, "id": resource_id})
 
 
-@app.post("/api/resources/<resource_id>/items")
+@schedule_api.post("/api/resources/<resource_id>/items")
 def api_add_resource_item(resource_id):
     if not db.get_resource(resource_id):
         abort(404)
@@ -3852,7 +4041,7 @@ def api_add_resource_item(resource_id):
     return jsonify(db.list_resource_items(resource_id))
 
 
-@app.delete("/api/resources/<resource_id>/items")
+@schedule_api.delete("/api/resources/<resource_id>/items")
 def api_remove_resource_item(resource_id):
     """Removes one item, named in the body -- like the location overrides
     delete, an item has no id of its own outside the resource it belongs to."""
@@ -3969,6 +4158,12 @@ def api_get_capture(capture_id):
     if not row:
         abort(404)
     return jsonify(capture.summary(row))
+
+
+# Mounted last, and only when switched on. Everything above registered on `app`
+# at import; this is the one line that decides whether the schedule exists.
+if config.schedule_enabled():
+    app.register_blueprint(schedule_api)
 
 
 def bootstrap():

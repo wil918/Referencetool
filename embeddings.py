@@ -118,6 +118,7 @@ def _get_client():
 
 def get_collection():
     global _collection
+    _require_enabled()  # before the cache: a collection opened earlier must not outlive the switch
     if _collection is None:
         _collection = _get_client().get_or_create_collection(
             name="references", metadata={"hnsw:space": "cosine"}
@@ -134,6 +135,7 @@ def get_task_collection():
     that structurally, rather than relying on a shared collection plus a type
     filter that a future caller could forget."""
     global _task_collection
+    _require_enabled()
     if _task_collection is None:
         _task_collection = _get_client().get_or_create_collection(
             name="tasks", metadata={"hnsw:space": "cosine"}
