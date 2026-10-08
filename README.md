@@ -6,10 +6,13 @@ and embedding them, and searching across them semantically.
 ## How it works
 
 - Files you add are copied into `references/images/` or `references/texts/`.
-- **Claude** looks at each reference and generates tags + a short description.
+- **Claude** (if you give it an API key — see below) looks at each reference
+  and generates tags + a short description.
   For PDFs, Claude sees both the extracted text *and* the PDF's most
   significant embedded images (up to 4, largest first) in the same call, so a
-  lookbook or tearsheet isn't reduced to just its captions.
+  lookbook or tearsheet isn't reduced to just its captions. Without a key a
+  reference is still added — titled by its filename, with no tags — and can be
+  tagged later.
 - **CLIP** (running locally, via `sentence-transformers`) generates an embedding
   for each reference. Images and text share the same embedding space, so you can
   later search images with a text query, or vice versa. For PDFs, the text
@@ -18,8 +21,9 @@ and embedding them, and searching across them semantically.
 - Embeddings live in a local Chroma vector store (`data/chroma_db/`) — just a
   folder on disk, no server required.
 
-Nothing leaves your machine except the calls to Claude for tagging (one API call
-per reference you add).
+Nothing leaves your machine except the calls to Claude (one API call per
+reference you add for tagging, plus one per analysis, brief import or task
+estimate you ask for). With no API key, nothing leaves it at all.
 
 ### A note on search scores
 
@@ -33,20 +37,91 @@ match." This gets more meaningful as your library grows; with only a handful
 of references in total, treat the labels as rough ranking rather than a
 confident verdict.
 
-## Setup
+## Quick start
+
+You should see the app working a few minutes after cloning it.
+
+**1. Get the code.** The repository is private, so a clone needs access to it
+(ask to be added as a collaborator), or you can be handed a zip. If you are
+making that zip from a folder that has been in use, **leave out `.env`, `data/`,
+`references/`, `deleted/` and `portfolio/`** — they hold the API key and the
+whole library. `.gitignore` already keeps all of them out of a clone and out of
+GitHub's *Download ZIP*, but it does nothing for a copied folder:
+
+```bash
+cd ..   # the folder that contains fashion-reference-tool/
+zip -r fashion-reference-tool.zip fashion-reference-tool \
+  -x "fashion-reference-tool/.env" "fashion-reference-tool/data/*" \
+     "fashion-reference-tool/references/images/*" "fashion-reference-tool/references/texts/*" \
+     "fashion-reference-tool/deleted/*" "fashion-reference-tool/portfolio/*" \
+     "fashion-reference-tool/venv/*" "fashion-reference-tool/.git/*" \
+     "fashion-reference-tool/.claude/worktrees/*"
+```
+
+(`.git/*` is left out so the zip carries the code, not its history; drop that
+line if you mean to hand over the history too.) The app creates its own empty
+`data/`, `references/` and `portfolio/` folders the first time it runs (and
+`deleted/` the first time something is deleted), so nothing needs putting back.
+
+**2. Install.** Python 3.9 or newer:
 
 ```bash
 cd fashion-reference-tool
 python3 -m venv venv
 source venv/bin/activate        # on Windows: venv\Scripts\activate
 pip install -r requirements.txt
-
 cp .env.example .env
-# then open .env and paste in your Anthropic API key
 ```
 
-The first time you add a reference, `sentence-transformers` will download the
-CLIP model (~600MB) — after that it runs fully offline.
+**3. Choose three things in `.env`.** All three can be left alone — the app
+works with none of them set — and each one only ever takes something away:
+
+| Setting | Default | What it does | What it costs you |
+|---|---|---|---|
+| `ANTHROPIC_API_KEY` | not set | Turns on every Claude feature: automatic tags and descriptions, written analysis of selected references, concept analysis on the canvas, and in the schedule brief import and task estimates. | **Money**, paid to Anthropic per call (see below). Leave it unset and nothing is ever sent anywhere: references are added with their filename as the title and no tags, and the controls that would call Claude are simply not shown. |
+| `ARCHIVE_ONLY=1` | off | Switches the whole schedule off: tasks, calendar, commitments, deliverables, briefs and the phone day view are not served at all. What is left is the archive, projects, folders, the canvas, portfolio spreads and the 3D views, and the archive becomes the homepage. | The schedule. Nothing is deleted — its (empty) tables are still created — so removing the line brings it straight back. |
+| `SKIP_EMBEDDINGS=1` | off | Never loads the CLIP model or the vector store. | Semantic search, the similarity graph, the constellation, "similar items" and similarity scores. Search falls back to matching words in titles, tags and descriptions. Colour search and the colour space don't use embeddings and still work. See below before you reach for this one. |
+
+**4. Run it.**
+
+```bash
+python app.py
+```
+
+This opens `http://127.0.0.1:5050`. The library starts **empty** — no sample
+references ship with it, on purpose, because invented ones would misrepresent
+what it is for. Drag a few images onto the **Add** tab and they are in the
+archive straight away.
+
+### What each choice costs
+
+**The Anthropic API key costs money; nothing else here does.** Claude is called
+once per reference added (tagging), and once for each analysis, brief import or
+task estimate you ask for. Put a spending limit on the key in the Anthropic
+console if you are handing a copy to someone else. Without a key the app is
+fully usable; it just doesn't write tags or analyses for you. If you add a key
+later, **Settings → Tags** (or `python cli.py tag-backfill`) fills in tags for
+the references that were added without one, so nothing needs re-importing.
+Existing saved analyses stay readable whether or not a key is set.
+
+**The CLIP model is not an API cost.** It is what makes semantic search, the
+similarity graph, the constellation and "similar items" work, and it runs
+entirely on your machine. `sentence-transformers` downloads it **once**, about
+600 MB, the first time a reference is added or a search is run; after that it
+is local and free to use as much as you like. Leave embeddings on unless the
+download itself is a problem — a slow connection or a small disk. If it is,
+`SKIP_EMBEDDINGS=1` means neither the model nor Chroma is ever touched, and the
+views that depend on them say why they are empty instead of drawing a blank
+scene. You can then also delete the `sentence-transformers` and `chromadb` lines
+from `requirements.txt` before installing, so they are never installed at all
+(the app does not import either when the switch is on, and a test runs it with
+both blocked to keep that true).
+
+**A keyless copy with embeddings on** is a good way to show the app off: it
+keeps semantic search, the similarity graph, the constellation, the colour
+cylinder, colour search and palettes, the archive, projects, folders, the
+canvas and portfolio spreads. What it loses is automatic tags and the analysis
+features. With `ARCHIVE_ONLY=1` as well it is the archive on its own.
 
 ## Usage
 
@@ -84,7 +159,14 @@ python cli.py search "sculptural silhouettes, structured shoulders"
 python cli.py search "romanticism vs minimalism" -n 10
 ```
 
-**Analyze a handful of references:**
+**Tag references that were added without tags** (no API key at the time, or
+Claude was unreachable):
+```bash
+python cli.py tag-backfill
+python cli.py tag-backfill --limit 20
+```
+
+**Analyze a handful of references** (needs an API key):
 ```bash
 python cli.py analyze <id1> <id2> <id3>
 python cli.py analyze <id1> <id2> --save writeup.md
@@ -111,14 +193,17 @@ type-in text box, and a visual archive browser — running on top of the same
 python app.py
 ```
 This opens `http://127.0.0.1:5050` in your browser automatically. The homepage
-is the **Schedule** (below); the reference library lives under the Add / Archive
-/ Projects / Settings tabs of `index.html`.
+is the **Schedule** (below) — or the library itself if `ARCHIVE_ONLY=1` is set;
+the reference library lives under the Add / Archive / Projects / Settings tabs
+of `index.html`.
 
 **Add tab:**
 - Drag and drop files *or whole folders* onto the drop zone (folders are
   read recursively), or use the "Choose files" / "Choose folder" buttons.
-  Each supported file is tagged, embedded, and added the same way `add`/
-  `add-folder` would — duplicates are skipped and reported, not re-added.
+  Each supported file is tagged (when there is an API key), embedded, and
+  added the same way `add`/`add-folder` would — duplicates are skipped and
+  reported, not re-added. If tagging fails for any reason (no key, a rate
+  limit, a dropped connection) the reference is still added, untagged.
 - Type or paste text into the text box and click "Save as reference" to
   save it as its own `.txt` reference, tagged and embedded like any other
   text file.
@@ -135,7 +220,8 @@ is the **Schedule** (below); the reference library lives under the Add / Archive
 
 ## Schedule
 
-The homepage (`schedule.html`, served at `/`) is a planner for the work a
+The homepage (`schedule.html`, served at `/` — unless `ARCHIVE_ONLY=1`, which
+turns the whole schedule off and serves the library there instead) is a planner for the work a
 project actually involves — not just what to make, but when there is time to
 make it. It runs on the same Flask app and the same SQLite file as the
 reference library; the only outbound calls are still to Claude, for reading a

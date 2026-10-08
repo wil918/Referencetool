@@ -197,7 +197,7 @@ These are not preferences. Violating one means the change gets reverted.
 
 | File | Responsibility |
 |---|---|
-| `app.py` | Every HTTP route. Thin wrappers over the modules below — no business logic. |
+| `app.py` | Every HTTP route. Thin wrappers over the modules below — no business logic. The schedule's routes are declared on the `schedule_api` blueprint, registered only when the schedule is on. |
 | `db.py` | All SQLite access. |
 | `ingest.py` | Add a reference: hash, dedupe, copy, tag, embed, insert. |
 | `tagging.py` | Claude calls for title/tags/description. |
@@ -207,14 +207,14 @@ These are not preferences. Violating one means the change gets reverted.
 | `graph_layout.py` | K-means clustering of CLIP vectors into planes for the 3D graph. |
 | `capture.py` | Durable queue for browser-extension captures, background worker thread. |
 | `portfolio.py` | Staging store for portfolio-spread pages (`portfolio_pages`, files in `portfolio/`): direct upload, placement, versions, explicit promotion to the archive, export plan, and the startup migration off archive references. `spreads.py` is its print side (A4 geometry, dpi, PDF export). |
-| `config.py` | Paths, API key, model name. |
+| `config.py` | Paths, API key, model name, and the capability switches (`ARCHIVE_ONLY`, `SKIP_EMBEDDINGS`, `claude_available()`) — see Capabilities below. |
 
 ### Frontend
 
 | Page | Entry | Notes |
 |---|---|---|
 | `static/index.html` | `app.js` | The SPA: Add / Archive / Projects / Settings tabs. |
-| `static/schedule.html` | `schedule/main.js` | Tasks + calendar, and the schedule's own settings (locations, calendar import, personal events, hours, suggested bedtime). **This is the homepage** — `GET /` serves it, not `index.html`. |
+| `static/schedule.html` | `schedule/main.js` | Tasks + calendar, and the schedule's own settings (locations, calendar import, personal events, hours, suggested bedtime). **This is the homepage** — `GET /` serves it, not `index.html` (unless `ARCHIVE_ONLY`, which serves `index.html` and unmounts the whole schedule). |
 | `static/day.html` | `schedule/day-mobile.js` | The phone day view, served at `/day` (and Add-to-Home-Screen target — `static/manifest.webmanifest`, `static/icons/`). Mounts the SAME `schedule/day.js` the Today tab does; the shell adds a token screen and mobile layout (`schedule/day-mobile.css`). |
 | `static/schedule/axonometric.js` | — | The month's second drawing: the grid on an isometric base plane, the day's work stacked up the vertical axis, the plan below under one dividing rule. Drawn by `month.js`, which owns the range, the data and the model for both views. |
 | `static/schedule/specimen.html` | — | The drafting language's specimen sheet. Static, unlinked, no logic. Reached directly at `/schedule/specimen.html`. |
@@ -345,6 +345,20 @@ Do not make these consistent with each other. The difference is the point.
 
 ---
 
+## Capabilities: what a copy can do
+
+Three things can be absent, each from a different source, and every default is "on" so an existing install never notices them:
+
+- **Schedule** — `ARCHIVE_ONLY=1`. The schedule's routes live on the `schedule_api` blueprint in `app.py` and it is registered only when on, so with it off they do not exist (a route that isn't registered can't leak). `/` serves `index.html`. The static handler is one catch-all, so the schedule's pages and assets are blocked by `SCHEDULE_ASSET_FILES`/`SCHEDULE_ASSET_DIRS` (normalised and case-folded — add to them when the schedule gains a file). `init_db()` still creates the tables, so the switch is reversible by editing one value.
+- **Claude** — not a switch: `config.claude_available()`, true when a key is present. There is deliberately no separate demo flag. Routes that would call Claude carry `@requires_claude` (503 with a plain message, never a 500); reading a saved analysis never does. Ingest never fails because of tagging — any failure stores the reference untagged, and `ingest.backfill_tags` fills it in later.
+- **Embeddings** — `SKIP_EMBEDDINGS=1`. CLIP and Chroma are never touched, and `chromadb`/`sentence-transformers` are imported lazily so they need not be installed. Views built from vectors answer 503 via `@requires_embeddings` and say why they are empty; search falls back to keywords.
+
+The pages learn this from `GET /capabilities.js`, a **synchronous classic script in each page's `<head>`** (like `theme.js`, to avoid a flash) that sets `window.capabilities` and marks `<html data-schedule|claude|embeddings="off">` — only when off. `static/shared/capabilities.js` is the ES-module view of it. A new page must load the script before its modules (a test checks).
+
+**Hidden, not disabled.** What *initiates* a Claude call is not rendered at all without a key; what *reads a stored result* stays. Markup that already exists carries `data-requires="claude|schedule|embeddings"` and `style.css` hides it (CSS, not removal — the owning module may hold a reference). Controls a module builds itself check `capabilities.claude` and do not build. Widget types declare `requires` and every Add Widget list uses `registry.offered()`, never `all()`. The one statement that Claude is off lives in Settings (`data-when-off="claude"`) and nowhere else. `tests/test_capabilities_ui.py` enumerates every file that POSTs to a Claude-calling route and fails when a new one appears — decide what it does with no key, gate it, then list it there.
+
+---
+
 ## Conventions
 
 - **Comments explain *why*, not *what*.** The existing code is unusually well-commented in this style — match it. A comment restating the line below it is worse than none.
@@ -362,3 +376,4 @@ Do not make these consistent with each other. The difference is the point.
 - Refactor `app.js` beyond what the current task requires — it is ~870 lines and mostly working.
 - Change the behaviour of an existing endpoint while adding a scoped variant of it.
 - Break `/graph.html`, `/connections.html` or `/colour-connections.html` while extracting shared code from them. Verify by hand.
+- Add a control that starts a Claude call without gating it on `capabilities.claude`, or a route that does so without `@requires_claude`.
