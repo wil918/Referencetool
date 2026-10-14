@@ -27,3 +27,18 @@ def test_a_truncated_writeup_is_marked(monkeypatch):
     out = analyze._send([{"role": "user", "content": "go"}])
     assert out.startswith("Strong connections")
     assert "cut off before it finished" in out
+
+
+def test_max_tokens_is_passed_through(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(tagging, "get_client", lambda: object())
+
+    def create(*a, **k):
+        seen.update(k)
+        return _resp("ok")
+
+    monkeypatch.setattr(tagging, "_create_with_retry", create)
+    analyze._send([{"role": "user", "content": "go"}])
+    assert seen["max_tokens"] == 4096  # unchanged for everything that doesn't ask
+    analyze._send([{"role": "user", "content": "go"}], max_tokens=8192)
+    assert seen["max_tokens"] == 8192

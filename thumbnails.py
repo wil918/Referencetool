@@ -14,7 +14,10 @@ share one file for free, and session A6's rotate (which changes
 content_hash) can't leave a stale thumbnail of the un-rotated image behind.
 """
 import os
+from io import BytesIO
+from pathlib import Path
 
+import fitz  # PyMuPDF
 from PIL import Image, ImageOps
 
 import config
@@ -33,7 +36,18 @@ MAX_EDGE = 400
 # stretched soft. Still a fraction of a scan, and only ever generated for a
 # page someone has actually opened one of those views on.
 LARGE_EDGE = 1200
+# What concept analysis sends the model (analyze.py). Neither of the display
+# sizes above is right for it: 400 is too small to read a garment, 1200 is more
+# than either role needs. A page is the thing being judged -- composition,
+# balance and craft need the pixels -- so it gets the larger bound; a reference
+# is wanted for its form, surface and colour behaviour, with its description
+# sitting beside it carrying the detail. Cached per size like any other.
+ANALYSIS_PAGE_EDGE = 1000
+ANALYSIS_REFERENCE_EDGE = 600
 JPEG_QUALITY = 82
+# First-page render for a PDF. Low on purpose: it is only ever a thumbnail's
+# source, and 72 dpi puts an A4 page at roughly 595x842.
+PDF_RENDER_DPI = 72
 
 
 def _cache_path(content_hash, suffix, max_edge=MAX_EDGE):
@@ -53,6 +67,24 @@ def _existing(content_hash, max_edge=MAX_EDGE):
     return None
 
 
+def render_pdf_first_page(path, dpi=PDF_RENDER_DPI):
+    """PNG bytes of a PDF's first page. The one PDF render in the codebase:
+    the media route serves it directly and thumbnail_for shrinks and caches
+    it, so a PDF reference can be looked at by anything that takes an image."""
+    doc = fitz.open(path)
+    try:
+        return doc[0].get_pixmap(dpi=dpi).tobytes("png")
+    finally:
+        doc.close()
+
+
+def _open_source(path):
+    # Pillow can't open a PDF; its first page stands in for it.
+    if Path(path).suffix.lower() == ".pdf":
+        return Image.open(BytesIO(render_pdf_first_page(path)))
+    return Image.open(path)
+
+
 def _has_transparency(img):
     if img.mode == "P":
         return "transparency" in img.info
@@ -64,6 +96,8 @@ def _has_transparency(img):
 def thumbnail_for(path, content_hash=None, max_edge=MAX_EDGE):
     """A thumbnail of the image at `path`, generating and caching it first
     if this content hasn't been thumbnailed at the current version yet.
+
+    A PDF is thumbnailed from its first page (`render_pdf_first_page`).
 
     Returns (cache_path, mimetype). Raises on a file Pillow can't open --
     the caller falls back to serving the original, the same way a missing
@@ -83,7 +117,7 @@ def thumbnail_for(path, content_hash=None, max_edge=MAX_EDGE):
     if cached:
         return cached
 
-    with Image.open(path) as img:
+    with _open_source(path) as img:
         img = ImageOps.exif_transpose(img)  # bake in orientation before resizing
         has_alpha = _has_transparency(img)
         img.thumbnail((max_edge, max_edge), Image.LANCZOS)

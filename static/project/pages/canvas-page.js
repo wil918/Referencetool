@@ -154,6 +154,8 @@ export function createCanvasPage(el, { project }) {
         .filter((n) => widgetType(n) === "analysis")
         .map((n) => n.config?.widget?.analysis_id)
         .filter(Boolean),
+      // The pages are always read; selecting spreads narrows them to those.
+      spreadNodeIds: selected.filter((n) => n.kind === "pages").map((n) => n.id),
     });
   });
   root.appendChild(conceptBtn);

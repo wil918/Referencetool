@@ -7,20 +7,39 @@ The resulting conversation can be continued turn-by-turn so the user can
 ask follow-up questions and steer the exploration, with full context of
 the references and prior replies preserved.
 """
+import base64
 import math
 import re
 from datetime import date
 from html.parser import HTMLParser
+from pathlib import Path
 
 import colour
+import config
 import db
 import embeddings
 import graph_layout
+import ingest
+import portfolio
 import scheduling
 import tagging
+import thumbnails
 from config import CLAUDE_MODEL
 
 RELATED_PER_REFERENCE = 5
+
+# Concept analysis shows the model images, so the sizes and caps are budgeted.
+# A realistic call -- 40 references at ANALYSIS_REFERENCE_EDGE (~270 tokens
+# each) plus 30 pages at ANALYSIS_PAGE_EDGE (~750 each) -- is roughly 33k
+# tokens of image: fine for one analysis, and the reason for the caps below
+# rather than for sending fewer pixels. Pages are capped apart from references
+# because they fail differently: a page over the cap is simply the end of the
+# portfolio, a reference over the cap could be a whole cluster.
+MAX_ANALYSIS_PAGES = 40
+MAX_ANALYSIS_REFERENCES = 40
+# THE WHOLE BODY now covers research and work together, and ran into the old
+# 4096 ceiling (the same one that truncated brief extraction).
+CONCEPT_MAX_TOKENS = 8192
 
 
 def _get_embedding(ref_id):
@@ -115,12 +134,12 @@ def _build_prompt(references, related, mode="full"):
     return "\n".join(parts)
 
 
-def _send(messages):
+def _send(messages, max_tokens=4096):
     client = tagging.get_client()
     response = tagging._create_with_retry(
         client,
         model=CLAUDE_MODEL,
-        max_tokens=4096,
+        max_tokens=max_tokens,
         messages=messages,
     )
     text = "".join(block.text for block in response.content if block.type == "text").strip()
@@ -487,7 +506,169 @@ def _extract_next_actions(text):
     return actions
 
 
-def _build_concept_prompt(extraction, stage, clusters, bridge, references, notes, prior_critiques=None):
+# --- what the model is shown -------------------------------------------------
+#
+# Images are only read when an API key is present, which concept analysis
+# already needs for any answer at all -- so there is no second gate and no new
+# empty state here.
+
+
+def _image_block(path, content_hash, max_edge):
+    """A base64 image block of the cached thumbnail at `max_edge`, or None.
+
+    Goes through thumbnails.thumbnail_for, which caches per (content_hash,
+    max_edge) and never enlarges -- a size asked for twice is free, so a second
+    analysis of the same project pays no resize. A missing or unopenable file
+    is None: the item degrades to its text, the way a missing colour profile
+    just means no colour feature.
+    """
+    if not path.exists():
+        return None
+    try:
+        thumb, mimetype = thumbnails.thumbnail_for(path, content_hash, max_edge)
+        data = base64.standard_b64encode(thumb.read_bytes()).decode("ascii")
+    except Exception:
+        return None
+    return {"type": "image", "source": {"type": "base64", "media_type": mimetype, "data": data}}
+
+
+def _has_image(ref):
+    # By extension, not ref["type"]: a PDF is stored as type "text" but has a
+    # first page to look at; a .txt note has nothing to show and is already
+    # fully present as text.
+    suffix = Path(ref["filepath"]).suffix.lower()
+    return suffix in ingest.IMAGE_EXTS or suffix in ingest.PDF_EXTS
+
+
+def _placed_pages(project_id, reference_ids, spread_node_ids=None):
+    """The pages currently sitting in a slot, in document order: spreads in
+    ordinal order, slots in index order, empty slots skipped.
+
+    Walks the spreads, never overview()["pages"]: the staging store keeps
+    superseded versions, so that list is the whole version history and would
+    show the model three drafts of one page as three pages. A slot holds the
+    current one, which is what makes "outdated stuff gets replaced" true from
+    the model's side too.
+
+    A page already in `reference_ids` (promoted, and lassoed) is dropped -- the
+    reference carries tags and a title the bare page doesn't. `spread_node_ids`
+    narrows to those spreads, keeping their canvas-order ordinals, so a student
+    can ask about one chapter of a long portfolio.
+    """
+    overview = portfolio.overview(project_id)
+    archived_as = {p["id"]: (p["in_archive"] or {}).get("reference_id") for p in overview["pages"]}
+    wanted = set(spread_node_ids) if spread_node_ids else None
+
+    placed, seen = [], set()
+    for spread in overview["spreads"]:
+        if wanted is not None and spread["node_id"] not in wanted:
+            continue
+        for slot in spread["slots"]:
+            page_id = slot["page_id"]
+            if not page_id or page_id in seen:
+                continue
+            seen.add(page_id)
+            if archived_as.get(page_id) in reference_ids:
+                continue
+            placed.append({"page_id": page_id, "spread": spread["ordinal"]})
+    return placed
+
+
+def _page_images(placed):
+    """Image blocks for the first MAX_ANALYSIS_PAGES readable placed pages.
+    Keeps document order: a truncated portfolio loses its end, not its middle."""
+    shown, unreadable, tried = [], 0, 0
+    for entry in placed:
+        if len(shown) >= MAX_ANALYSIS_PAGES:
+            break
+        tried += 1
+        page = db.get_portfolio_page(entry["page_id"])
+        block = (
+            _image_block(portfolio.path_for(page), page["content_hash"], thumbnails.ANALYSIS_PAGE_EDGE)
+            if page else None
+        )
+        if block is None:
+            unreadable += 1
+            continue
+        shown.append({**entry, "block": block})
+    return {"shown": shown, "omitted": len(placed) - tried, "unreadable": unreadable}
+
+
+def _research_images(groups):
+    """Image blocks for the research, `groups` being [(heading, members)] in
+    the order the prompt prints them.
+
+    The cap is filled by taking one from each cluster in turn, not from the
+    front: a selection truncated in canvas order can lose a whole cluster, and
+    a cluster the model has read about but not seen is worse than one it has
+    only read about -- it reasons as though it had seen it. Returns the chosen
+    images regrouped in print order, so the grouping the prompt asserts is the
+    grouping the eye is given.
+    """
+    queues = [[r for r in members if _has_image(r)] for _, members in groups]
+    candidates = sum(len(q) for q in queues)
+    cursors = [0] * len(queues)
+    chosen, tried = {}, 0
+    progressed = True
+    while progressed and len(chosen) < MAX_ANALYSIS_REFERENCES:
+        progressed = False
+        for i, queue in enumerate(queues):
+            if len(chosen) >= MAX_ANALYSIS_REFERENCES:
+                break
+            if cursors[i] >= len(queue):
+                continue
+            ref = queue[cursors[i]]
+            cursors[i] += 1
+            progressed = True
+            tried += 1
+            block = _image_block(
+                config.REFERENCES_DIR / ref["filepath"],
+                ref.get("content_hash"),
+                thumbnails.ANALYSIS_REFERENCE_EDGE,
+            )
+            if block is not None:
+                chosen[ref["id"]] = block
+    return {
+        "groups": [
+            (heading, [(r, chosen[r["id"]]) for r in members if r["id"] in chosen])
+            for heading, members in groups
+        ],
+        "shown": len(chosen),
+        "omitted": candidates - tried,
+    }
+
+
+def _text_block(text):
+    return {"type": "text", "text": text}
+
+
+def _message_content(prompt, research, pages):
+    """The user turn: the prompt text, then every image, each preceded by a
+    text block naming it. The model can't otherwise tell which image it is
+    looking at, and a critique that cites the wrong page number is worse than
+    one that cites none. A plain string when there is nothing to show."""
+    blocks = [_text_block(prompt)]
+    for heading, items in (research or {"groups": []})["groups"]:
+        if not items:
+            continue
+        if heading:
+            blocks.append(_text_block(f"RESEARCH IMAGES -- {heading}:"))
+        for ref, image in items:
+            blocks.append(_text_block(f'Research image: "{ref["title"]}"'))
+            blocks.append(image)
+    shown = (pages or {"shown": []})["shown"]
+    if shown:
+        blocks.append(_text_block("THE STUDENT'S PAGES, in document order:"))
+        for i, page in enumerate(shown, 1):
+            blocks.append(_text_block(f"Page {i} of {len(shown)}, spread {page['spread']}"))
+            blocks.append(page["block"])
+    return blocks if len(blocks) > 1 else prompt
+
+
+def _build_concept_prompt(
+    extraction, stage, clusters, bridge, references, notes, prior_critiques=None,
+    pages=None, research=None,
+):
     parts = [
         "You are helping a fashion design student read their own moodboard: the "
         "canvas of visual research and clusters they have been gathering. "
@@ -506,9 +687,14 @@ def _build_concept_prompt(extraction, stage, clusters, bridge, references, notes
     if extraction:
         parts.append("THE BRIEF:")
         parts.append(_format_brief(extraction))
+        parts.append(
+            "(The brief gives the project's intent -- what it is for, what it asks "
+            "the student to find out, its materials and constraints. Let it frame "
+            "your reading; it is not a checklist to audit the work against.)"
+        )
         parts.append("")
     else:
-        parts.append("THE BRIEF: none imported -- treat brief compliance as not applicable.\n")
+        parts.append("THE BRIEF: none imported -- read the work on its own terms.\n")
 
     parts.append("STAGE:")
     if stage["days_elapsed"] is not None or stage["days_remaining"] is not None:
@@ -520,14 +706,12 @@ def _build_concept_prompt(extraction, stage, clusters, bridge, references, notes
         parts.append("  " + ", ".join(bits) + ".")
     else:
         parts.append("  No dates on record -- treat this as early-stage.")
-    for d in stage["deliverables"]:
-        status = (
-            "done" if d["is_done"]
-            else f"{d['tasks_resolved']}/{d['task_count']} tasks resolved" if d["task_count"]
-            else "no tasks yet"
-        )
-        due = f", due {d['due_at'][:10]}" if d.get("due_at") else ""
-        parts.append(f"  - {d['title']}: {status}{due}")
+    # Names only -- enough to write one short line, not a status table. The
+    # per-deliverable arithmetic stays in _project_stage_context for the
+    # scheduler; this prompt deliberately stops printing it.
+    open_deliverables = [d["title"] for d in stage["deliverables"] if not d["is_done"]]
+    if open_deliverables:
+        parts.append(f"  Deliverables not yet complete: {'; '.join(open_deliverables)}.")
     if stage["at_risk"]:
         parts.append(f"  {len(stage['at_risk'])} task(s) currently flagged at risk by the scheduler:")
         for e in stage["at_risk"][:5]:
@@ -535,8 +719,11 @@ def _build_concept_prompt(extraction, stage, clusters, bridge, references, notes
     parts.append(
         "  Absence is only worth raising when it is late: no garment research in "
         "week one is what a project that has just started looks like; in week "
-        "five it is the finding. Brief compliance is the same -- a late-stage "
-        "concern, nearly silent early.\n"
+        "five it is the finding. The same timing governs the pages: few or none "
+        "early is just where a project is; late, it is the finding. Missing "
+        "deliverables get at most one short line naming them, and only once it "
+        "is late enough to matter -- no per-deliverable verdict, no percentages, "
+        "no gap table. A student who wants an audit can ask for one.\n"
     )
 
     ref_by_id = {r["id"]: r for r in references}
@@ -573,6 +760,42 @@ def _build_concept_prompt(extraction, stage, clusters, bridge, references, notes
     else:
         parts.append("VISUAL RESEARCH: nothing selected -- the student has not put research on the canvas yet.\n")
 
+    if research and research["shown"]:
+        parts.append(
+            "The research images follow this text, grouped by cluster in the order "
+            "above and labelled with their titles. Look at them: the tags and "
+            "descriptions above were written at filing time, for a different "
+            "purpose, and are a caption -- what you see governs."
+        )
+        if research["omitted"]:
+            parts.append(
+                f"Only {research['shown']} of {research['shown'] + research['omitted']} "
+                "image references are shown (taken from every cluster in turn); the rest "
+                "are described in text only, so you have not seen them."
+            )
+        parts.append("")
+
+    if pages and (pages["shown"] or pages["unreadable"]):
+        count = len(pages["shown"])
+        parts.append(
+            "THE STUDENT'S OWN WORK (the portfolio pages currently placed on their "
+            "spreads -- the thing the research above is meant to feed; judge it as "
+            "work made, not as research):"
+        )
+        if count:
+            parts.append(
+                f"  {count} page{'s' if count != 1 else ''} follow the research images, in document order, "
+                'each labelled "Page n of N, spread s". Cite them by that label.'
+            )
+        if pages["omitted"]:
+            parts.append(
+                f"  Only the first {count} pages are shown; {pages['omitted']} more exist "
+                "that you have not seen. Say so rather than critiquing the portfolio as complete."
+            )
+        if pages["unreadable"]:
+            parts.append(f"  {pages['unreadable']} placed page(s) could not be read and are missing from this set.")
+        parts.append("")
+
     parts.append(
         "THE THINKING (the student's own notes -- their working ideas about "
         "this research, not established fact):"
@@ -597,12 +820,30 @@ def _build_concept_prompt(extraction, stage, clusters, bridge, references, notes
             parts.append(critique.strip())
         parts.append("")
 
+    has_pages = bool(pages and pages["shown"])
+    read_extra = " Say how much of the work has been made, as well." if has_pages else ""
+    body_pages = (
+        "The student's pages are in front of you too, so judge research and "
+        "pages together: does the work carry the research, or has the moodboard "
+        "gone somewhere the pages did not follow? Which cluster never reaches a "
+        "page -- is that a page still to make, or research that was never really "
+        "the project? Is a page doing something the research never proposed? "
+        "That is usually the most interesting thing in the set. "
+        if has_pages else ""
+    )
+    next_example = (
+        '("add garment research on trench coats"; "the peeling-wallpaper cluster '
+        'has no page -- make one")'
+        if has_pages else '("add garment research on trench coats")'
+    )
+
     parts.append(
         "Write this up in five headed sections. Head each with its name in "
         "capitals, alone on its own line -- no markdown, no numbering. Track "
         "length to how much there is to say; a thin canvas gets a short "
         "answer.\n\n"
-        "READ -- one to three sentences on where the work stands right now.\n\n"
+        "READ -- one to three sentences on where the work stands right now."
+        + read_extra + "\n\n"
         "CLUSTERS -- for each cluster above, one or two sentences on what "
         "seems to bind it: a form, a surface, a colour behaviour, a process, "
         "a quality of light. Offer this, don't assert it -- name what you "
@@ -614,21 +855,25 @@ def _build_concept_prompt(extraction, stage, clusters, bridge, references, notes
         "cultures, other materials. Make every bullet something to look at, "
         "search for, or go and photograph -- \"look at snake sheds and "
         "blistered paint\", never \"consider the theme of transformation\".\n\n"
-        "THE WHOLE BODY -- judge the set of clusters together, never "
-        "reference by reference. Do they speak to each other, or read as "
+        "THE WHOLE BODY -- judge the set of clusters together"
+        + (" and the pages with them" if has_pages else "") +
+        ", never reference by reference. Do they speak to each other, or read as "
         "unrelated projects sharing a folder? Is a through-line emerging, and "
         "what is it? Is one cluster carrying everything while another hasn't "
         "grown past a single image? Say which two clusters come closest to "
         "touching (named above, if given) and what might sit between them -- "
         "that gap is usually where the project actually is. A cluster with "
         "only one reference in it might be a fourth direction or might be a "
-        "stray; say so and leave the call to the designer. Fold in brief "
-        "compliance and any at-risk deadlines here, only as far as STAGE "
-        "above says they're worth raising yet.\n\n"
+        "stray; say so and leave the call to the designer. "
+        + body_pages +
+        "Fold in any at-risk deadlines here, only as far as STAGE "
+        "above says they're worth raising yet. If STAGE lists deliverables "
+        "not yet complete and it is late enough to matter, name them in one "
+        "short line -- nothing more.\n\n"
         "NEXT ACTIONS -- this MUST be the last section, and nothing follows "
         "it. A bulleted list, one line each, every bullet a concrete "
-        "directive a student could act on today (\"add garment research on "
-        "trench coats\"), never a suggestion (\"the project would benefit "
+        "directive a student could act on today " + next_example + ", never a "
+        "suggestion (\"the project would benefit "
         "from...\"). Each should be liftable straight into a task as written.\n\n"
         "Never ask a reference to justify itself. One that's there because it "
         "looks right is doing its job -- that's what a mood is made of. Refer "
@@ -639,7 +884,8 @@ def _build_concept_prompt(extraction, stage, clusters, bridge, references, notes
 
 
 def start_concept_analysis(
-    project_id, reference_ids=None, notes=None, note_html=None, prior_analysis_ids=None
+    project_id, reference_ids=None, notes=None, note_html=None, prior_analysis_ids=None,
+    spread_node_ids=None,
 ):
     """Read a project's moodboard: the measured clusters in its visual
     research, named and pushed lateral, evaluated as a whole body of work
@@ -655,6 +901,18 @@ def start_concept_analysis(
 
     An empty selection falls back to the whole project: every reference in it
     AND every bit of writing on its canvas, by the same rules.
+
+    The student's own pages are not part of that selection. They arrive the way
+    the brief and the stage do -- read from the project, present whether or not
+    anything is lassoed -- because the selection picks research to think about
+    and the work is the fixed thing being thought about. The one exception is
+    `spread_node_ids` (selected spread nodes), which narrow the pages to those
+    spreads; it does not count as a research selection, so lassoing only a
+    spread still reads the whole project's research against that chapter.
+
+    Both the research and the pages are shown to the model as images, beside
+    their text -- see _research_images and _page_images for the caps. The first
+    user message is therefore a list of blocks when there is anything to show.
 
     Returns (writeup, messages, reference_map, next_actions). The first three
     are the same shape start_conversation returns, so the in-memory session
@@ -684,12 +942,21 @@ def start_concept_analysis(
     extraction = _latest_brief_extraction(project_id)
     stage = _project_stage_context(project_id, extraction)
     clusters, bridge = _cluster_analysis_context(references) if references else ([], None)
+
+    groups = (
+        [(f"CLUSTER {c['cluster']}", c["members"]) for c in clusters]
+        if clusters else [(None, references)]
+    )
+    research = _research_images(groups)
+    pages = _page_images(_placed_pages(project_id, {r["id"] for r in references}, spread_node_ids))
+
     prompt = _build_concept_prompt(
-        extraction, stage, clusters, bridge, references, all_notes, prior_critiques
+        extraction, stage, clusters, bridge, references, all_notes, prior_critiques,
+        pages=pages, research=research,
     )
 
-    messages = [{"role": "user", "content": prompt}]
-    writeup = _send(messages)
+    messages = [{"role": "user", "content": _message_content(prompt, research, pages)}]
+    writeup = _send(messages, max_tokens=CONCEPT_MAX_TOKENS)
     messages.append({"role": "assistant", "content": writeup})
     next_actions = _extract_next_actions(writeup)
     return writeup, messages, _reference_map(references, {}), next_actions

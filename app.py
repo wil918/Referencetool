@@ -22,7 +22,6 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote
 
-import fitz  # PyMuPDF
 from flask import (
     Flask, Response, abort, jsonify, make_response, request, send_file, send_from_directory,
 )
@@ -1415,6 +1414,8 @@ def api_concept_analysis(project_id):
     reference nodes, `notes` the selected plain text nodes' contents,
     `note_html` the selected Notepad widgets' stored HTML, and
     `prior_analysis_ids` any selected Analysis widgets (earlier critiques).
+    `spread_node_ids` are selected portfolio spreads: the student's placed
+    pages are always read, and these narrow them to those spreads.
     All empty is fine -- it falls back to the project's whole reference set
     and every bit of writing on its canvas. Returns the same envelope
     /api/analyze does, so the follow-up /reply route is reused as-is.
@@ -1428,6 +1429,7 @@ def api_concept_analysis(project_id):
             notes=body.get("notes") or [],
             note_html=body.get("note_html") or [],
             prior_analysis_ids=body.get("prior_analysis_ids") or [],
+            spread_node_ids=body.get("spread_node_ids") or [],
         )
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -1671,10 +1673,8 @@ def media_thumb(ref_id):
 
     if ext == ".pdf":
         try:
-            doc = fitz.open(path)
-            pix = doc[0].get_pixmap(dpi=PDF_THUMB_DPI)
-            doc.close()
-            return send_file(BytesIO(pix.tobytes("png")), mimetype="image/png")
+            png = thumbnails.render_pdf_first_page(path, PDF_THUMB_DPI)
+            return send_file(BytesIO(png), mimetype="image/png")
         except Exception:
             abort(404)
 

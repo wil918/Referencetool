@@ -179,7 +179,9 @@ export function createConceptPanel({ project, placeNote }) {
     return div;
   }
 
-  async function run({ referenceIds = [], notes = [], noteHtml = [], priorAnalysisIds = [] } = {}) {
+  async function run({
+    referenceIds = [], notes = [], noteHtml = [], priorAnalysisIds = [], spreadNodeIds = [],
+  } = {}) {
     sessionId = null;
     refMap = {};
     latestWriteup = "";
@@ -198,6 +200,10 @@ export function createConceptPanel({ project, placeNote }) {
           ? `, plus ${priorAnalysisIds.length} earlier critique${priorAnalysisIds.length === 1 ? "" : "s"}`
           : "")
       : "Whole project — nothing selected on the canvas";
+    if (spreadNodeIds.length) {
+      scopeEl.textContent +=
+        ` · pages from ${spreadNodeIds.length} selected spread${spreadNodeIds.length === 1 ? "" : "s"}`;
+    }
     appendTurn("Reading the research…", "status");
 
     try {
@@ -209,6 +215,7 @@ export function createConceptPanel({ project, placeNote }) {
           notes,
           note_html: noteHtml,
           prior_analysis_ids: priorAnalysisIds,
+          spread_node_ids: spreadNodeIds,
         }),
       });
       const data = await res.json();
